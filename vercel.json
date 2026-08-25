@@ -3,11 +3,11 @@
   "rewrites": [
     {
       "source": "/api/(.*)",
-      "destination": "/api"
+      "destination": "/api/index"
     },
     {
       "source": "/approval-response/(.*)",
-      "destination": "/api"
+      "destination": "/api/index"
     }
   ]
 }

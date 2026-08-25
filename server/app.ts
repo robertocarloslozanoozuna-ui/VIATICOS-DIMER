@@ -28,7 +28,7 @@ import {
   consumeApprovalToken,
   clearCurrentUser,
   saveToDisk,
-} from './db';
+} from './db.ts';
 import {
   buildBossApprovalEmailHtml,
   buildSystemsApprovedEmailHtml,
@@ -38,15 +38,25 @@ import {
   sendEmail,
   getFromAddress,
   outboxLogs,
-} from './mailService';
-import { NEXTJS_CODE_ARTIFACTS } from './nextjsArtifacts';
-import type { TravelRequest, User, Role, Status, StoredUserRecord } from '../src/types';
+} from './mailService.ts';
+import { NEXTJS_CODE_ARTIFACTS } from './nextjsArtifacts.ts';
+import type { TravelRequest, User, Role, Status, StoredUserRecord } from '../src/types.ts';
 
 export function createApp() {
   const app = express();
 
+  console.log('[DIMER API] Initializing Express Application Instance for Vercel/Node...');
+
   app.use(cors());
   app.use(express.json());
+
+  // Health check endpoint for deployment validation
+  app.get('/api/health', (req, res) => {
+    res.json({
+      ok: true,
+      service: 'viaticos-dimer-api',
+    });
+  });
 
   // ================= 1. AUTHENTICATION & SESSION =================
 

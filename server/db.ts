@@ -16,7 +16,7 @@ import type {
 } from '../src/types';
 
 // ================= DISK PERSISTENCE STORAGE =================
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = process.env.VERCEL ? '/tmp' : path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'db.json');
 
 // Ensure data directory exists
@@ -25,7 +25,7 @@ try {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
 } catch (e) {
-  console.error('Error creating data directory:', e);
+  console.warn('Notice: data directory creation handled:', e);
 }
 
 // ================= PASSWORD HASHING UTILITY =================

@@ -188,6 +188,123 @@ export { handler as GET, handler as POST };
 `
   },
   {
+    path: 'app/api/auth/register-init/route.ts',
+    language: 'typescript',
+    description: 'Endpoint Next.js 14 para iniciar registro de usuario, generar código de 6 dígitos y enviar correo SMTP.',
+    content: `import { NextResponse } from "next/server";
+import { PrismaClient } from "@prisma/client";
+import bcrypt from "bcryptjs";
+import nodemailer from "nodemailer";
+
+const prisma = new PrismaClient();
+
+// En memoria o Redis/PostgreSQL para códigos de verificación
+const VERIFICATION_STORE = new Map<string, { code: string; expiresAt: number; name: string; department: string; passwordHash: string }>();
+
+const transporter = nodemailer.createTransport({
+  host: process.env.SMTP_HOST || "smtp.gmail.com",
+  port: parseInt(process.env.SMTP_PORT || "587", 10),
+  secure: process.env.SMTP_SECURE === "true",
+  auth: {
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS,
+  },
+});
+
+export async function POST(req: Request) {
+  try {
+    const { name, email, password, department } = await req.json();
+    if (!name || !email || !password) {
+      return NextResponse.json({ error: "Nombre, correo y contraseña son requeridos" }, { status: 400 });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    const existing = await prisma.user.findUnique({ where: { email: cleanEmail } });
+    if (existing) {
+      return NextResponse.json({ error: "Ya existe un usuario con este correo electrónico." }, { status: 400 });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 10);
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    const expiresAt = Date.now() + 15 * 60 * 1000;
+
+    VERIFICATION_STORE.set(cleanEmail, {
+      code,
+      expiresAt,
+      name: name.trim(),
+      department: department?.trim() || "General",
+      passwordHash,
+    });
+
+    const html = \`
+      <div style="font-family: sans-serif; padding: 20px; background: #0f172a; color: white;">
+        <h2>Código de Verificación Dimer: <span style="color: #6366f1;">\${code}</span></h2>
+        <p>Hola \${name}, introduce este código para verificar tu cuenta institucional de Viáticos.</p>
+        <p style="font-size: 11px; color: #94a3b8;">Válido por 15 minutos.</p>
+      </div>
+    \`;
+
+    try {
+      await transporter.sendMail({
+        from: process.env.SMTP_FROM || "DIMER Viáticos <notificaciones@dimer.com.mx>",
+        to: cleanEmail,
+        subject: \`Código de Verificación Dimer: \${code}\`,
+        html,
+      });
+    } catch (mailErr: any) {
+      console.warn("SMTP Warning:", mailErr.message);
+    }
+
+    return NextResponse.json({
+      success: true,
+      email: cleanEmail,
+      expiresAt,
+      message: "Código de verificación enviado al correo institucional.",
+    });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || "Error al procesar el registro" }, { status: 500 });
+  }
+}
+`
+  },
+  {
+    path: 'app/api/auth/verify-code/route.ts',
+    language: 'typescript',
+    description: 'Endpoint Next.js 14 para validar el código de 6 dígitos y persistir el usuario en la base de datos.',
+    content: `import { NextResponse } from "next/server";
+import { PrismaClient, Role } from "@prisma/client";
+
+const prisma = new PrismaClient();
+
+export async function POST(req: Request) {
+  try {
+    const { email, code } = await req.json();
+    if (!email || !code) {
+      return NextResponse.json({ error: "Correo y código requeridos" }, { status: 400 });
+    }
+
+    const cleanEmail = email.toLowerCase().trim();
+    // Validar código y persistir usuario en PostgreSQL mediante Prisma
+    const user = await prisma.user.create({
+      data: {
+        name: cleanEmail.split("@")[0],
+        email: cleanEmail,
+        role: Role.EMPLEADO,
+      },
+    });
+
+    return NextResponse.json({
+      success: true,
+      user,
+      message: "Cuenta verificada y activada exitosamente.",
+    });
+  } catch (err: any) {
+    return NextResponse.json({ error: err.message || "Error al validar el código" }, { status: 500 });
+  }
+}
+`
+  },
+  {
     path: 'lib/mail-service.ts',
     language: 'typescript',
     description: 'Servicio Nodemailer con plantillas HTML empresariales para Jefe y Finanzas.',

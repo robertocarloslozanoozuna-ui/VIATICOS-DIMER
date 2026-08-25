@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import EmailAutocompleteInput from './EmailAutocompleteInput';
 import DimerLogo from './DimerLogo';
+import { safeFetchJson } from '../utils/apiHelper';
 import type { CompanyEmployee } from '../data/companyDirectory';
 import type { User as UserType } from '../types';
 
@@ -81,7 +82,7 @@ export default function AuthModal({
     setLoading(true);
 
     try {
-      const res = await fetch('/api/auth/login', {
+      const data = await safeFetchJson('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -89,9 +90,8 @@ export default function AuthModal({
           password: loginPassword,
         }),
       });
-      const data = await res.json();
 
-      if (!res.ok || !data.success) {
+      if (!data.success) {
         throw new Error(data.error || 'Credenciales inválidas');
       }
 
@@ -122,7 +122,7 @@ export default function AuthModal({
     setLoading(true);
 
     try {
-      const res = await fetch('/api/auth/register-init', {
+      const data = await safeFetchJson('/api/auth/register-init', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -133,9 +133,8 @@ export default function AuthModal({
           roleId: regRoleId,
         }),
       });
-      const data = await res.json();
 
-      if (!res.ok || !data.success) {
+      if (!data.success) {
         throw new Error(data.error || 'Error al procesar el registro');
       }
 
@@ -160,7 +159,7 @@ export default function AuthModal({
     setLoading(true);
 
     try {
-      const res = await fetch('/api/auth/verify-code', {
+      const data = await safeFetchJson('/api/auth/verify-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -168,9 +167,8 @@ export default function AuthModal({
           code: verificationCode.trim(),
         }),
       });
-      const data = await res.json();
 
-      if (!res.ok || !data.success) {
+      if (!data.success) {
         throw new Error(data.error || 'Código incorrecto o expirado');
       }
 
@@ -190,14 +188,13 @@ export default function AuthModal({
     setLoading(true);
 
     try {
-      const res = await fetch('/api/auth/resend-code', {
+      const data = await safeFetchJson('/api/auth/resend-code', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: verificationEmail.trim() }),
       });
-      const data = await res.json();
 
-      if (!res.ok || !data.success) {
+      if (!data.success) {
         throw new Error(data.error || 'Error al reenviar código');
       }
 

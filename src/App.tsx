@@ -57,21 +57,31 @@ export default function App() {
   const fetchData = async () => {
     try {
       const [meRes, reqRes] = await Promise.all([
-        fetch('/api/me'),
-        fetch('/api/requests'),
+        fetch('/api/me').catch(() => null),
+        fetch('/api/requests').catch(() => null),
       ]);
 
-      if (meRes.ok) {
-        const meData = await meRes.json();
-        setCurrentUser(meData.user);
-        setAllUsers(meData.allUsers || []);
+      if (meRes && meRes.ok) {
+        try {
+          const meData = await meRes.json();
+          setCurrentUser(meData.user);
+          setAllUsers(meData.allUsers || []);
+        } catch (jsonErr) {
+          console.warn('Non-JSON response from /api/me');
+        }
       }
 
-      if (reqRes.ok) {
-        const reqData = await reqRes.json();
-        setRequests(reqData);
-        if (reqData.length > 0) {
-          setLastEventText(`EVENT: TravelRequest #${reqData[0].folio} | STATUS: ${reqData[0].status}`);
+      if (reqRes && reqRes.ok) {
+        try {
+          const reqData = await reqRes.json();
+          if (Array.isArray(reqData)) {
+            setRequests(reqData);
+            if (reqData.length > 0) {
+              setLastEventText(`EVENT: TravelRequest #${reqData[0].folio} | STATUS: ${reqData[0].status}`);
+            }
+          }
+        } catch (jsonErr) {
+          console.warn('Non-JSON response from /api/requests');
         }
       }
     } catch (e) {

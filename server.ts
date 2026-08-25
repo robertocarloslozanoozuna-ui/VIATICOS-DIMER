@@ -1,7 +1,6 @@
 import express from 'express';
 import path from 'path';
 import cors from 'cors';
-import { createServer as createViteServer } from 'vite';
 import {
   USERS,
   TRAVEL_REQUESTS,
@@ -43,9 +42,8 @@ import {
 import { NEXTJS_CODE_ARTIFACTS } from './server/nextjsArtifacts';
 import type { TravelRequest, User, Role, Status, StoredUserRecord } from './src/types';
 
-async function startServer() {
+export function createApp() {
   const app = express();
-  const PORT = 3000;
 
   app.use(cors());
   app.use(express.json());
@@ -1738,9 +1736,16 @@ async function startServer() {
     });
   });
 
-  // ================= VITE MIDDLEWARE =================
+  return app;
+}
 
+export async function startServer() {
+  const app = createApp();
+  const PORT = 3000;
+
+  // ================= VITE MIDDLEWARE =================
   if (process.env.NODE_ENV !== 'production') {
+    const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
@@ -1759,6 +1764,9 @@ async function startServer() {
   });
 }
 
-startServer().catch((err) => {
-  console.error('[FATAL SERVER ERROR] Error al iniciar el servidor:', err);
-});
+// Only auto-start when run directly in Node (e.g. not when imported by Vercel Serverless Function)
+if (process.env.VERCEL !== '1') {
+  startServer().catch((err) => {
+    console.error('[FATAL SERVER ERROR] Error al iniciar el servidor:', err);
+  });
+}

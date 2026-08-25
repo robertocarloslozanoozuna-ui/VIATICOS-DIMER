@@ -23,6 +23,7 @@ import {
   LogOut,
 } from 'lucide-react';
 import EmailAutocompleteInput from './EmailAutocompleteInput';
+import { safeFetchJson } from '../utils/apiHelper';
 import type { CompanyEmployee } from '../data/companyDirectory';
 import type { User, TravelRequest, Boss, Department } from '../types';
 
@@ -230,7 +231,7 @@ export default function SolicitarView({
     setLoading(true);
 
     try {
-      const res = await fetch('/api/requests', {
+      const data = await safeFetchJson('/api/requests', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -255,8 +256,7 @@ export default function SolicitarView({
         }),
       });
 
-      const data = await res.json();
-      if (!res.ok) {
+      if (!data.request) {
         throw new Error(data.error || 'Error al procesar la solicitud.');
       }
 

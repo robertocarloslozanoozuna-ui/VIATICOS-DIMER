@@ -1,0 +1,6 @@
+{
+  "name": "Solicitud de Viáticos",
+  "description": "Sistema corporativo Dimer para la solicitud, validación, autorización y dispersión de viáticos y gastos de viaje.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

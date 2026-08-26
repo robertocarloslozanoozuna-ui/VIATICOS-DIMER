@@ -28,7 +28,7 @@ import {
   consumeApprovalToken,
   clearCurrentUser,
   saveToDisk,
-} from './db.ts';
+} from './db';
 import {
   buildBossApprovalEmailHtml,
   buildSystemsApprovedEmailHtml,
@@ -38,9 +38,9 @@ import {
   sendEmail,
   getFromAddress,
   outboxLogs,
-} from './mailService.ts';
-import { NEXTJS_CODE_ARTIFACTS } from './nextjsArtifacts.ts';
-import type { TravelRequest, User, Role, Status, StoredUserRecord } from '../src/types.ts';
+} from './mailService';
+import { NEXTJS_CODE_ARTIFACTS } from './nextjsArtifacts';
+import type { TravelRequest, User, Role, Status, StoredUserRecord } from '../src/types';
 
 export function createApp() {
   const app = express();

@@ -15,6 +15,7 @@ import {
   Sparkles,
   ShieldAlert,
   Shield,
+  ShieldCheck,
   Settings,
   Users,
   LogIn,
@@ -171,14 +172,18 @@ export default function Navbar({
         />
       )}
 
-      {/* High Density Dark Slate Sidebar */}
+      {/* High Density Dark Slate Sidebar with Rich Ambient Texture */}
       <aside
-        className={`fixed lg:static inset-y-0 left-0 z-50 w-72 bg-[#0f172a] text-white flex flex-col shrink-0 border-r border-slate-800 transition-all duration-200 ease-in-out ${
+        className={`fixed lg:static inset-y-0 left-0 z-50 w-72 bg-gradient-to-b from-slate-950 via-[#0b1329] to-slate-950 text-white flex flex-col shrink-0 border-r border-slate-800/80 shadow-2xl transition-all duration-200 ease-in-out relative overflow-hidden ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         }`}
       >
+        {/* Subtle Ambient Radial Glow */}
+        <div className="pointer-events-none absolute -top-20 -left-20 w-56 h-56 bg-indigo-500/10 rounded-full blur-3xl" />
+        <div className="pointer-events-none absolute -bottom-20 -right-20 w-56 h-56 bg-blue-500/10 rounded-full blur-3xl" />
+
         {/* Brand Header with Official DIMER Logo */}
-        <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+        <div className="p-4 border-b border-slate-800/90 bg-slate-950/60 backdrop-blur-xs flex items-center justify-between z-10">
           {currentUser ? (
             <div>
               <div className="flex items-center gap-2">
@@ -194,11 +199,14 @@ export default function Navbar({
               </p>
             </div>
           ) : (
-            <div className="w-full flex flex-col items-center justify-center text-center py-2">
+            <div className="w-full flex flex-col items-center justify-center text-center py-1">
               <DimerLogo variant="dark" size="md" />
               <h2 className="mt-2 text-sm font-bold text-white tracking-tight">
                 Viáticos Dimer
               </h2>
+              <span className="text-[9px] text-indigo-400 font-mono font-bold tracking-wider uppercase mt-0.5">
+                Portal Empresarial
+              </span>
             </div>
           )}
           <div className="flex items-center gap-1">
@@ -206,7 +214,7 @@ export default function Navbar({
               <button
                 type="button"
                 onClick={onToggleSidebar}
-                className="hidden lg:flex text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition"
+                className="hidden lg:flex text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition cursor-pointer"
                 title="Ocultar barra lateral"
               >
                 <PanelLeftClose className="w-4 h-4" />
@@ -214,7 +222,7 @@ export default function Navbar({
             )}
             <button
               onClick={() => setMobileOpen(false)}
-              className="lg:hidden text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800"
+              className="lg:hidden text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -223,7 +231,7 @@ export default function Navbar({
 
         {/* Current Active User Status Bar (Only shown when logged in) */}
         {currentUser && (
-          <div className="px-3.5 py-2.5 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between gap-2">
+          <div className="px-3.5 py-2.5 bg-slate-900/90 border-b border-slate-800 flex items-center justify-between gap-2 z-10">
             <div className="overflow-hidden">
               <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1">
                 <span className="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
@@ -245,10 +253,10 @@ export default function Navbar({
           </div>
         )}
 
-        {/* Navigation Area or Welcome Corporate Message */}
+        {/* Navigation Area or Rich Corporate Welcome Hub */}
         {currentUser ? (
           /* Logged In Nav List */
-          <nav className="flex-1 p-3.5 space-y-1 overflow-y-auto">
+          <nav className="flex-1 p-3.5 space-y-1 overflow-y-auto z-10">
             {visibleNavItems.map((item) => {
               const isActive = activeTab === item.id;
               return (
@@ -260,12 +268,12 @@ export default function Navbar({
                   }}
                   className={`w-full text-left p-2.5 rounded-lg flex items-center gap-3 transition-colors cursor-pointer group ${
                     isActive
-                      ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50'
+                      ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/50 font-semibold'
                       : 'hover:bg-slate-800/80 text-slate-400 hover:text-white'
                   }`}
                 >
                   {isActive ? (
-                    <div className="w-2 h-2 rounded-full bg-white shrink-0" />
+                    <div className="w-2 h-2 rounded-full bg-white shrink-0 shadow-xs" />
                   ) : (
                     <div className="w-2 h-2 rounded-full border border-slate-500 group-hover:border-white shrink-0" />
                   )}
@@ -288,19 +296,53 @@ export default function Navbar({
             })}
           </nav>
         ) : (
-          /* Central area before login: Diseños y Mercadotecnia */
-          <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
-            <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800/80 w-full max-w-[220px] shadow-inner">
-              <p className="text-sm font-semibold text-slate-200 tracking-wide">
-                Diseños y Mercadotecnia
-              </p>
-              <div className="w-8 h-0.5 bg-indigo-500/50 mx-auto mt-2.5 rounded-full" />
+          /* Central area before login: Rich Corporate Showcase for Diseños y Mercadotecnia */
+          <div className="flex-1 flex flex-col justify-between p-4 z-10 overflow-y-auto">
+            {/* Corporate Badge & Company Statement */}
+            <div className="space-y-3 mt-2">
+              <div className="p-4 rounded-xl bg-slate-900/80 border border-slate-800 shadow-lg text-center backdrop-blur-xs">
+                <div className="w-8 h-8 rounded-lg bg-indigo-500/20 text-indigo-400 border border-indigo-500/30 flex items-center justify-center mx-auto mb-2">
+                  <ShieldCheck className="w-4 h-4" />
+                </div>
+                <h3 className="text-xs font-bold text-white tracking-wide uppercase">
+                  Diseños y Mercadotecnia
+                </h3>
+                <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                  Sistema corporativo de administración de viáticos, anticipos y comprobaciones de gastos.
+                </p>
+                <div className="w-10 h-0.5 bg-gradient-to-r from-transparent via-indigo-500 to-transparent mx-auto mt-3 rounded-full" />
+              </div>
+
+              {/* Corporate Capabilities Highlights */}
+              <div className="p-3 rounded-xl bg-slate-900/40 border border-slate-800/60 space-y-2 text-[11px] text-slate-300">
+                <div className="flex items-center gap-2 text-slate-300">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+                  <span>Aprobación directa en 1 clic</span>
+                </div>
+                <div className="flex items-center gap-2 text-slate-300">
+                  <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 shrink-0" />
+                  <span>Verificación por correo SMTP</span>
+                </div>
+                <div className="flex items-center gap-2 text-slate-300">
+                  <span className="w-1.5 h-1.5 rounded-full bg-blue-400 shrink-0" />
+                  <span>Bitácora inmutable de auditoría</span>
+                </div>
+              </div>
+            </div>
+
+            {/* System Status Pill */}
+            <div className="mt-4 p-2.5 rounded-lg bg-slate-950/80 border border-slate-800 flex items-center justify-between text-[10px] text-slate-400 font-mono">
+              <span className="flex items-center gap-1.5">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span>Servidor Seguro</span>
+              </span>
+              <span className="text-slate-500">DIMER TI</span>
             </div>
           </div>
         )}
 
         {/* Footer Area */}
-        <div className="p-3 bg-slate-950/80 border-t border-slate-800 space-y-2">
+        <div className="p-3 bg-slate-950/90 border-t border-slate-800 z-10 space-y-2">
           {currentUser ? (
             /* Logged in state */
             <div className="space-y-2">

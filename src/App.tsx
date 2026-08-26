@@ -247,41 +247,69 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden bg-[#f8fafc]">
+      <div
+        className={`flex-1 flex flex-col h-full overflow-hidden ${
+          currentUser
+            ? 'bg-slate-100/90'
+            : 'bg-gradient-to-br from-slate-950 via-[#0b1329] to-slate-950'
+        }`}
+      >
         {/* High Density Top Header */}
-        <header className="h-14 bg-white border-b border-slate-200 flex items-center justify-between px-4 sm:px-6 shrink-0 z-10">
+        <header
+          className={`h-14 border-b flex items-center justify-between px-4 sm:px-6 shrink-0 z-10 ${
+            currentUser
+              ? 'bg-white border-slate-200'
+              : 'bg-slate-950/80 backdrop-blur-md border-slate-800 text-white'
+          }`}
+        >
           <div className="flex items-center gap-3">
             {/* Desktop Toggle Sidebar Button */}
             <button
               type="button"
               onClick={() => setSidebarVisible((v) => !v)}
-              className="hidden lg:flex p-1.5 rounded-lg text-slate-500 hover:text-slate-900 hover:bg-slate-100 transition cursor-pointer"
+              className={`hidden lg:flex p-1.5 rounded-lg transition cursor-pointer ${
+                currentUser
+                  ? 'text-slate-500 hover:text-slate-900 hover:bg-slate-100'
+                  : 'text-slate-400 hover:text-white hover:bg-slate-800'
+              }`}
               title={sidebarVisible ? 'Ocultar barra de menú lateral' : 'Mostrar barra de menú lateral'}
             >
               {sidebarVisible ? (
                 <PanelLeftClose className="w-5 h-5" />
               ) : (
-                <PanelLeft className="w-5 h-5 text-indigo-600" />
+                <PanelLeft className="w-5 h-5 text-indigo-400" />
               )}
             </button>
 
             {/* Mobile Drawer Button */}
             <button
               onClick={() => setMobileOpen(true)}
-              className="lg:hidden p-1.5 rounded-lg text-slate-600 hover:bg-slate-100"
+              className={`lg:hidden p-1.5 rounded-lg ${
+                currentUser ? 'text-slate-600 hover:bg-slate-100' : 'text-slate-300 hover:bg-slate-800'
+              }`}
             >
               <Menu className="w-5 h-5" />
             </button>
             <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
-            <h2 className="text-xs sm:text-sm font-bold text-slate-800 truncate">
+            <h2
+              className={`text-xs sm:text-sm font-bold truncate ${
+                currentUser ? 'text-slate-800' : 'text-white'
+              }`}
+            >
               {getTabTitle()}
             </h2>
           </div>
 
           <div className="flex items-center gap-2">
             {/* Quick Testing Switch: Toggle between Logged In / Logged Out simulation */}
-            <div className="hidden md:flex items-center gap-1.5 bg-slate-100 border border-slate-200 px-2 py-1 rounded-lg text-[10px] text-slate-600">
-              <span className="font-semibold text-slate-500">Vista:</span>
+            <div
+              className={`hidden md:flex items-center gap-1.5 border px-2 py-1 rounded-lg text-[10px] ${
+                currentUser
+                  ? 'bg-slate-100 border-slate-200 text-slate-600'
+                  : 'bg-slate-900 border-slate-800 text-slate-400'
+              }`}
+            >
+              <span className="font-semibold text-slate-400">Vista:</span>
               <button
                 type="button"
                 onClick={() => {
@@ -295,7 +323,7 @@ export default function App() {
                 className={`px-2 py-0.5 rounded font-bold transition flex items-center gap-1 cursor-pointer ${
                   currentUser
                     ? 'bg-indigo-600 text-white shadow-xs'
-                    : 'bg-slate-200 hover:bg-slate-300 text-slate-700'
+                    : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
                 }`}
                 title="Alternar rápidamente entre vista con sesión activa y vista sin sesión"
               >
@@ -354,9 +382,9 @@ export default function App() {
                     setAuthModalMode('login');
                     setAuthModalOpen(true);
                   }}
-                  className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-md text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
+                  className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-md text-[11px] font-bold transition flex items-center gap-1 cursor-pointer"
                 >
-                  <LogIn className="w-3.5 h-3.5 text-indigo-600" />
+                  <LogIn className="w-3.5 h-3.5 text-indigo-400" />
                   <span>Iniciar Sesión</span>
                 </button>
 
@@ -493,15 +521,27 @@ export default function App() {
           )}
 
           {/* High Density Bottom Status Ticker */}
-          <footer className="mt-6 bg-[#f1f5f9] p-2.5 rounded-lg border border-slate-200 flex flex-col sm:flex-row items-center justify-between text-[9px] font-mono text-slate-500 gap-1.5">
+          <footer
+            className={`mt-6 p-2.5 rounded-lg border flex flex-col sm:flex-row items-center justify-between text-[9px] font-mono gap-1.5 ${
+              currentUser
+                ? 'bg-slate-100/80 border-slate-200 text-slate-500'
+                : 'bg-slate-950/70 border-slate-800 text-slate-400 backdrop-blur-xs'
+            }`}
+          >
             <div className="flex items-center gap-2 truncate">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 shrink-0" />
-              <span className="text-slate-700 font-semibold truncate">{lastEventText}</span>
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 shrink-0" />
+              <span
+                className={`font-semibold truncate ${
+                  currentUser ? 'text-slate-700' : 'text-slate-200'
+                }`}
+              >
+                {lastEventText}
+              </span>
             </div>
             <div className="flex items-center gap-3 shrink-0 text-slate-400">
               <span>SMTP: ONLINE (sistemas@dimer.com.mx)</span>
               <span>•</span>
-              <span className="text-indigo-600 font-bold">SEGURIDAD: SHA-512 + PBKDF2</span>
+              <span className="text-indigo-400 font-bold">SEGURIDAD: SHA-512 + PBKDF2</span>
             </div>
           </footer>
         </main>

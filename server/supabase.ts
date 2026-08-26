@@ -11,6 +11,13 @@ if (!supabaseServiceRoleKey) {
   throw new Error('Falta la variable de entorno SUPABASE_SERVICE_ROLE_KEY');
 }
 
+/**
+ * Cliente exclusivo del backend.
+ *
+ * IMPORTANTE:
+ * SUPABASE_SERVICE_ROLE_KEY NUNCA debe exponerse al navegador.
+ * Este archivo solamente debe utilizarse desde el servidor/API.
+ */
 export const supabase = createClient(
   supabaseUrl,
   supabaseServiceRoleKey,

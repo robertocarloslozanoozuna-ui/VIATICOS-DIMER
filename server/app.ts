@@ -110,6 +110,13 @@ export function getAuthenticatedUser(req: express.Request): User | null {
   return getCurrentUser();
 }
 
+function maskEmail(email?: string): string {
+  if (!email || typeof email !== 'string' || !email.includes('@')) return '***';
+  const [local, domain] = email.split('@');
+  if (local.length <= 2) return `${local[0]}***@${domain}`;
+  return `${local[0]}***${local[local.length - 1]}@${domain}`;
+}
+
 export function createApp() {
   const app = express();
 
@@ -130,13 +137,26 @@ export function createApp() {
     });
   });
 
-  // URL Normalizer: rewrites /api/index/... or /index/... to standard /api/...
+  // URL Normalizer and Safe Request Logger
   app.use((req, res, next) => {
-    if (req.url.startsWith('/api/index/')) {
+    const forwardedUrl = (req.headers['x-forwarded-url'] as string) || (req.headers['x-matched-path'] as string);
+    if (forwardedUrl && (req.url === '/api/index' || req.url === '/api' || req.url === '/index')) {
+      req.url = forwardedUrl;
+    } else if (req.url.startsWith('/api/index/')) {
       req.url = req.url.replace('/api/index/', '/api/');
-    } else if (req.url === '/api/index' && req.query.route) {
-      req.url = String(req.query.route);
+    } else if (req.url.startsWith('/index/')) {
+      req.url = req.url.replace('/index/', '/api/');
     }
+
+    const start = Date.now();
+    const cleanPath = req.path;
+    console.log(`[HTTP REQ] ${req.method} ${cleanPath} (Runtime: ${process.env.VERCEL ? 'Vercel-Serverless' : 'Node'})`);
+
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+      console.log(`[HTTP RES] ${req.method} ${cleanPath} -> Status ${res.statusCode} (${duration}ms)`);
+    });
+
     next();
   });
 
@@ -147,6 +167,32 @@ export function createApp() {
       service: 'viaticos-dimer-api',
       environment: process.env.VERCEL ? 'vercel-serverless' : 'node-server',
       timestamp: new Date().toISOString(),
+    });
+  });
+
+  // Safe diagnostic endpoint for environment verification
+  app.get(['/api/diagnostic', '/diagnostic'], (req, res) => {
+    res.json({
+      status: 'operational',
+      runtime: process.env.VERCEL ? 'vercel-serverless' : 'node',
+      nodeVersion: process.version,
+      appVersion: '1.0.0',
+      timestamp: new Date().toISOString(),
+      database: {
+        type: 'in-memory-with-seed-data',
+        usersCount: USERS.length,
+        requestsCount: TRAVEL_REQUESTS.length,
+        rolesCount: ROLES.length,
+        persistenceType: 'disk-json-fallback',
+      },
+      environmentChecks: {
+        isVercel: Boolean(process.env.VERCEL),
+        hasAppUrl: Boolean(process.env.APP_URL),
+        hasSmtpHost: Boolean(process.env.SMTP_HOST || process.env.EMAIL_HOST),
+        hasSmtpUser: Boolean(process.env.SMTP_USER || process.env.GMAIL_USER),
+        hasSmtpPass: Boolean(process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.GMAIL_APP_PASSWORD),
+        finanzasEmailConfigured: Boolean(process.env.FINANZAS_EMAIL),
+      },
     });
   });
 
@@ -181,15 +227,21 @@ export function createApp() {
       const email = body.email;
       const password = body.password;
 
+      const masked = maskEmail(email);
+      console.log(`[AUTH LOGIN] Initiating login attempt for: ${masked}`);
+
       if (!email || !password) {
+        console.warn(`[AUTH LOGIN] Missing email or password for: ${masked}`);
         return res.status(400).json({ success: false, error: 'Correo electrónico y contraseña requeridos' });
       }
 
       const cleanEmail = String(email).trim().toLowerCase();
+      console.log(`[AUTH LOGIN] Searching user in database (total registered: ${USERS.length})...`);
       let userRecord = USERS.find(u => u.email.toLowerCase() === cleanEmail);
 
       // Auto-fallback: if it's the root admin 'sistemas@dimer.com.mx' and somehow missing in cold start
       if (!userRecord && cleanEmail === 'sistemas@dimer.com.mx') {
+        console.log(`[AUTH LOGIN] Re-seeding default admin account for systems`);
         const rootAdminH = hashPassword('Carlos15');
         userRecord = {
           id: 'usr_adm_1',
@@ -209,21 +261,26 @@ export function createApp() {
       }
 
       if (!userRecord) {
+        console.warn(`[AUTH LOGIN] User not found: ${masked}`);
         return res.status(401).json({ success: false, error: 'No existe una cuenta registrada con este correo. Por favor regístrate.' });
       }
 
       if (userRecord.status === 'INACTIVO') {
+        console.warn(`[AUTH LOGIN] Inactive account rejected: ${userRecord.id}`);
         return res.status(403).json({ success: false, error: 'Esta cuenta está inactiva. Contacta al Administrador.' });
       }
 
+      console.log(`[AUTH LOGIN] Verifying password for user ID: ${userRecord.id} (Role: ${userRecord.role})`);
       // Check password with stored hash & salt (with universal fallback support)
       if (userRecord.passwordHash && userRecord.salt) {
         const isValid = verifyPassword(String(password), userRecord.passwordHash, userRecord.salt);
         if (!isValid) {
+          console.warn(`[AUTH LOGIN] Invalid password for user ID: ${userRecord.id}`);
           return res.status(401).json({ success: false, error: 'Contraseña incorrecta. Verifica tus datos e intenta de nuevo.' });
         }
       }
 
+      console.log(`[AUTH LOGIN] Password verified successfully for user ID: ${userRecord.id}`);
       const user = setCurrentUser(userRecord.id) || sanitizeUser(userRecord);
       recordAuditLog({
         userId: user.id,
@@ -231,9 +288,10 @@ export function createApp() {
         details: { email: user.email, role: user.role },
       });
 
+      console.log(`[AUTH LOGIN] Session created. Responding 200 OK for: ${masked} (${user.role})`);
       res.json({ success: true, user });
     } catch (err: any) {
-      console.error('[AUTH ERROR]', err);
+      console.error('[AUTH LOGIN CRASH ERROR]', err);
       res.status(500).json({ success: false, error: err.message || 'Error en el inicio de sesión' });
     }
   });
@@ -2078,6 +2136,19 @@ export function createApp() {
   app.all('/api/*', (req, res) => {
     res.status(404).json({
       error: `Ruta API no encontrada: ${req.method} ${req.originalUrl}`,
+    });
+  });
+
+  // Global Error Handler Middleware
+  app.use((err: any, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    console.error('[DIMER GLOBAL SERVER ERROR]', err);
+    if (res.headersSent) {
+      return next(err);
+    }
+    res.status(500).json({
+      success: false,
+      error: 'Error interno del servidor',
+      detail: err?.message || 'Error no controlado en la ejecución del servidor.',
     });
   });
 

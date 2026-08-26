@@ -16,23 +16,16 @@ import type {
 } from '../src/types';
 
 // ================= DISK PERSISTENCE STORAGE =================
-function resolveDataDir(): string {
-  if (process.env.VERCEL || process.env.AWS_LAMBDA_FUNCTION_NAME) {
-    return '/tmp';
-  }
-  return path.join(process.cwd(), 'data');
-}
-
-const DATA_DIR = resolveDataDir();
+const DATA_DIR = path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'db.json');
 
-// Ensure data directory exists safely
+// Ensure data directory exists safely (only if filesystem allows writes)
 try {
   if (typeof fs !== 'undefined' && fs.existsSync && !fs.existsSync(DATA_DIR)) {
     fs.mkdirSync(DATA_DIR, { recursive: true });
   }
 } catch (e) {
-  // Silent in serverless read-only contexts
+  // Silent in serverless read-only filesystems
 }
 
 // ================= PASSWORD HASHING UTILITY =================

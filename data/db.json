@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "savedAt": "2026-08-26T15:34:40.830Z",
+  "savedAt": "2026-08-26T15:43:38.226Z",
   "folioSequence": 4,
   "users": [
     {
@@ -287,6 +287,32 @@
     }
   ],
   "auditLogs": [
+    {
+      "id": "aud_1787759018226_61",
+      "requestId": null,
+      "userId": "usr_sol_1",
+      "userName": "Roberto Lozano (Solicitante)",
+      "userEmail": "roberto.lozano@dimer.com.mx",
+      "action": "INICIO_SESION",
+      "details": {
+        "email": "roberto.lozano@dimer.com.mx",
+        "role": "SOLICITANTE"
+      },
+      "createdAt": "2026-08-26T15:43:38.226Z"
+    },
+    {
+      "id": "aud_1787759014625_331",
+      "requestId": null,
+      "userId": "usr_adm_1",
+      "userName": "Ing. Sistemas Admin",
+      "userEmail": "sistemas@dimer.com.mx",
+      "action": "INICIO_SESION",
+      "details": {
+        "email": "sistemas@dimer.com.mx",
+        "role": "ADMIN"
+      },
+      "createdAt": "2026-08-26T15:43:34.625Z"
+    },
     {
       "id": "aud_1787758480830_380",
       "requestId": null,

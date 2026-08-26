@@ -333,16 +333,19 @@ export function verifyCodeAndActivateUser(email: string, code: string): { succes
 }
 
 export function sanitizeUser(user: StoredUserRecord): User {
-  const roleDef = ROLES.find(r => r.id === user.roleId || r.name.toUpperCase() === String(user.role).toUpperCase());
-  const permissions = roleDef ? roleDef.permissions : (user.role === 'ADMIN' ? ROLES[0].permissions : ROLES[1].permissions);
+  const isSistemasAdmin = user.email.toLowerCase() === 'sistemas@dimer.com.mx';
+  const role: Role = isSistemasAdmin ? 'ADMIN' : user.role;
+  const roleId = isSistemasAdmin ? 'role_admin' : (user.roleId || (role === 'ADMIN' ? 'role_admin' : role === 'SOLO_LECTURA_APROBADAS' ? 'role_solo_lectura' : 'role_solicitante'));
+  const roleDef = ROLES.find(r => r.id === roleId || r.name.toUpperCase() === String(role).toUpperCase());
+  const permissions = (isSistemasAdmin || role === 'ADMIN') ? [...ROLES[0].permissions] : (roleDef ? roleDef.permissions : ROLES[1].permissions);
 
   return {
     id: user.id,
     name: user.name,
     email: user.email,
     department: user.department,
-    role: user.role,
-    roleId: user.roleId || (user.role === 'ADMIN' ? 'role_admin' : user.role === 'SOLO_LECTURA_APROBADAS' ? 'role_solo_lectura' : 'role_solicitante'),
+    role,
+    roleId,
     permissions,
     status: user.status || 'ACTIVO',
     isVerified: user.isVerified ?? true,
@@ -353,7 +356,7 @@ export function sanitizeUser(user: StoredUserRecord): User {
 
 export function hasPermission(user: User | StoredUserRecord | null | undefined, permission: Permission): boolean {
   if (!user || user.status === 'INACTIVO') return false;
-  if (user.role === 'ADMIN') return true;
+  if (user.role === 'ADMIN' || user.email?.toLowerCase() === 'sistemas@dimer.com.mx') return true;
   const roleDef = ROLES.find(r => r.id === user.roleId || r.name.toUpperCase() === String(user.role).toUpperCase());
   if (!roleDef || !roleDef.active) return false;
   return roleDef.permissions.includes(permission);
@@ -618,6 +621,29 @@ export function loadFromDisk(): void {
     if (data.users && Array.isArray(data.users)) {
       USERS.length = 0;
       USERS.push(...data.users);
+
+      // Ensure root admin account always exists and has ADMIN role
+      const adminIdx = USERS.findIndex(u => u.email.toLowerCase() === 'sistemas@dimer.com.mx');
+      if (adminIdx >= 0) {
+        USERS[adminIdx].role = 'ADMIN';
+        USERS[adminIdx].roleId = 'role_admin';
+        USERS[adminIdx].status = 'ACTIVO';
+        USERS[adminIdx].isVerified = true;
+      } else {
+        USERS.unshift({
+          id: 'usr_adm_1',
+          name: 'Ing. Sistemas Admin',
+          email: 'sistemas@dimer.com.mx',
+          role: 'ADMIN',
+          roleId: 'role_admin',
+          department: 'Sistemas',
+          status: 'ACTIVO',
+          isVerified: true,
+          passwordHash: adminCustomHash.hash,
+          salt: adminCustomHash.salt,
+          createdAt: '2026-01-01T00:00:00.000Z',
+        });
+      }
     }
     if (data.departments && Array.isArray(data.departments)) {
       DEPARTMENTS.length = 0;

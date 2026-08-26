@@ -179,19 +179,28 @@ export default function Navbar({
       >
         {/* Brand Header with Official DIMER Logo */}
         <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-          <div>
-            <div className="flex items-center gap-2">
-              <DimerLogo variant="dark" size="sm" />
+          {currentUser ? (
+            <div>
+              <div className="flex items-center gap-2">
+                <DimerLogo variant="dark" size="sm" />
+              </div>
+              <div className="mt-1 flex items-center gap-1.5">
+                <span className="text-xs font-bold tracking-tight text-white">
+                  Viáticos Dimer
+                </span>
+              </div>
+              <p className="text-[9px] text-slate-400 uppercase tracking-widest mt-0.5 font-mono">
+                PORTAL CORPORATIVO &bull; DIMER
+              </p>
             </div>
-            <div className="mt-1 flex items-center gap-1.5">
-              <span className="text-xs font-bold tracking-tight text-white">
-                Solicitud de Viáticos
-              </span>
+          ) : (
+            <div className="w-full flex flex-col items-center justify-center text-center py-2">
+              <DimerLogo variant="dark" size="md" />
+              <h2 className="mt-2 text-sm font-bold text-white tracking-tight">
+                Viáticos Dimer
+              </h2>
             </div>
-            <p className="text-[9px] text-slate-400 uppercase tracking-widest mt-0.5 font-mono">
-              PORTAL CORPORATIVO &bull; DIMER
-            </p>
-          </div>
+          )}
           <div className="flex items-center gap-1">
             {onToggleSidebar && (
               <button
@@ -279,65 +288,13 @@ export default function Navbar({
             })}
           </nav>
         ) : (
-          /* Welcome Panel when no session is active */
-          <div className="flex-1 p-4 space-y-4 overflow-y-auto flex flex-col justify-between">
-            <div className="space-y-4">
-              <div className="p-3.5 rounded-xl bg-slate-900/90 border border-slate-800/90 space-y-2">
-                <div className="flex items-center gap-2 text-indigo-400">
-                  <Sparkles className="w-4 h-4" />
-                  <span className="text-xs font-bold uppercase tracking-wider">
-                    Bienvenido
-                  </span>
-                </div>
-                <h3 className="text-sm font-bold text-white leading-snug">
-                  Portal Corporativo DIMER
-                </h3>
-                <p className="text-[11px] text-slate-300 leading-relaxed">
-                  Sistema integral de gestión de viáticos y comprobación de gastos operativos para colaboradores de Grupo DIMER.
-                </p>
-              </div>
-
-              <div className="space-y-2.5">
-                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1">
-                  Beneficios del Portal
-                </div>
-                
-                <div className="p-2.5 rounded-lg bg-slate-900/50 border border-slate-800 text-[11px] text-slate-300 flex items-start gap-2.5">
-                  <div className="p-1 rounded bg-indigo-500/20 text-indigo-400 shrink-0 mt-0.5">
-                    <Zap className="w-3.5 h-3.5" />
-                  </div>
-                  <div>
-                    <strong className="text-white block font-semibold">Solicitud en 3 Minutos</strong>
-                    <span>Calcula viáticos con desglose por concepto y kilometraje.</span>
-                  </div>
-                </div>
-
-                <div className="p-2.5 rounded-lg bg-slate-900/50 border border-slate-800 text-[11px] text-slate-300 flex items-start gap-2.5">
-                  <div className="p-1 rounded bg-emerald-500/20 text-emerald-400 shrink-0 mt-0.5">
-                    <Mail className="w-3.5 h-3.5" />
-                  </div>
-                  <div>
-                    <strong className="text-white block font-semibold">Aprobación en 1-Clic</strong>
-                    <span>Tu jefe autoriza directamente desde su correo con enlaces tokenizados.</span>
-                  </div>
-                </div>
-
-                <div className="p-2.5 rounded-lg bg-slate-900/50 border border-slate-800 text-[11px] text-slate-300 flex items-start gap-2.5">
-                  <div className="p-1 rounded bg-purple-500/20 text-purple-400 shrink-0 mt-0.5">
-                    <Shield className="w-3.5 h-3.5" />
-                  </div>
-                  <div>
-                    <strong className="text-white block font-semibold">Seguridad Criptográfica</strong>
-                    <span>Tus datos y contraseñas protegidos bajo SHA-512 + PBKDF2.</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="p-3 bg-slate-900/70 border border-slate-800 rounded-lg text-center">
-              <p className="text-[10px] text-slate-400">
-                Inicia sesión en la pantalla principal o regístrate para acceder.
+          /* Central area before login: Diseños y Mercadotecnia */
+          <div className="flex-1 flex flex-col items-center justify-center p-6 text-center">
+            <div className="p-4 rounded-xl bg-slate-900/60 border border-slate-800/80 w-full max-w-[220px] shadow-inner">
+              <p className="text-sm font-semibold text-slate-200 tracking-wide">
+                Diseños y Mercadotecnia
               </p>
+              <div className="w-8 h-0.5 bg-indigo-500/50 mx-auto mt-2.5 rounded-full" />
             </div>
           </div>
         )}
@@ -413,7 +370,7 @@ export default function Navbar({
                   className="py-2 px-2 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold rounded-lg border border-slate-700 transition flex items-center justify-center gap-1.5 cursor-pointer"
                 >
                   <LogIn className="w-3.5 h-3.5 text-indigo-400" />
-                  <span>Iniciar Sesión</span>
+                  <span>Iniciar sesión</span>
                 </button>
 
                 <button

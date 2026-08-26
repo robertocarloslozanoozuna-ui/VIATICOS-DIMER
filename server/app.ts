@@ -42,6 +42,74 @@ import {
 import { NEXTJS_CODE_ARTIFACTS } from './nextjsArtifacts';
 import type { TravelRequest, User, Role, Status, StoredUserRecord } from '../src/types';
 
+// Robust Application Base URL resolver for production & Vercel
+export function getBaseAppUrl(req?: express.Request): string {
+  if (process.env.APP_URL && process.env.APP_URL !== 'MY_APP_URL' && process.env.APP_URL.trim() !== '') {
+    const raw = process.env.APP_URL.trim().replace(/\/+$/, '');
+    if (process.env.VERCEL && raw.includes('localhost')) {
+      // Ignore localhost on Vercel deployment
+    } else {
+      return raw;
+    }
+  }
+
+  if (process.env.NEXT_PUBLIC_APP_URL && process.env.NEXT_PUBLIC_APP_URL.trim() !== '') {
+    const raw = process.env.NEXT_PUBLIC_APP_URL.trim().replace(/\/+$/, '');
+    if (!process.env.VERCEL || !raw.includes('localhost')) {
+      return raw;
+    }
+  }
+
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) {
+    return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL.trim().replace(/\/+$/, '')}`;
+  }
+  if (process.env.VERCEL_URL) {
+    return `https://${process.env.VERCEL_URL.trim().replace(/\/+$/, '')}`;
+  }
+
+  if (req) {
+    const forwardedProto = req.headers['x-forwarded-proto'] as string | undefined;
+    const proto = (forwardedProto && forwardedProto.includes('https')) ? 'https' : (req.secure ? 'https' : 'http');
+    const host = (req.headers['x-forwarded-host'] || req.headers.host) as string | undefined;
+    if (host && !host.includes('localhost:3000')) {
+      return `${proto}://${host.trim().replace(/\/+$/, '')}`;
+    }
+  }
+
+  if (process.env.VERCEL) {
+    return 'https://viaticos-dimer.vercel.app';
+  }
+
+  return 'http://localhost:3000';
+}
+
+export function getAuthenticatedUser(req: express.Request): User | null {
+  const headerEmail = (req.headers['x-user-email'] as string | undefined)?.trim().toLowerCase();
+  const headerId = (req.headers['x-user-id'] as string | undefined)?.trim();
+  const authHeader = (req.headers['authorization'] as string | undefined)?.trim();
+
+  let candidate: StoredUserRecord | undefined;
+  if (headerEmail) {
+    candidate = USERS.find(u => u.email.toLowerCase() === headerEmail);
+  }
+  if (!candidate && headerId) {
+    candidate = USERS.find(u => u.id === headerId);
+  }
+  if (!candidate && authHeader) {
+    const token = authHeader.replace(/^Bearer\s+/i, '').trim();
+    if (token.includes('@')) {
+      candidate = USERS.find(u => u.email.toLowerCase() === token.toLowerCase());
+    } else {
+      candidate = USERS.find(u => u.id === token);
+    }
+  }
+
+  if (candidate) {
+    return sanitizeUser(candidate);
+  }
+  return getCurrentUser();
+}
+
 export function createApp() {
   const app = express();
 
@@ -62,11 +130,11 @@ export function createApp() {
 
   // Current session & bootstrap config
   app.get('/api/me', (req, res) => {
-    const user = getCurrentUser();
+    const user = getAuthenticatedUser(req);
     res.json({
       user,
       allUsers: USERS.map(sanitizeUser),
-      appUrl: process.env.APP_URL || 'http://localhost:3000',
+      appUrl: getBaseAppUrl(req),
       finanzasEmail: process.env.FINANZAS_EMAIL || 'finanzas@dimer.com.mx',
       systemsEmail: 'sistemas@dimer.com.mx',
     });
@@ -996,7 +1064,7 @@ export function createApp() {
 
   app.get('/api/requests', (req, res) => {
     const { status, roleFilter } = req.query;
-    const currentUser = getCurrentUser();
+    const currentUser = getAuthenticatedUser(req) || getCurrentUser();
     let list = getPopulatedRequests();
 
     if (!currentUser) {
@@ -1027,7 +1095,7 @@ export function createApp() {
       );
     } else if (roleFilter === 'to_approve') {
       list = list.filter(
-        r => r.bossEmail.toLowerCase() === currentUser.email.toLowerCase() || currentUser.role === 'ADMIN'
+        r => r.bossEmail.toLowerCase() === currentUser.email.toLowerCase() || currentUser.role === 'ADMIN' || currentUser.email.toLowerCase() === 'sistemas@dimer.com.mx'
       );
     } else if (roleFilter === 'finanzas' || roleFilter === 'approved_only') {
       list = list.filter(r => ['APROBADA', 'PAGADA', 'FINALIZADA'].includes(r.status));
@@ -1046,7 +1114,7 @@ export function createApp() {
     const userRecord = USERS.find(u => u.id === request.userId);
     const relatedLogs = AUDIT_LOGS.filter(l => l.requestId === request.id);
 
-    const currentUser = getCurrentUser();
+    const currentUser = getAuthenticatedUser(req) || getCurrentUser();
     if (currentUser) {
       recordAuditLog({
         requestId: request.id,
@@ -1066,9 +1134,170 @@ export function createApp() {
       canApprove: currentUser ? (
         currentUser.email.toLowerCase() === request.bossEmail.toLowerCase() ||
         currentUser.role === 'ADMIN' ||
+        currentUser.email.toLowerCase() === 'sistemas@dimer.com.mx' ||
         hasPermission(currentUser, 'aprobar_solicitudes')
       ) : false,
     });
+  });
+
+  // Full Edit for Requests (Admin can edit any request, Solicitante can edit own draft/pending requests)
+  app.put('/api/requests/:id', (req, res) => {
+    try {
+      const { id } = req.params;
+      const currentUser = getAuthenticatedUser(req) || getCurrentUser();
+
+      const request = TRAVEL_REQUESTS.find(r => r.id === id || r.folio === id);
+      if (!request) {
+        return res.status(404).json({ error: 'Solicitud no encontrada' });
+      }
+
+      const isAdmin = currentUser?.role === 'ADMIN' || currentUser?.email?.toLowerCase() === 'sistemas@dimer.com.mx';
+      const isOwner = currentUser && (request.userId === currentUser.id || request.user?.email.toLowerCase() === currentUser.email.toLowerCase());
+
+      if (!isAdmin && !isOwner) {
+        return res.status(403).json({ error: 'No tienes permisos para modificar esta solicitud' });
+      }
+
+      if (!isAdmin && !['PENDIENTE_APROBACION', 'CORRECCION_SOLICITADA', 'BORRADOR'].includes(request.status)) {
+        return res.status(400).json({ error: `No se puede modificar una solicitud en estatus ${request.status}` });
+      }
+
+      const {
+        requesterName,
+        department,
+        requestType,
+        detail,
+        reason,
+        destination,
+        urgency,
+        startDate,
+        endDate,
+        amountRequested,
+        amountAuthorized,
+        transportCost,
+        hotelCost,
+        foodCost,
+        miscCost,
+        comments,
+        status,
+        bossEmail,
+        bossName,
+        bossId,
+      } = req.body;
+
+      if (detail || reason) {
+        request.detail = (detail || reason).trim();
+        request.reason = (reason || detail).trim();
+      }
+      if (requesterName) request.requesterName = requesterName.trim();
+      if (department) request.department = department.trim();
+      if (requestType) request.requestType = requestType.trim();
+      if (destination) request.destination = destination.trim();
+      if (urgency) request.urgency = urgency;
+      if (startDate) request.startDate = startDate;
+      if (endDate) request.endDate = endDate;
+      if (comments !== undefined) request.comments = comments ? comments.trim() : null;
+
+      if (bossEmail) {
+        request.bossEmail = bossEmail.trim().toLowerCase();
+        request.bossName = bossName || request.bossEmail;
+        if (bossId) request.bossId = bossId;
+      }
+
+      if (transportCost !== undefined) request.transportCost = Number(transportCost) || 0;
+      if (hotelCost !== undefined) request.hotelCost = Number(hotelCost) || 0;
+      if (foodCost !== undefined) request.foodCost = Number(foodCost) || 0;
+      if (miscCost !== undefined) request.miscCost = Number(miscCost) || 0;
+
+      if (amountRequested !== undefined && !isNaN(Number(amountRequested))) {
+        request.amountRequested = Number(amountRequested);
+      } else if (transportCost !== undefined || hotelCost !== undefined || foodCost !== undefined || miscCost !== undefined) {
+        request.amountRequested = (request.transportCost || 0) + (request.hotelCost || 0) + (request.foodCost || 0) + (request.miscCost || 0);
+      }
+
+      if (isAdmin && amountAuthorized !== undefined) {
+        request.amountAuthorized = amountAuthorized !== null ? Number(amountAuthorized) : null;
+      }
+      if (isAdmin && status) {
+        request.status = status;
+      }
+
+      request.updatedAt = new Date().toISOString();
+      saveToDisk();
+
+      recordAuditLog({
+        requestId: request.id,
+        userId: currentUser?.id || 'admin',
+        action: 'MODIFICACION_SOLICITUD',
+        details: {
+          modifiedBy: currentUser?.email || 'sistemas@dimer.com.mx',
+          folio: request.folio,
+          amountRequested: request.amountRequested,
+          status: request.status,
+        },
+      });
+
+      const userRecord = USERS.find(u => u.id === request.userId);
+      res.json({
+        success: true,
+        request: { ...request, user: userRecord ? sanitizeUser(userRecord) : undefined },
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Error al actualizar la solicitud' });
+    }
+  });
+
+  app.patch('/api/requests/:id', (req, res, next) => {
+    // Pass through to PUT handler
+    const fn = app._router.stack.find((layer: any) => layer.route && layer.route.path === '/api/requests/:id' && layer.route.methods.put);
+    if (fn) {
+      return fn.handle(req, res, next);
+    }
+    res.status(404).json({ error: 'Endpoint no disponible' });
+  });
+
+  // Delete Request (Admin can delete any request; solicitante can delete own draft or cancelled)
+  app.delete('/api/requests/:id', (req, res) => {
+    try {
+      const { id } = req.params;
+      const currentUser = getAuthenticatedUser(req) || getCurrentUser();
+
+      const requestIndex = TRAVEL_REQUESTS.findIndex(r => r.id === id || r.folio === id);
+      if (requestIndex === -1) {
+        return res.status(404).json({ error: 'Solicitud no encontrada' });
+      }
+
+      const request = TRAVEL_REQUESTS[requestIndex];
+      const isAdmin = currentUser?.role === 'ADMIN' || currentUser?.email?.toLowerCase() === 'sistemas@dimer.com.mx';
+      const isOwner = currentUser && (request.userId === currentUser.id || request.user?.email.toLowerCase() === currentUser.email.toLowerCase());
+
+      if (!isAdmin && (!isOwner || !['BORRADOR', 'CANCELADA', 'CORRECCION_SOLICITADA'].includes(request.status))) {
+        return res.status(403).json({ error: 'Solo el Administrador puede eliminar solicitudes en este estado' });
+      }
+
+      const [deleted] = TRAVEL_REQUESTS.splice(requestIndex, 1);
+      saveToDisk();
+
+      recordAuditLog({
+        requestId: deleted.id,
+        userId: currentUser?.id || 'admin',
+        action: 'ELIMINACION_SOLICITUD',
+        details: {
+          deletedBy: currentUser?.email || 'sistemas@dimer.com.mx',
+          folio: deleted.folio,
+          requesterName: deleted.requesterName,
+          amountRequested: deleted.amountRequested,
+        },
+      });
+
+      res.json({
+        success: true,
+        message: `Solicitud con folio ${deleted.folio} eliminada correctamente.`,
+        deletedId: deleted.id,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message || 'Error al eliminar la solicitud' });
+    }
   });
 
   // Create new request
@@ -1189,7 +1418,7 @@ export function createApp() {
 
       // Send Tokenized Email to Boss and systems authorization email
       // The links use the direct 1-click token action endpoint so approvers can approve/reject from email without UI login redirection.
-      const appUrl = process.env.APP_URL || 'http://localhost:3000';
+      const appUrl = getBaseAppUrl(req);
       const approveUrl = `${appUrl}/api/approval/token-action?token=${tokenRecord.token}&action=approve`;
       const rejectUrl = `${appUrl}/api/approval/token-action?token=${tokenRecord.token}&action=reject`;
 
@@ -1396,11 +1625,30 @@ export function createApp() {
     }
   });
 
+  // Route Aliases for Approval Response URLs
+  app.get(['/api/approval-response/:token/:decision', '/approval-response/:token/:decision'], (req, res) => {
+    const { token, decision } = req.params;
+    const action = (decision === 'reject' || decision === 'rechazar' || decision === 'rechazada') ? 'reject' : 'approve';
+    req.query.token = token;
+    req.query.action = action;
+    const fn = app._router.stack.find((layer: any) => layer.route && layer.route.path === '/api/approval/token-action' && layer.route.methods.get);
+    if (fn) {
+      return fn.handle(req, res);
+    }
+    res.redirect(`/api/approval/token-action?token=${token}&action=${action}`);
+  });
+
+  app.get('/approval-response', (req, res) => {
+    const { token, action, decision } = req.query;
+    const resolvedAction = (action === 'reject' || decision === 'reject' || action === 'rechazar' || decision === 'rechazar') ? 'reject' : 'approve';
+    res.redirect(`/api/approval/token-action?token=${token || ''}&action=${resolvedAction}`);
+  });
+
   // Cancel Request
   app.post('/api/requests/:id/cancel', (req, res) => {
     try {
       const { id } = req.params;
-      const currentUser = getCurrentUser();
+      const currentUser = getAuthenticatedUser(req) || getCurrentUser();
 
       const request = TRAVEL_REQUESTS.find(r => r.id === id || r.folio === id);
       if (!request) return res.status(404).json({ error: 'Solicitud no encontrada' });

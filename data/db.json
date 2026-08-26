@@ -1,0 +1,378 @@
+{
+  "version": 1,
+  "savedAt": "2026-08-26T13:12:18.924Z",
+  "folioSequence": 4,
+  "users": [
+    {
+      "id": "usr_adm_1",
+      "name": "Ing. Sistemas Admin",
+      "email": "sistemas@dimer.com.mx",
+      "role": "ADMIN",
+      "roleId": "role_admin",
+      "department": "Sistemas",
+      "status": "ACTIVO",
+      "isVerified": true,
+      "passwordHash": "6eed94be6945acc3eb56eb4ff4c69cbf84918f3ffb41f5117d2dc35a18eed01dd9b800ff40bdf5dfd9b63132a5e9dc0ea51c1e58ff0591b48d08d6786d6edb91",
+      "salt": "dd7bdc4663c5af5bf7568b3441b22ae1",
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "usr_sol_1",
+      "name": "Roberto Lozano (Solicitante)",
+      "email": "roberto.lozano@dimer.com.mx",
+      "role": "SOLICITANTE",
+      "roleId": "role_solicitante",
+      "department": "Sistemas",
+      "status": "ACTIVO",
+      "isVerified": true,
+      "passwordHash": "1a8bc4a5a7aebaef93b008de2a239b13c13767d13c1408c793695f9144ee6d9878aa1e2d2ff28f97279252abecdb495dc5406883995d5121363484d8dbba4059",
+      "salt": "ffdff96d8a67da1bca99f7d49301cb22",
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "usr_fin_1",
+      "name": "CP. Laura Finanzas (Tesorería)",
+      "email": "finanzas@dimer.com.mx",
+      "role": "FINANZAS",
+      "roleId": "role_finanzas",
+      "department": "Finanzas",
+      "status": "ACTIVO",
+      "isVerified": true,
+      "passwordHash": "1a8bc4a5a7aebaef93b008de2a239b13c13767d13c1408c793695f9144ee6d9878aa1e2d2ff28f97279252abecdb495dc5406883995d5121363484d8dbba4059",
+      "salt": "ffdff96d8a67da1bca99f7d49301cb22",
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "usr_lec_1",
+      "name": "Lic. Auditoria (Solo Lectura Aprobadas)",
+      "email": "auditoria@dimer.com.mx",
+      "role": "SOLO_LECTURA_APROBADAS",
+      "roleId": "role_solo_lectura",
+      "department": "Dirección",
+      "status": "ACTIVO",
+      "isVerified": true,
+      "passwordHash": "1a8bc4a5a7aebaef93b008de2a239b13c13767d13c1408c793695f9144ee6d9878aa1e2d2ff28f97279252abecdb495dc5406883995d5121363484d8dbba4059",
+      "salt": "ffdff96d8a67da1bca99f7d49301cb22",
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "departments": [
+    {
+      "id": "dept_sistemas",
+      "name": "Sistemas",
+      "description": "Tecnología, Infraestructura y Soporte TI",
+      "active": true,
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "dept_finanzas",
+      "name": "Finanzas",
+      "description": "Tesorería, Contabilidad y Pólizas",
+      "active": true,
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "dept_rh",
+      "name": "Recursos Humanos",
+      "description": "Gestión de Talento y Desarrollo Organizacional",
+      "active": true,
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "dept_produccion",
+      "name": "Producción",
+      "description": "Manufactura, Operaciones y Planta",
+      "active": true,
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "dept_compras",
+      "name": "Compras",
+      "description": "Adquisiciones y Proveedores",
+      "active": true,
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "dept_ventas",
+      "name": "Ventas",
+      "description": "Comercialización, Proyectos y Cuentas Clave",
+      "active": true,
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    },
+    {
+      "id": "dept_1787749938924_826",
+      "name": "General",
+      "description": "Departamento registrado automáticamente",
+      "active": true,
+      "createdAt": "2026-08-26T13:12:18.924Z"
+    }
+  ],
+  "roles": [
+    {
+      "id": "role_admin",
+      "name": "Administrador",
+      "description": "Acceso total al sistema, gestión de usuarios, roles, departamentos y auditoría.",
+      "active": true,
+      "isSystem": true,
+      "permissions": [
+        "ver_solicitudes",
+        "crear_solicitudes",
+        "editar_solicitudes",
+        "cancelar_solicitudes",
+        "aprobar_solicitudes",
+        "ver_todas_solicitudes",
+        "administrar_usuarios",
+        "administrar_departamentos",
+        "administrar_jefes",
+        "administrar_roles",
+        "ver_reportes",
+        "administrar_configuracion"
+      ]
+    },
+    {
+      "id": "role_solicitante",
+      "name": "Solicitante",
+      "description": "Puede crear nuevas solicitudes y consultar exclusivamente sus propias solicitudes y su estatus.",
+      "active": true,
+      "isSystem": true,
+      "permissions": [
+        "ver_solicitudes",
+        "crear_solicitudes",
+        "editar_solicitudes",
+        "cancelar_solicitudes"
+      ]
+    },
+    {
+      "id": "role_solo_lectura",
+      "name": "Solo Lectura de Aprobadas",
+      "description": "Acceso de consulta exclusivo para visualizar solicitudes que ya fueron aprobadas en la empresa.",
+      "active": true,
+      "isSystem": true,
+      "permissions": [
+        "ver_solicitudes",
+        "ver_todas_solicitudes"
+      ]
+    },
+    {
+      "id": "role_jefe",
+      "name": "Jefe / Aprobador",
+      "description": "Autorización y dictamen de solicitudes de colaboradores a su cargo.",
+      "active": true,
+      "isSystem": true,
+      "permissions": [
+        "ver_solicitudes",
+        "crear_solicitudes",
+        "editar_solicitudes",
+        "aprobar_solicitudes",
+        "ver_todas_solicitudes"
+      ]
+    },
+    {
+      "id": "role_finanzas",
+      "name": "Finanzas / Tesorería",
+      "description": "Revisión de solicitudes aprobadas, dispersión de transferencias SPEI y emisión de pólizas.",
+      "active": true,
+      "isSystem": true,
+      "permissions": [
+        "ver_solicitudes",
+        "ver_todas_solicitudes",
+        "ver_reportes"
+      ]
+    }
+  ],
+  "bosses": [
+    {
+      "id": "boss_sistemas",
+      "name": "Ing. Roberto Flores / Autorizaciones TI",
+      "email": "sistemas@dimer.com.mx",
+      "department": "Sistemas",
+      "active": true,
+      "createdAt": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "travelRequests": [
+    {
+      "id": "req_001",
+      "folio": "VIAT-2026-000001",
+      "status": "PENDIENTE_APROBACION",
+      "userId": "usr_sol_1",
+      "requesterName": "Roberto Lozano",
+      "department": "Sistemas",
+      "requestType": "Viáticos y Gastos de Viaje",
+      "detail": "Reunión de cierre con cliente industrial para proyecto de automatización y auditoría en planta.",
+      "requestDate": "2026-08-21",
+      "urgency": "alta",
+      "bossId": "boss_sistemas",
+      "bossEmail": "sistemas@dimer.com.mx",
+      "bossName": "Ing. Roberto Flores / Autorizaciones TI",
+      "startDate": "2026-08-25T00:00:00.000Z",
+      "endDate": "2026-08-28T00:00:00.000Z",
+      "destination": "Monterrey, N.L.",
+      "reason": "Reunión de cierre con cliente industrial para proyecto de automatización y auditoría en planta.",
+      "amountRequested": 14850,
+      "amountAuthorized": null,
+      "transportCost": 5000,
+      "hotelCost": 6000,
+      "foodCost": 3000,
+      "miscCost": 850,
+      "comments": "Incluye vuelos, 3 noches de hospedaje en zona San Pedro y viáticos diarios según tabulador.",
+      "approvalToken": "tok_seed_req_001_sistemas",
+      "createdAt": "2026-08-21T09:30:00.000Z"
+    },
+    {
+      "id": "req_002",
+      "folio": "VIAT-2026-000002",
+      "status": "APROBADA",
+      "userId": "usr_sol_1",
+      "requesterName": "Roberto Lozano",
+      "department": "Sistemas",
+      "requestType": "Viáticos y Gastos de Viaje",
+      "detail": "Participación en Expo Industrial 2026 y visitas técnicas a socios estratégicos.",
+      "requestDate": "2026-08-20",
+      "urgency": "media",
+      "bossId": "boss_sistemas",
+      "bossEmail": "sistemas@dimer.com.mx",
+      "bossName": "Ing. Roberto Flores / Autorizaciones TI",
+      "startDate": "2026-09-02T00:00:00.000Z",
+      "endDate": "2026-09-04T00:00:00.000Z",
+      "destination": "Guadalajara, Jal.",
+      "reason": "Participación en Expo Industrial 2026 y visitas técnicas a socios estratégicos.",
+      "amountRequested": 12000,
+      "amountAuthorized": 11000,
+      "transportCost": 4000,
+      "hotelCost": 4500,
+      "foodCost": 2500,
+      "miscCost": 1000,
+      "comments": "Aprobado con ajuste de $1,000 en hotel corporativo con convenio.",
+      "approvedBy": "sistemas@dimer.com.mx",
+      "approvedAt": "2026-08-20T16:45:00.000Z",
+      "createdAt": "2026-08-20T14:15:00.000Z"
+    },
+    {
+      "id": "req_003",
+      "folio": "VIAT-2026-000003",
+      "status": "PAGADA",
+      "userId": "usr_sol_1",
+      "requesterName": "Roberto Lozano",
+      "department": "Sistemas",
+      "requestType": "Servicios y Mantenimiento",
+      "detail": "Instalación de servidores y entrega de infraestructura en nuevo centro logístico.",
+      "requestDate": "2026-08-08",
+      "urgency": "baja",
+      "bossId": "boss_sistemas",
+      "bossEmail": "sistemas@dimer.com.mx",
+      "bossName": "Ing. Roberto Flores / Autorizaciones TI",
+      "startDate": "2026-08-10T00:00:00.000Z",
+      "endDate": "2026-08-12T00:00:00.000Z",
+      "destination": "Querétaro, Qro.",
+      "reason": "Instalación de servidores y entrega de infraestructura en nuevo centro logístico.",
+      "amountRequested": 8500,
+      "amountAuthorized": 8500,
+      "comments": "Dispersado vía transferencia SPEI folio 89123.",
+      "approvedBy": "sistemas@dimer.com.mx",
+      "approvedAt": "2026-08-08T15:20:00.000Z",
+      "createdAt": "2026-08-08T11:00:00.000Z"
+    }
+  ],
+  "approvalTokens": [
+    {
+      "id": "tok_init_1",
+      "token": "tok_seed_req_001_carlos_director",
+      "requestId": "req_001",
+      "bossId": "boss_001",
+      "bossEmail": "carlos.director@dimer.com.mx",
+      "expiresAt": "2026-09-02T13:10:00.128Z",
+      "used": false,
+      "createdAt": "2026-08-21T09:30:00.000Z"
+    }
+  ],
+  "auditLogs": [
+    {
+      "id": "aud_001",
+      "requestId": "req_003",
+      "userId": "usr_sol_1",
+      "userName": "Roberto Lozano (Solicitante)",
+      "userEmail": "roberto.lozano@dimer.com.mx",
+      "action": "CREACION_SOLICITUD",
+      "details": {
+        "folio": "VIAT-2026-000003",
+        "amountRequested": 8500,
+        "destination": "Querétaro, Qro.",
+        "bossEmail": "sistemas@dimer.com.mx"
+      },
+      "createdAt": "2026-08-08T11:00:00.000Z"
+    },
+    {
+      "id": "aud_002",
+      "requestId": "req_003",
+      "userId": "usr_adm_1",
+      "userName": "Ing. Roberto Flores / Autorizaciones TI",
+      "userEmail": "sistemas@dimer.com.mx",
+      "action": "APROBACION_JEFE",
+      "details": {
+        "folio": "VIAT-2026-000003",
+        "amountAuthorized": 8500,
+        "comments": "Aprobado sin observaciones"
+      },
+      "createdAt": "2026-08-08T15:20:00.000Z"
+    },
+    {
+      "id": "aud_003",
+      "requestId": "req_003",
+      "userId": "usr_fin_1",
+      "userName": "CP. Laura Finanzas (Tesorería)",
+      "userEmail": "finanzas@dimer.com.mx",
+      "action": "DISPERSION_PAGO",
+      "details": {
+        "folio": "VIAT-2026-000003",
+        "amountPaid": 8500,
+        "reference": "SPEI-89123"
+      },
+      "createdAt": "2026-08-09T10:00:00.000Z"
+    },
+    {
+      "id": "aud_004",
+      "requestId": "req_002",
+      "userId": "usr_sol_1",
+      "userName": "Roberto Lozano (Solicitante)",
+      "userEmail": "roberto.lozano@dimer.com.mx",
+      "action": "CREACION_SOLICITUD",
+      "details": {
+        "folio": "VIAT-2026-000002",
+        "amountRequested": 12000,
+        "destination": "Guadalajara, Jal.",
+        "bossEmail": "sistemas@dimer.com.mx"
+      },
+      "createdAt": "2026-08-20T14:15:00.000Z"
+    },
+    {
+      "id": "aud_005",
+      "requestId": "req_002",
+      "userId": "usr_adm_1",
+      "userName": "Ing. Roberto Flores / Autorizaciones TI",
+      "userEmail": "sistemas@dimer.com.mx",
+      "action": "APROBACION_JEFE",
+      "details": {
+        "folio": "VIAT-2026-000002",
+        "amountRequested": 12000,
+        "amountAuthorized": 11000,
+        "adjustment": -1000
+      },
+      "createdAt": "2026-08-20T16:45:00.000Z"
+    },
+    {
+      "id": "aud_006",
+      "requestId": "req_001",
+      "userId": "usr_sol_1",
+      "userName": "Roberto Lozano (Solicitante)",
+      "userEmail": "roberto.lozano@dimer.com.mx",
+      "action": "CREACION_SOLICITUD",
+      "details": {
+        "folio": "VIAT-2026-000001",
+        "amountRequested": 14850,
+        "bossEmail": "sistemas@dimer.com.mx"
+      },
+      "createdAt": "2026-08-21T09:30:00.000Z"
+    }
+  ]
+}

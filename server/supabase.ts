@@ -11,20 +11,12 @@ if (!supabaseServiceRoleKey) {
   throw new Error('Falta la variable de entorno SUPABASE_SERVICE_ROLE_KEY');
 }
 
-/**
- * Cliente exclusivo del backend.
- *
- * IMPORTANTE:
- * SUPABASE_SERVICE_ROLE_KEY NUNCA debe exponerse al navegador.
- * Este archivo solamente debe utilizarse desde el servidor/API.
- */
-export const supabase = createClient(
-  supabaseUrl,
-  supabaseServiceRoleKey,
-  {
-    auth: {
-      autoRefreshToken: false,
-      persistSession: false,
-    },
-  }
-);
+/** Cliente exclusivo del backend. Nunca debe exponerse al navegador. */
+export const supabase = createClient(supabaseUrl, supabaseServiceRoleKey, {
+  auth: { autoRefreshToken: false, persistSession: false },
+});
+
+// Bootstrap automático en Vercel/Node. Idempotente: si roles ya tiene datos, no vuelve a sembrar.
+import('./supabase-seed')
+  .then(({ ensureSupabaseSeed }) => ensureSupabaseSeed())
+  .catch((err) => console.error('[DIMER DB] Error inicializando Supabase:', err));

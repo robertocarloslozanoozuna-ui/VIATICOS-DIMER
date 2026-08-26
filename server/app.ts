@@ -165,7 +165,15 @@ export function createApp() {
         html: emailHtml,
       });
 
-      console.log(`[AUTH REGISTRATION] Código de verificación ${code} emitido para ${cleanEmail} (Status: ${mailResult.status})`);
+      console.log(`[AUTH REGISTRATION] Código de verificación ${code} emitido para ${cleanEmail} (Status: ${mailResult.status})${mailResult.error ? ` - Detalle: ${mailResult.error}` : ''}`);
+
+      if (mailResult.status === 'FALLIDO') {
+        return res.status(500).json({
+          error: `Error al enviar código de verificación por SMTP a ${cleanEmail}: ${mailResult.error || 'Fallo de conexión SMTP'}.`,
+          mailStatus: mailResult.status,
+          mailError: mailResult.error,
+        });
+      }
 
       res.json({
         success: true,
@@ -269,6 +277,16 @@ export function createApp() {
         subject: `Nuevo Código de Verificación Dimer: ${newCode}`,
         html: emailHtml,
       });
+
+      console.log(`[AUTH RESEND] Código de verificación ${newCode} reenviado para ${cleanEmail} (Status: ${mailResult.status})${mailResult.error ? ` - Detalle: ${mailResult.error}` : ''}`);
+
+      if (mailResult.status === 'FALLIDO') {
+        return res.status(500).json({
+          error: `Error al reenviar código por SMTP a ${cleanEmail}: ${mailResult.error || 'Fallo de conexión SMTP'}.`,
+          mailStatus: mailResult.status,
+          mailError: mailResult.error,
+        });
+      }
 
       res.json({
         success: true,
@@ -1661,10 +1679,11 @@ export function createApp() {
 
   // SMTP Diagnostic & Connection Tester
   app.get('/api/smtp/status', (req, res) => {
-    const host = process.env.SMTP_HOST?.trim() || 'smtp.gmail.com';
-    const port = process.env.SMTP_PORT?.trim() || '465';
-    const user = process.env.SMTP_USER?.trim().replace(/^["']|["']$/g, '') || 'sistemas@dimer.com.mx';
-    const pass = process.env.SMTP_PASS?.trim().replace(/^["']|["']$/g, '');
+    const host = process.env.SMTP_HOST?.trim() || process.env.EMAIL_HOST?.trim() || 'smtp.gmail.com';
+    const port = process.env.SMTP_PORT?.trim() || process.env.EMAIL_PORT?.trim() || '465';
+    const user = (process.env.SMTP_USER || process.env.SMTP_USERNAME || process.env.EMAIL_USER || process.env.GMAIL_USER)?.trim().replace(/^["']|["']$/g, '') || 'sistemas@dimer.com.mx';
+    const rawPass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.EMAIL_PASS || process.env.EMAIL_PASSWORD || process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_PASSWORD || '';
+    const pass = rawPass.trim().replace(/^["']|["']$/g, '').replace(/\s+/g, '');
     const secure = process.env.SMTP_SECURE;
     const from = getFromAddress();
 
@@ -1675,11 +1694,13 @@ export function createApp() {
         port: port,
         user: user ? `${user.substring(0, 3)}***@${user.split('@')[1] || ''}` : 'sistemas@dimer.com.mx',
         hasPassword: Boolean(pass),
+        passwordLength: pass.length,
         secure: secure === 'true' || port === '465',
         from,
+        detectedKeys: Object.keys(process.env).filter(k => k.includes('SMTP') || k.includes('EMAIL') || k.includes('GMAIL')),
       },
       instructions: !pass
-        ? 'Falta la contraseña de aplicación (16 letras) en SMTP_PASS. Los correos se emulan en la Bandeja SMTP.'
+        ? 'Falta la contraseña de aplicación de Google Workspace en SMTP_PASS (o SMTP_PASSWORD) en Vercel Environment Variables.'
         : 'Credenciales de Google Workspace configuradas. Listo para enviar correos salientes.',
     });
   });

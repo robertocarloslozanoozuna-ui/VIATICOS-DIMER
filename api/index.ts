@@ -647,10 +647,11 @@ function getPopulatedRequests() {
 import nodemailer from "nodemailer";
 var outboxLogs = [];
 function getMailTransporter(overrideHost) {
-  const host = overrideHost || process.env.SMTP_HOST?.trim() || "smtp.gmail.com";
-  const port = parseInt(process.env.SMTP_PORT || "465", 10);
-  const user = process.env.SMTP_USER?.trim().replace(/^["']|["']$/g, "") || "sistemas@dimer.com.mx";
-  const pass = process.env.SMTP_PASS?.trim().replace(/^["']|["']$/g, "").replace(/\s+/g, "");
+  const host = overrideHost || process.env.SMTP_HOST?.trim() || process.env.EMAIL_HOST?.trim() || "smtp.gmail.com";
+  const port = parseInt(process.env.SMTP_PORT || process.env.EMAIL_PORT || "465", 10);
+  const user = (process.env.SMTP_USER || process.env.SMTP_USERNAME || process.env.EMAIL_USER || process.env.GMAIL_USER)?.trim().replace(/^["']|["']$/g, "") || "sistemas@dimer.com.mx";
+  const rawPass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.EMAIL_PASS || process.env.EMAIL_PASSWORD || process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_PASSWORD || "";
+  const pass = rawPass.trim().replace(/^["']|["']$/g, "").replace(/\s+/g, "");
   const secure = process.env.SMTP_SECURE === "true" || port === 465;
   if (user && pass) {
     if (host.toLowerCase() === "smtp.gmail.com" || host.toLowerCase().includes("gmail.com") && !host.toLowerCase().includes("smtp-relay")) {
@@ -670,7 +671,7 @@ function getMailTransporter(overrideHost) {
       port,
       secure,
       name: "dimer.com.mx",
-      // Crucial: sets valid FQDN for EHLO to satisfy Google Relay & Gmail requirements
+      // Sets valid FQDN for EHLO
       auth: {
         user,
         pass
@@ -689,11 +690,12 @@ function getFromAddress(customFrom) {
   if (customFrom && customFrom.trim()) {
     return customFrom.trim().replace(/^["']|["']$/g, "");
   }
-  const envFrom = process.env.SMTP_FROM?.trim().replace(/^["']|["']$/g, "");
+  const envFrom = (process.env.SMTP_FROM || process.env.EMAIL_FROM || process.env.MAIL_FROM)?.trim().replace(/^["']|["']$/g, "");
   if (envFrom) {
     return envFrom;
   }
-  return "Dimer Notificaciones <NO-REPLY@DIMER.COM.MX>";
+  const user = (process.env.SMTP_USER || process.env.SMTP_USERNAME || process.env.EMAIL_USER || process.env.GMAIL_USER)?.trim().replace(/^["']|["']$/g, "") || "sistemas@dimer.com.mx";
+  return `Dimer Notificaciones <${user}>`;
 }
 var formatCurrency = (amount) => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(amount);
 function buildBossApprovalEmailHtml(params) {
@@ -998,19 +1000,99 @@ function buildVerificationEmailHtml(params) {
 async function sendEmail(params) {
   const { to, subject, html, from: customFrom, replyTo, requestId, folio } = params;
   const logId = `MAIL-${Date.now()}-${Math.floor(Math.random() * 1e3)}`;
-  const transporter = getMailTransporter();
+  const host = process.env.SMTP_HOST?.trim() || process.env.EMAIL_HOST?.trim() || "smtp.gmail.com";
+  const port = parseInt(process.env.SMTP_PORT || process.env.EMAIL_PORT || "465", 10);
+  const user = (process.env.SMTP_USER || process.env.SMTP_USERNAME || process.env.EMAIL_USER || process.env.GMAIL_USER)?.trim().replace(/^["']|["']$/g, "") || "sistemas@dimer.com.mx";
+  const rawPass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.EMAIL_PASS || process.env.EMAIL_PASSWORD || process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_PASSWORD || "";
+  const pass = rawPass.trim().replace(/^["']|["']$/g, "").replace(/\s+/g, "");
   const effectiveFrom = getFromAddress(customFrom);
   const effectiveReplyTo = replyTo || process.env.SMTP_REPLY_TO?.trim() || void 0;
-  if (transporter) {
+  console.log(`[MAIL SERVICE INITIATION] Destinatario: ${to} | Asunto: "${subject}" | Host: ${host}:${port} | Usuario: ${user} | Password configurada: ${pass ? `S\xCD (${pass.length} chars)` : "NO"}`);
+  if (!pass) {
+    const errorMsg = `No se puede enviar correo real a ${to}: Falta configurar SMTP_PASS (o SMTP_PASSWORD) en las variables de entorno de Vercel.`;
+    console.error(`[MAIL SERVICE ERROR] ${errorMsg}`);
+    const isProdOrVercel = Boolean(process.env.VERCEL || process.env.NODE_ENV === "production");
+    const log = {
+      id: logId,
+      requestId,
+      folio,
+      to,
+      subject,
+      html,
+      status: isProdOrVercel ? "FALLIDO" : "SIMULADO",
+      error: errorMsg,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    outboxLogs.unshift(log);
+    return {
+      success: !isProdOrVercel,
+      logId,
+      status: isProdOrVercel ? "FALLIDO" : "SIMULADO",
+      error: errorMsg
+    };
+  }
+  const transporter = getMailTransporter();
+  if (!transporter) {
+    const errorMsg = `No se pudo inicializar el transporte SMTP para ${user}@${host}.`;
+    console.error(`[MAIL SERVICE ERROR] ${errorMsg}`);
+    const log = {
+      id: logId,
+      requestId,
+      folio,
+      to,
+      subject,
+      html,
+      status: "FALLIDO",
+      error: errorMsg,
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    outboxLogs.unshift(log);
+    return { success: false, logId, status: "FALLIDO", error: errorMsg };
+  }
+  try {
+    const info = await transporter.sendMail({
+      from: effectiveFrom,
+      replyTo: effectiveReplyTo,
+      to,
+      subject,
+      html
+    });
+    const log = {
+      id: logId,
+      requestId,
+      folio,
+      to,
+      subject,
+      html,
+      status: "ENVIADO",
+      createdAt: (/* @__PURE__ */ new Date()).toISOString()
+    };
+    outboxLogs.unshift(log);
+    console.log(`[MAIL SERVICE SUCCESS] Correo SMTP ENVIADO exitosamente desde "${effectiveFrom}" a ${to} (Folio: ${folio || "N/A"}, MessageId: ${info.messageId || "N/A"})`);
+    return { success: true, logId, status: "ENVIADO" };
+  } catch (err) {
+    console.error(`[MAIL SERVICE ERROR] Falla en env\xEDo SMTP a ${to}:`, {
+      message: err.message,
+      code: err.code,
+      command: err.command,
+      response: err.response,
+      responseCode: err.responseCode
+    });
     try {
-      await transporter.sendMail({
+      console.warn(`[MAIL SERVICE] Intentando fallback con transporte directo 'gmail'...`);
+      const fallbackTransporter = nodemailer.createTransport({
+        service: "gmail",
+        auth: { user, pass },
+        tls: { rejectUnauthorized: false }
+      });
+      const fallbackInfo = await fallbackTransporter.sendMail({
         from: effectiveFrom,
         replyTo: effectiveReplyTo,
         to,
         subject,
         html
       });
-      const log = {
+      const log2 = {
         id: logId,
         requestId,
         folio,
@@ -1020,55 +1102,17 @@ async function sendEmail(params) {
         status: "ENVIADO",
         createdAt: (/* @__PURE__ */ new Date()).toISOString()
       };
-      outboxLogs.unshift(log);
-      console.log(`[MAIL SERVICE] Correo SMTP enviado con \xE9xito desde "${effectiveFrom}" a ${to} (Folio: ${folio || "N/A"})`);
+      outboxLogs.unshift(log2);
+      console.log(`[MAIL SERVICE SUCCESS] Correo SMTP ENVIADO exitosamente v\xEDa fallback Gmail desde "${effectiveFrom}" a ${to} (MessageId: ${fallbackInfo.messageId || "N/A"})`);
       return { success: true, logId, status: "ENVIADO" };
-    } catch (err) {
-      console.warn(`[MAIL SERVICE] Primer intento fall\xF3 (${err.message}). Intentando reintento con smtp.gmail.com directo...`);
-      try {
-        const fallbackTransporter = getMailTransporter("smtp.gmail.com");
-        if (fallbackTransporter) {
-          await fallbackTransporter.sendMail({
-            from: effectiveFrom,
-            replyTo: effectiveReplyTo,
-            to,
-            subject,
-            html
-          });
-          const log2 = {
-            id: logId,
-            requestId,
-            folio,
-            to,
-            subject,
-            html,
-            status: "ENVIADO",
-            createdAt: (/* @__PURE__ */ new Date()).toISOString()
-          };
-          outboxLogs.unshift(log2);
-          console.log(`[MAIL SERVICE] Correo enviado exitosamente v\xEDa fallback Gmail SMTP desde "${effectiveFrom}" a ${to}`);
-          return { success: true, logId, status: "ENVIADO" };
-        }
-      } catch (fallbackErr) {
-        console.error(`[MAIL SERVICE ERROR] Fallback tambi\xE9n fall\xF3:`, fallbackErr.message);
-      }
-      console.error(`[MAIL SERVICE ERROR] Falla enviando correo a ${to}:`, err.message);
-      const log = {
-        id: logId,
-        requestId,
-        folio,
-        to,
-        subject,
-        html,
-        status: "FALLIDO",
-        error: err.message,
-        createdAt: (/* @__PURE__ */ new Date()).toISOString()
-      };
-      outboxLogs.unshift(log);
-      return { success: false, logId, status: "FALLIDO", error: err.message };
+    } catch (fallbackErr) {
+      console.error(`[MAIL SERVICE ERROR] El fallback de correo tambi\xE9n fall\xF3:`, {
+        message: fallbackErr.message,
+        code: fallbackErr.code,
+        response: fallbackErr.response
+      });
     }
-  } else {
-    console.log(`[MAIL SERVICE - TEST MODE] Correo generado para ${to}: "${subject}"`);
+    const detailError = `Error SMTP: ${err.message}${err.response ? ` (${err.response})` : ""}`;
     const log = {
       id: logId,
       requestId,
@@ -1076,11 +1120,12 @@ async function sendEmail(params) {
       to,
       subject,
       html,
-      status: "SIMULADO",
+      status: "FALLIDO",
+      error: detailError,
       createdAt: (/* @__PURE__ */ new Date()).toISOString()
     };
     outboxLogs.unshift(log);
-    return { success: true, logId, status: "SIMULADO" };
+    return { success: false, logId, status: "FALLIDO", error: detailError };
   }
 }
 function buildNewAccountAdminEmailHtml(params) {
@@ -2442,7 +2487,14 @@ function createApp() {
         subject: `C\xF3digo de Verificaci\xF3n Dimer: ${code}`,
         html: emailHtml
       });
-      console.log(`[AUTH REGISTRATION] C\xF3digo de verificaci\xF3n ${code} emitido para ${cleanEmail} (Status: ${mailResult.status})`);
+      console.log(`[AUTH REGISTRATION] C\xF3digo de verificaci\xF3n ${code} emitido para ${cleanEmail} (Status: ${mailResult.status})${mailResult.error ? ` - Detalle: ${mailResult.error}` : ""}`);
+      if (mailResult.status === "FALLIDO") {
+        return res.status(500).json({
+          error: `Error al enviar c\xF3digo de verificaci\xF3n por SMTP a ${cleanEmail}: ${mailResult.error || "Fallo de conexi\xF3n SMTP"}.`,
+          mailStatus: mailResult.status,
+          mailError: mailResult.error
+        });
+      }
       res.json({
         success: true,
         email: cleanEmail,
@@ -2528,6 +2580,14 @@ function createApp() {
         subject: `Nuevo C\xF3digo de Verificaci\xF3n Dimer: ${newCode}`,
         html: emailHtml
       });
+      console.log(`[AUTH RESEND] C\xF3digo de verificaci\xF3n ${newCode} reenviado para ${cleanEmail} (Status: ${mailResult.status})${mailResult.error ? ` - Detalle: ${mailResult.error}` : ""}`);
+      if (mailResult.status === "FALLIDO") {
+        return res.status(500).json({
+          error: `Error al reenviar c\xF3digo por SMTP a ${cleanEmail}: ${mailResult.error || "Fallo de conexi\xF3n SMTP"}.`,
+          mailStatus: mailResult.status,
+          mailError: mailResult.error
+        });
+      }
       res.json({
         success: true,
         expiresAt: pending.expiresAt,
@@ -3659,10 +3719,11 @@ function createApp() {
     res.json(outboxLogs);
   });
   app.get("/api/smtp/status", (req, res) => {
-    const host = process.env.SMTP_HOST?.trim() || "smtp.gmail.com";
-    const port = process.env.SMTP_PORT?.trim() || "465";
-    const user = process.env.SMTP_USER?.trim().replace(/^["']|["']$/g, "") || "sistemas@dimer.com.mx";
-    const pass = process.env.SMTP_PASS?.trim().replace(/^["']|["']$/g, "");
+    const host = process.env.SMTP_HOST?.trim() || process.env.EMAIL_HOST?.trim() || "smtp.gmail.com";
+    const port = process.env.SMTP_PORT?.trim() || process.env.EMAIL_PORT?.trim() || "465";
+    const user = (process.env.SMTP_USER || process.env.SMTP_USERNAME || process.env.EMAIL_USER || process.env.GMAIL_USER)?.trim().replace(/^["']|["']$/g, "") || "sistemas@dimer.com.mx";
+    const rawPass = process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.EMAIL_PASS || process.env.EMAIL_PASSWORD || process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_PASSWORD || "";
+    const pass = rawPass.trim().replace(/^["']|["']$/g, "").replace(/\s+/g, "");
     const secure = process.env.SMTP_SECURE;
     const from = getFromAddress();
     res.json({
@@ -3672,10 +3733,12 @@ function createApp() {
         port,
         user: user ? `${user.substring(0, 3)}***@${user.split("@")[1] || ""}` : "sistemas@dimer.com.mx",
         hasPassword: Boolean(pass),
+        passwordLength: pass.length,
         secure: secure === "true" || port === "465",
-        from
+        from,
+        detectedKeys: Object.keys(process.env).filter((k) => k.includes("SMTP") || k.includes("EMAIL") || k.includes("GMAIL"))
       },
-      instructions: !pass ? "Falta la contrase\xF1a de aplicaci\xF3n (16 letras) en SMTP_PASS. Los correos se emulan en la Bandeja SMTP." : "Credenciales de Google Workspace configuradas. Listo para enviar correos salientes."
+      instructions: !pass ? "Falta la contrase\xF1a de aplicaci\xF3n de Google Workspace en SMTP_PASS (o SMTP_PASSWORD) en Vercel Environment Variables." : "Credenciales de Google Workspace configuradas. Listo para enviar correos salientes."
     });
   });
   app.post("/api/smtp/test", async (req, res) => {

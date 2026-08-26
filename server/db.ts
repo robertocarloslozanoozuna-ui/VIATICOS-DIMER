@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
+import { supabase } from './supabase';
 import type {
   User,
   TravelRequest,

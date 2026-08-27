@@ -10,6 +10,7 @@ on:
       - 'package-lock.json'
       - 'vite.config.*'
       - 'tsconfig.json'
+      - 'vercel.json'
       - '.github/workflows/build-api.yml'
   workflow_dispatch:
 
@@ -42,15 +43,17 @@ jobs:
 
       - name: Verify API bundle
         run: |
+          set -euo pipefail
           test -s api/index.js
           node --check api/index.js
-          grep -q "createApp" api/index.js || true
+          grep -q "createApp" api/index.js
 
       - name: Commit generated Vercel function
         run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add api/index.js api/index.js.map dist/server.cjs dist/server.cjs.map
+          git add api/index.js
           if git diff --cached --quiet; then
             echo "No generated changes to commit"
           else

@@ -1,0 +1,91 @@
+name: DIMER Deterministic Production Repair
+
+on:
+  push:
+    paths:
+      - '.github/workflows/repair-production.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Restore complete Express API from known-good revision
+        shell: bash
+        run: |
+          set -euo pipefail
+          GOOD="7292d9f1551dcf5259266f16916708efc6a4ffd4"
+          git fetch origin main --quiet
+          git checkout "$GOOD" -- server/app.ts
+
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('server/app.ts')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace("import { NEXTJS_CODE_ARTIFACTS } from './nextjsArtifacts';\n", "")
+          s = s.replace(
+              "app.get('/api/code-artifacts',(_req,res)=>res.json(NEXTJS_CODE_ARTIFACTS));",
+              "app.get('/api/code-artifacts',async(_req,res)=>{try{const {NEXTJS_CODE_ARTIFACTS}=await import('./nextjsArtifacts');res.json(NEXTJS_CODE_ARTIFACTS);}catch(e){err(res,e);}});"
+          )
+          p.write_text(s, encoding='utf-8')
+          PY
+
+      - name: Validate required server files
+        run: |
+          test -f api/index.ts
+          test -f server/app.ts
+          test -f server/db.ts
+          test -f server/supabase.ts
+          test -f api/admin/schema.sql
+          ! test -f data/db.json
+          ! test -f server/apiEntry.ts
+          ! test -f api/index.js
+
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: TypeScript validation
+        run: npm run lint
+
+      - name: Production build
+        run: npm run build
+
+      - name: Verify production architecture
+        shell: bash
+        run: |
+          set -euo pipefail
+          grep -q "export function createApp" server/app.ts
+          grep -q "process_approval_token_action" server/db.ts
+          grep -q "generate_next_travel_folio" server/db.ts
+          grep -q "verification_codes" server/db.ts
+          grep -q "SUPABASE_SERVICE_ROLE_KEY" server/supabase.ts
+          grep -q "../server/app" api/index.ts
+          if grep -R -nE "(^|[^A-Za-z])(USERS|TRAVEL_REQUESTS|APPROVAL_TOKENS|AUDIT_LOGS|VERIFICATION_CODES|currentSessionUserId|folioSequence|saveToDisk|data/db\.json|x-user-email|x-user-id)" server --include='*.ts'; then
+            echo 'ERROR: forbidden in-memory/legacy authentication references remain in backend'
+            exit 1
+          fi
+
+      - name: Commit repaired production code
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add server/app.ts package-lock.json
+          if git diff --cached --quiet; then
+            echo 'No changes to commit.'
+            exit 0
+          fi
+          git commit -m "fix: restore complete production API and validate build"
+          git push origin HEAD:main

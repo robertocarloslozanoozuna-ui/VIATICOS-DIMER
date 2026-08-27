@@ -1,5 +1,5 @@
 import type { Request, Response } from 'express';
-import { createApp } from '../server/app.ts';
+import { createApp } from '../server/app';
 
 let app: ReturnType<typeof createApp> | null = null;
 

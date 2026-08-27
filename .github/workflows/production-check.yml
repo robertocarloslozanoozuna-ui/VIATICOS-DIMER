@@ -16,15 +16,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-          cache: npm
       - run: npm install
       - run: npm run lint
       - run: npm run build
-      - name: Verify forbidden runtime persistence is absent
+      - name: Verify production architecture
+        shell: bash
         run: |
-          ! grep -R -nE "USERS|TRAVEL_REQUESTS|APPROVAL_TOKENS|AUDIT_LOGS|VERIFICATION_CODES|currentSessionUserId|folioSequence|saveToDisk|data/db\.json|x-user-email|x-user-id|switch-user" server api --exclude='schema.sql' || true
+          set -e
+          if grep -R -nE "USERS|TRAVEL_REQUESTS|APPROVAL_TOKENS|AUDIT_LOGS|VERIFICATION_CODES|currentSessionUserId|folioSequence|saveToDisk|data/db\.json|x-user-email|x-user-id" server api --exclude='schema.sql'; then
+            echo 'Forbidden in-memory/disk authentication or persistence reference found.'
+            exit 1
+          fi
           test ! -e data/db.json
           test ! -e server/db.supabase.fixed.ts
           test ! -e server/db.supabase.ts
           test ! -e server/apiEntry.ts
           test ! -e api/index.js
+          test -e api/index.ts
+          test -e api/admin/schema.sql

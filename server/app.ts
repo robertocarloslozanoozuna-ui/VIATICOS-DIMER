@@ -1,7 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import crypto from 'crypto';
-import { supabase } from './supabase';
+import { supabase } from './supabase.js';
 import { ALL_SYSTEM_PERMISSIONS, getUserById, getUserByEmail, listUsers, listDepartments, getOrCreateDepartment, createDepartment, updateDepartment, listBosses, getBossById, createBoss, updateBoss, deleteBoss, listRoles, createRole, updateRole, getPopulatedRequests, getRequest, insertRequest, updateRequest, deleteRequest, generateNextFolio, createApprovalToken, validateApprovalToken, processApprovalTokenAction, recordAuditLog, listAuditLogs, createVerificationCode, verifyCodeAndActivateUser, hashPassword, verifyPassword, sanitizeUser, hasPermission } from './db';
 import { buildBossApprovalEmailHtml, buildSystemsApprovedEmailHtml, buildVerificationEmailHtml, buildNewAccountAdminEmailHtml, buildTokenApprovalResultPageHtml, sendEmail, getFromAddress, outboxLogs } from './mailService';
 import type { User, Role, TravelRequest, StoredUserRecord } from '../src/types';

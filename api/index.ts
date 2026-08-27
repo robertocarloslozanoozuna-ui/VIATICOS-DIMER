@@ -2,7 +2,6 @@ import express from 'express';
 import crypto from 'crypto';
 import type { Request, Response } from 'express';
 import { createApp } from '../server/app.js';
-import { supabase } from '../server/supabase.js';
 import { getBossById, generateNextFolio, createApprovalToken, insertRequest, recordAuditLog, getUserById, sanitizeUser } from '../server/db.js';
 import { buildBossApprovalEmailHtml, sendEmail } from '../server/mailService.js';
 import type { TravelRequest, User } from '../src/types.js';
@@ -79,11 +78,11 @@ async function createRequest(req: Request, res: Response) {
     const rejectUrl = `${base}/api/approval/token-action?token=${encodeURIComponent(approval.token)}&action=reject`;
     const html = buildBossApprovalEmailHtml({ request: saved, user, approveUrl, rejectUrl, token: approval.token });
     stage = 'correo';
-    let mailResult: any;
+    let mailResult: Awaited<ReturnType<typeof sendEmail>>;
     try {
       mailResult = await sendEmail({ to: bossEmail, subject: `SOLICITUD POR AUTORIZAR - Folio ${folio}`, html, requestId: id, folio });
     } catch (e) {
-      mailResult = { success: false, status: 'FALLIDO', error: e instanceof Error ? e.message : String(e) };
+      mailResult = { success: false, logId: `MAIL-${Date.now()}`, status: 'FALLIDO', error: e instanceof Error ? e.message : String(e) };
       console.error('[DIMER REQUEST EMAIL ERROR]', e);
     }
     if (bossEmail !== 'sistemas@dimer.com.mx') {

@@ -5,16 +5,15 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild api/index.js --bundle --platform=node --format=esm --packages=external --outfile=api/index.js",
+    "build": "vite build && esbuild api/entry.js --bundle --platform=node --format=esm --packages=external --outfile=api/index.js",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
-    "clean": "rm -rf dist",
+    "clean": "rm -rf dist api/index.js",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
     "@supabase/supabase-js": "^2.112.4",
-    "@tailwindcss/vite": "^4.1.14",
     "@tailwindcss/vite": "^4.1.14",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",

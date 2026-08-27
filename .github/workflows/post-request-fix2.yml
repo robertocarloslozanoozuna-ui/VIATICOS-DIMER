@@ -15,31 +15,23 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-
       - name: Install dependencies
         run: npm ci
-
       - name: Build bundled Vercel API
         run: npm run build
-
       - name: Verify bundle
+        run: test -s api/index.js
+      - name: Publish bundle
         run: |
-          test -s api/index.js
-          grep -q "viaticos-dimer-api" api/index.js || true
-
-      - name: Promote bundle
-        run: |
-          rm -f api/index.ts api/index.js.map
-          rm -f server/app.js server/app.js.map
+          rm -f api/index.js.map server/app.js server/app.js.map
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add api/index.js api/index.ts api/index.js.map server/app.js server/app.js.map
+          git add api/index.js api/index.js.map server/app.js server/app.js.map
           git diff --cached --check
-          git diff --cached --quiet || git commit -m 'fix: deploy bundled Vercel serverless API'
+          git diff --cached --quiet || git commit -m 'fix: publish bundled Vercel API'
           git push origin main

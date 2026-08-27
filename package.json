@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build",
+    "build": "vite build && esbuild api/entry.ts --bundle --platform=node --format=esm --packages=external --outfile=api/index.js",
     "start": "node server.ts",
     "preview": "vite preview",
-    "clean": "rm -rf dist",
+    "clean": "rm -rf dist api/index.js",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -34,6 +34,7 @@
     "@types/nodemailer": "^8.0.1",
     "@vitejs/plugin-react": "^5.0.4",
     "autoprefixer": "^10.4.21",
+    "esbuild": "^0.25.0",
     "tailwindcss": "^4.1.14",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2",

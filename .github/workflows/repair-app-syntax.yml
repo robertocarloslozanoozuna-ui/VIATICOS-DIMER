@@ -1,0 +1,87 @@
+name: Repair app.ts syntax
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Find and apply minimal syntax repair
+        shell: python
+        run: |
+          import subprocess
+          from pathlib import Path
+
+          path = Path('server/app.ts')
+          original = path.read_text(encoding='utf-8')
+          if not original.endswith('}'):
+              raise SystemExit('server/app.ts does not end with }')
+
+          candidates = []
+          last_nl = original.rfind('\n')
+          tail = original[last_nl + 1:]
+          base = original[:last_nl + 1]
+
+          # Try removing exactly one closing brace from the final line, starting
+          # at the final character and moving left. This is intentionally minimal.
+          for i in range(len(tail) - 1, -1, -1):
+              if tail[i] == '}':
+                  candidate_tail = tail[:i] + tail[i+1:]
+                  candidates.append(base + candidate_tail)
+
+          # Also try the exact final return/closure sequence as a structural repair.
+          marker = ';return app;}'
+          if original.endswith(marker):
+              candidates.append(original[:-len(marker)] + ';return app;\n}')
+
+          def parses(text):
+              path.write_text(text, encoding='utf-8')
+              p = subprocess.run(
+                  ['npx', 'esbuild', 'server/app.ts', '--bundle', '--platform=node', '--format=esm', '--packages=external', '--outfile=/tmp/app-check.js'],
+                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+              )
+              return p.returncode == 0, p.stdout + p.stderr
+
+          for idx, candidate in enumerate(candidates):
+              ok, log = parses(candidate)
+              if ok:
+                  print(f'VALID CANDIDATE {idx}')
+                  path.write_text(candidate, encoding='utf-8')
+                  break
+          else:
+              path.write_text(original, encoding='utf-8')
+              print(log)
+              raise SystemExit('No minimal syntax repair candidate compiled')
+
+      - name: Verify full production build
+        run: npm run build
+
+      - name: Commit repair
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/app.ts
+          if git diff --cached --quiet; then
+            echo 'No changes needed.'
+          else
+            git commit -m 'fix: repair server app syntax'
+            git push
+          fi

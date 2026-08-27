@@ -1,0 +1,49 @@
+name: Restore DIMER app.ts
+
+on:
+  push:
+    paths:
+      - '.github/workflows/restore-app.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Restore known-good server/app.ts
+        run: |
+          git checkout d80e5081583aad1a138d4035c9d4a48713bb263c -- server/app.ts
+          test -s server/app.ts
+          grep -q "export function createApp" server/app.ts
+          grep -q "app.post('/api/auth/register'" server/app.ts
+          grep -q "app.get('/api/users'" server/app.ts
+          ! grep -q "Keep the remainder of the existing API implementation below unchanged" server/app.ts
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+
+      - name: Commit restored app
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/app.ts
+          if git diff --cached --quiet; then
+            echo 'No app.ts changes required.'
+          else
+            git commit -m 'fix: restore complete production Express API'
+            git push origin HEAD:main
+          fi

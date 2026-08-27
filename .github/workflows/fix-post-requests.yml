@@ -1,0 +1,90 @@
+name: Fix POST Requests
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch POST /api/requests
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          p = Path('server/app.ts')
+          s = p.read_text(encoding='utf-8')
+
+          pattern = r"app\.post\('/api/requests',requireAuth,async\(req,res\)=>\{try\{.*?\}\);\napp\.put\('/api/requests/:id'"
+          replacement = r'''app.post('/api/requests',requireAuth,async(req,res)=>{
+          const u=(req as any).dimerUser as User;
+          const b=req.body||{};
+          let stage='validación';
+          try{
+            const boss=b.bossId?await getBossById(String(b.bossId)):null;
+            const bossEmail=String(boss?.email||b.bossEmail||'').trim().toLowerCase();
+            if(!bossEmail)return res.status(400).json({success:false,error:'Debe seleccionar un jefe que autoriza'});
+            const reason=String(b.detail||b.reason||'').trim();
+            if(!reason)return res.status(400).json({success:false,error:'La descripción o detalle es obligatorio'});
+            const amount=Number(b.amountRequested??0);
+            if(!Number.isFinite(amount)||amount<0)return res.status(400).json({success:false,error:'Monto solicitado no válido'});
+
+            const id=`req_${Date.now()}_${crypto.randomBytes(5).toString('hex')}`;
+            stage='generación de folio';
+            const folio=await generateNextFolio();
+            stage='creación de token';
+            const token=await createApprovalToken(id,bossEmail,boss?.id);
+            stage='inserción de solicitud en Supabase';
+            const r=await insertRequest({id,folio,status:'PENDIENTE_APROBACION',userId:u.id,requesterName:String(b.requesterName||u.name),department:String(b.department||u.department||'General'),requestType:String(b.requestType||'Viáticos y Gastos de Viaje'),detail:reason,requestDate:String(b.requestDate||new Date().toISOString().slice(0,10)),urgency:String(b.urgency||'media'),bossId:boss?.id,bossEmail,bossName:boss?.name||bossEmail,startDate:String(b.startDate||new Date().toISOString()),endDate:String(b.endDate||b.startDate||new Date().toISOString()),destination:String(b.destination||'Oficina / Centro Corporativo'),reason,amountRequested:amount,amountAuthorized:null,transportCost:Number(b.transportCost??0),hotelCost:Number(b.hotelCost??0),foodCost:Number(b.foodCost??0),miscCost:Number(b.miscCost??0),comments:b.comments?String(b.comments).trim():null,approvalToken:token.token,createdAt:new Date().toISOString()});
+            stage='registro de auditoría';
+            await recordAuditLog({requestId:r.id,userId:u.id,action:'CREACION_SOLICITUD',details:{folio:r.folio,amountRequested:r.amountRequested,bossEmail}});
+
+            const approveUrl=`${baseUrl(req)}/api/approval/token-action?token=${encodeURIComponent(token.token)}&action=approve`;
+            const rejectUrl=`${baseUrl(req)}/api/approval/token-action?token=${encodeURIComponent(token.token)}&action=reject`;
+            const html=buildBossApprovalEmailHtml({request:r,user:u,approveUrl,rejectUrl,token:token.token});
+            let mailResult:any={status:'NO_ENVIADO'};
+            stage='envío de correo al jefe';
+            try{
+              mailResult=await sendEmail({to:bossEmail,subject:`SOLICITUD POR AUTORIZAR - Folio ${folio}`,html,requestId:id,folio});
+            }catch(mailError){
+              mailResult={status:'FALLIDO',error:mailError instanceof Error?mailError.message:String(mailError)};
+              console.error('[DIMER REQUEST EMAIL ERROR]',mailError);
+            }
+            if(bossEmail!=='sistemas@dimer.com.mx'){
+              try{await sendEmail({to:'sistemas@dimer.com.mx',subject:`Nueva solicitud por autorizar - ${folio}`,html,requestId:id,folio});}
+              catch(mailError){console.error('[DIMER SYSTEM EMAIL ERROR]',mailError);}
+            }
+
+            return res.status(201).json({success:true,request:r,approvalToken:token.token,mailResult});
+          }catch(e){
+            const message=e instanceof Error?e.message:String(e);
+            console.error('[DIMER POST /api/requests ERROR]',{stage,message,stack:e instanceof Error?e.stack:undefined});
+            return res.status(503).json({success:false,error:message||'Error interno al crear la solicitud',stage,database:'supabase'});
+          }
+        });
+        app.put('/api/requests/:id' '''
+
+          ns, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
+          if n != 1:
+              raise SystemExit(f'No se encontró exactamente una implementación de POST /api/requests: {n}')
+          p.write_text(ns, encoding='utf-8')
+
+      - name: Validate TypeScript and build
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+
+      - name: Commit fix
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/app.ts
+          git commit -m "fix: harden POST requests persistence and email handling" || echo "No changes to commit"
+          git push origin main

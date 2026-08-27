@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild api/index.ts --bundle --platform=node --format=esm --packages=external --outfile=api/index.js",
-    "start": "node dist/server.cjs",
+    "build": "vite build",
+    "start": "node server.ts",
     "preview": "vite preview",
-    "clean": "rm -rf dist api/index.js",
+    "clean": "rm -rf dist",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -17,7 +17,6 @@
     "@tailwindcss/vite": "^4.1.14",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
-    "esbuild": "^0.25.0",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.3",
     "lucide-react": "^0.546.0",

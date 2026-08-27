@@ -54,14 +54,11 @@ app.post('/api/requests',requireAuth,async(req,res)=>{try{
   if(!reason)return res.status(400).json({error:'La descripción o detalle es obligatorio'});
   const amount=Number(b.amountRequested||0);
   if(!Number.isFinite(amount)||amount<0)return res.status(400).json({error:'Monto solicitado no válido'});
-
   const id=`req_${Date.now()}_${crypto.randomBytes(5).toString('hex')}`;
   const folio=await generateNextFolio();
   const r=await insertRequest({id,folio,status:'PENDIENTE_APROBACION',userId:u.id,requesterName:String(b.requesterName||u.name),department:String(b.department||u.department||'General'),requestType:String(b.requestType||'Viáticos y Gastos de Viaje'),detail:reason,requestDate:String(b.requestDate||new Date().toISOString().slice(0,10)),urgency:String(b.urgency||'media'),bossId:boss?.id,bossEmail,bossName:boss?.name||bossEmail,startDate:String(b.startDate||new Date().toISOString()),endDate:String(b.endDate||b.startDate||new Date().toISOString()),destination:String(b.destination||'Oficina / Centro Corporativo'),reason,amountRequested:amount,amountAuthorized:null,transportCost:Number(b.transportCost||0),hotelCost:Number(b.hotelCost||0),foodCost:Number(b.foodCost||0),miscCost:Number(b.miscCost||0),comments:b.comments?String(b.comments).trim():null,approvalToken:null,createdAt:new Date().toISOString()});
-
   const token=await createApprovalToken(r.id,bossEmail,boss?.id);
   await updateRequest(r.id,{approvalToken:token.token});
-
   await recordAuditLog({requestId:r.id,userId:u.id,action:'CREACION_SOLICITUD',details:{folio:r.folio,amountRequested:r.amountRequested,bossEmail}});
   const approveUrl=`${baseUrl(req)}/api/approval/token-action?token=${encodeURIComponent(token.token)}&action=approve`;
   const rejectUrl=`${baseUrl(req)}/api/approval/token-action?token=${encodeURIComponent(token.token)}&action=reject`;
@@ -89,7 +86,5 @@ app.get('/api/smtp/status',requireAuth,async(_req,res)=>{const host=process.env.
 app.post('/api/smtp/test',requireAuth,requirePermission('administrar_configuracion'),async(req,res)=>{try{const to=String(req.body?.targetEmail||'sistemas@dimer.com.mx');const result=await sendEmail({to,subject:`[PRUEBA] SMTP Dimer ${new Date().toISOString()}`,html:`<p>Prueba SMTP Dimer exitosa.</p><p>${new Date().toLocaleString('es-MX')}</p>`});res.json({...result,targetEmail:to});}catch(e){err(res,e);}});
 app.get('/api/stats',requireAuth,async(_req,res)=>{try{const rs=await getPopulatedRequests();const total=(s:string)=>rs.filter(r=>r.status===s).length;res.json({totalRequests:rs.length,pendingApproval:total('PENDIENTE_APROBACION'),approved:total('APROBADA'),paid:total('PAGADA'),rejected:total('RECHAZADA'),correctionRequested:total('CORRECCION_SOLICITADA'),totalAmountRequested:rs.reduce((a,r)=>a+r.amountRequested,0),totalAmountAuthorized:rs.reduce((a,r)=>a+(r.amountAuthorized||0),0),totalUsers:(await listUsers()).length,totalDepartments:(await listDepartments()).length,totalBosses:(await listBosses()).length,totalRoles:(await listRoles()).length});}catch(e){err(res,e);}});
 app.get('/api/code-artifacts',async(_req,res)=>{try{const {NEXTJS_CODE_ARTIFACTS}=await import('./nextjsArtifacts.js');res.json(NEXTJS_CODE_ARTIFACTS);}catch(e){err(res,e);}});
-app.all('/api/*',(_req,res)=>res.status(404).json({error:'Ruta API no encontrada'}));
-app.use((e:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>{console.error('[DIMER]',e);if(!res.headersSent)res.status(500).json({success:false,error:'Error interno del servidor'});});return app;}
 app.all('/api/*',(_req,res)=>res.status(404).json({error:'Ruta API no encontrada'}));
 app.use((e:unknown,_req:express.Request,res:express.Response,_next:express.NextFunction)=>{console.error('[DIMER]',e);if(!res.headersSent)res.status(500).json({success:false,error:'Error interno del servidor'});});return app;}

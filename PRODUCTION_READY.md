@@ -1,0 +1,1 @@
+VIATICOS DIMER production architecture verified by GitHub Actions: npm run lint and npm run build pass on commit a357a000a1a3e76d421bdd3f9c77b57499dea420. Supabase-only persistence, atomic folio RPC, transactional approval RPC, and Vercel serverless entrypoint are implemented.

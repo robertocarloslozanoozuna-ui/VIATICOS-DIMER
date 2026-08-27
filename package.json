@@ -5,10 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild server/app.ts --bundle --platform=node --format=esm --packages=external --sourcemap --outfile=server/app.js && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
+    "build": "vite build && esbuild api/index.ts --bundle --platform=node --format=esm --packages=external --sourcemap --outfile=api/index.js && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --sourcemap --outfile=dist/server.cjs",
     "start": "node dist/server.cjs",
     "preview": "vite preview",
-    "clean": "rm -rf dist server/app.js server/app.js.map",
+    "clean": "rm -rf dist api/index.js api/index.js.map server/app.js server/app.js.map",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
@@ -18,7 +18,6 @@
     "@vitejs/plugin-react": "^5.0.4",
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
-    "dotenv": "^17.2.3",
     "esbuild": "^0.25.0",
     "express": "^4.21.2",
     "lucide-react": "^0.546.0",

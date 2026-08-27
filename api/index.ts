@@ -1,20 +1,16 @@
-import type { Request, Response } from 'express';
+import type { Express, Request, Response } from 'express';
 
-/**
- * Vercel Serverless entrypoint.
- * The application is loaded lazily so a module/configuration error can be
- * returned as a controlled response instead of crashing the invocation.
- */
-let appPromise: Promise<((req: Request, res: Response) => unknown)> | null = null;
+/** Vercel Serverless entrypoint with lazy application loading. */
+let appPromise: Promise<Express> | null = null;
 
-async function getApp() {
+async function getApp(): Promise<Express> {
   if (!appPromise) {
     appPromise = import('../server/app').then(({ createApp }) => createApp());
   }
   return appPromise;
 }
 
-export default async function handler(req: Request, res: Response) {
+export default async function handler(req: Request, res: Response): Promise<unknown> {
   try {
     const app = await getApp();
     return app(req, res);

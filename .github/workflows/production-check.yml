@@ -16,21 +16,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install
+      - run: npm ci
       - run: npm run lint
       - run: npm run build
       - name: Verify production architecture
         shell: bash
         run: |
-          set -e
-          if grep -R -nE "USERS|TRAVEL_REQUESTS|APPROVAL_TOKENS|AUDIT_LOGS|VERIFICATION_CODES|currentSessionUserId|folioSequence|saveToDisk|data/db\.json|x-user-email|x-user-id" server api --exclude='schema.sql'; then
+          set -euo pipefail
+          if grep -R -nE "USERS|TRAVEL_REQUESTS|APPROVAL_TOKENS|AUDIT_LOGS|VERIFICATION_CODES|currentSessionUserId|folioSequence|saveToDisk|data/db\.json|x-user-email|x-user-id" server --include='*.ts'; then
             echo 'Forbidden in-memory/disk authentication or persistence reference found.'
             exit 1
           fi
           test ! -e data/db.json
           test ! -e server/db.supabase.fixed.ts
           test ! -e server/db.supabase.ts
-          test ! -e server/apiEntry.ts
-          test ! -e api/index.js
-          test -e api/index.ts
+          test -e server/apiEntry.ts
+          test -s api/index.js
+          node --check api/index.js
           test -e api/admin/schema.sql

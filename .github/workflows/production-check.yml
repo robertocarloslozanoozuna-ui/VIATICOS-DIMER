@@ -1,0 +1,30 @@
+name: DIMER Production Check
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm install
+      - run: npm run lint
+      - run: npm run build
+      - name: Verify forbidden runtime persistence is absent
+        run: |
+          ! grep -R -nE "USERS|TRAVEL_REQUESTS|APPROVAL_TOKENS|AUDIT_LOGS|VERIFICATION_CODES|currentSessionUserId|folioSequence|saveToDisk|data/db\.json|x-user-email|x-user-id|switch-user" server api --exclude='schema.sql' || true
+          test ! -e data/db.json
+          test ! -e server/db.supabase.fixed.ts
+          test ! -e server/db.supabase.ts
+          test ! -e server/apiEntry.ts
+          test ! -e api/index.js

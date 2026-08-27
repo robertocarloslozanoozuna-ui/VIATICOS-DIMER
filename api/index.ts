@@ -1,29 +1,40 @@
-import type { Express, Request, Response } from 'express';
+import type { Request, Response } from 'express';
+import { createApp } from '../server/app';
 
-/** Vercel Serverless entrypoint with lazy application loading. */
-let appPromise: Promise<Express> | null = null;
+let app: ReturnType<typeof createApp> | null = null;
+let bootError: unknown = null;
 
-async function getApp(): Promise<Express> {
-  if (!appPromise) {
-    appPromise = import('../server/app').then(({ createApp }) => createApp());
-  }
-  return appPromise;
+function getBootErrorMessage(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }
 
-export default async function handler(req: Request, res: Response): Promise<unknown> {
+function getApp() {
+  if (app) return app;
+  if (bootError) throw bootError;
   try {
-    const app = await getApp();
-    return app(req, res);
+    app = createApp();
+    return app;
+  } catch (error) {
+    bootError = error;
+    throw error;
+  }
+}
+
+export default function handler(req: Request, res: Response) {
+  try {
+    return getApp()(req, res);
   } catch (error) {
     console.error('[DIMER VERCEL BOOT ERROR]', error);
-    if (!res.headersSent) {
-      return res.status(503).json({
-        success: false,
-        error: 'Backend initialization failed',
-        database: 'supabase',
-        runtime: 'vercel-serverless',
-      });
-    }
-    return undefined;
+    const message = getBootErrorMessage(error);
+    return res.status(503).json({
+      success: false,
+      error: 'Backend initialization failed',
+      database: 'supabase',
+      runtime: 'vercel-serverless',
+      diagnostic: process.env.NODE_ENV === 'production'
+        ? 'Revisa Runtime Logs de Vercel para DIMER VERCEL BOOT ERROR.'
+        : message,
+    });
   }
 }

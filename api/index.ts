@@ -1,40 +1,36 @@
 import type { Request, Response } from 'express';
-import { createApp } from '../server/app';
 
-let app: ReturnType<typeof createApp> | null = null;
-let bootError: unknown = null;
+let handlerPromise: Promise<(req: Request, res: Response) => unknown> | null = null;
 
 function getBootErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
+  if (error instanceof Error) return error.stack || error.message;
   return String(error);
 }
 
-function getApp() {
-  if (app) return app;
-  if (bootError) throw bootError;
-  try {
-    app = createApp();
-    return app;
-  } catch (error) {
-    bootError = error;
-    throw error;
+async function getHandler() {
+  if (!handlerPromise) {
+    handlerPromise = import('../server/app')
+      .then(({ createApp }) => createApp())
+      .catch((error) => {
+        handlerPromise = null;
+        throw error;
+      });
   }
+  return handlerPromise;
 }
 
-export default function handler(req: Request, res: Response) {
+export default async function handler(req: Request, res: Response) {
   try {
-    return getApp()(req, res);
+    const app = await getHandler();
+    return app(req, res);
   } catch (error) {
-    console.error('[DIMER VERCEL BOOT ERROR]', error);
-    const message = getBootErrorMessage(error);
+    console.error('[DIMER VERCEL BOOT ERROR]', getBootErrorMessage(error));
     return res.status(503).json({
       success: false,
       error: 'Backend initialization failed',
       database: 'supabase',
       runtime: 'vercel-serverless',
-      diagnostic: process.env.NODE_ENV === 'production'
-        ? 'Revisa Runtime Logs de Vercel para DIMER VERCEL BOOT ERROR.'
-        : message,
+      diagnostic: 'Backend import/createApp failed. Revisa Runtime Logs de Vercel: [DIMER VERCEL BOOT ERROR].',
     });
   }
 }

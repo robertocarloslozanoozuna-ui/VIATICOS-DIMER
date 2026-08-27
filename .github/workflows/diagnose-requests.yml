@@ -1,0 +1,28 @@
+name: Diagnose POST requests
+on:
+  push:
+    paths:
+      - '.github/workflows/diagnose-requests.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect request endpoint and build
+        run: |
+          echo '--- POST REQUEST ROUTES ---'
+          grep -nE "app\.post\([^)]*(/api/requests|/requests)" server/app.ts || true
+          echo '--- INSERT REQUEST ---'
+          grep -n "insertRequest" server/app.ts server/db.ts || true
+          echo '--- FOLIO RPC ---'
+          grep -n "generateNextFolio\|generate_next_travel_folio" server/app.ts server/db.ts || true
+          echo '--- APPROVAL TOKEN ---'
+          grep -n "createApprovalToken" server/app.ts server/db.ts || true
+          echo '--- PACKAGE ---'
+          cat package.json
+          npm ci
+          npm run lint
+          npm run build

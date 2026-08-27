@@ -19,11 +19,13 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-          import re
           p=Path('server/app.ts')
           s=p.read_text(encoding='utf-8')
-          pattern=r"app\.post\('/api/requests',requireAuth,async\(req,res\)=>\{try\{.*?\}\);\napp\.put\('/api/requests/:id'"
-          replacement=r'''app.post('/api/requests',requireAuth,async(req,res)=>{
+          start=s.find("app.post('/api/requests',requireAuth")
+          end=s.find("app.put('/api/requests/:id'", start)
+          if start < 0 or end < 0:
+              raise SystemExit(f'No se pudo localizar endpoint: start={start}, end={end}')
+          replacement='''app.post('/api/requests',requireAuth,async(req,res)=>{
           const u=(req as any).dimerUser as User;
           const b=req.body||{};
           let stage='validación';
@@ -62,10 +64,9 @@ jobs:
             return res.status(503).json({success:false,error:message||'Error interno al crear la solicitud',stage,database:'supabase'});
           }
         });
-        app.put('/api/requests/:id' '''
-          ns,n=re.subn(pattern,replacement,s,count=1,flags=re.S)
-          if n!=1: raise SystemExit(f'No se encontró exactamente una implementación de POST /api/requests: {n}')
-          p.write_text(ns,encoding='utf-8')
+        '''
+          p.write_text(s[:start]+replacement+s[end:],encoding='utf-8')
+          print('POST /api/requests patched successfully')
 
       - name: Validate TypeScript and build
         run: |
@@ -78,5 +79,6 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add server/app.ts
+          git diff --cached --check
           git commit -m "fix: harden POST requests persistence and email handling" || echo "No changes to commit"
           git push origin main

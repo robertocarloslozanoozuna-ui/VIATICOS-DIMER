@@ -2015,6 +2015,10 @@ function getSmtpEnvironmentFingerprint() {
 }
 
 // server/apiEntry.ts
+var freshSmtpPassword = process.env.DIMER_SMTP_APP_PASSWORD?.trim();
+if (freshSmtpPassword) {
+  process.env.SMTP_PASSWORD = freshSmtpPassword;
+}
 var app = createApp();
 function handler(req, res) {
   const path = String(req?.url || "").split("?")[0];

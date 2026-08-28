@@ -1,0 +1,51 @@
+name: Canonicalize SMTP configuration
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/canonicalize-smtp.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  canonicalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Canonicalize SMTP environment references
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path('server/app.ts')
+          s = p.read_text(encoding='utf-8')
+          old = "app.get('/api/smtp/status',requireAuth,async(_req,res)=>{const host=process.env.SMTP_HOST||process.env.EMAIL_HOST||'smtp.gmail.com';const port=process.env.SMTP_PORT||process.env.EMAIL_PORT||'465';const user=(process.env.SMTP_USER||process.env.SMTP_USERNAME||process.env.EMAIL_USER||process.env.GMAIL_USER||'').trim();const pass=(process.env.SMTP_PASS||process.env.SMTP_PASSWORD||process.env.EMAIL_PASS||process.env.GMAIL_APP_PASSWORD||'').trim().replace(/\\s+/g,'');res.json({configured:Boolean(user&&pass),details:{host,port,user:user?`${user.slice(0,3)}***@${user.split('@')[1]||''}`:'',hasPassword:Boolean(pass),passwordLength:pass.length,secure:port==='465',from:getFromAddress()}});});"
+          new = "app.get('/api/smtp/status',requireAuth,async(_req,res)=>{const host=(process.env.SMTP_HOST||'smtp.gmail.com').trim();const port=(process.env.SMTP_PORT||'465').trim();const user=(process.env.SMTP_USER||'').trim();const pass=(process.env.SMTP_PASS||'').trim().replace(/\\s+/g,'');const configured=Boolean(user&&pass);res.json({configured,details:{host,port,user:user?`${user.slice(0,3)}***@${user.split('@')[1]||''}`:'',hasPassword:Boolean(pass),passwordLength:pass.length,secure:port==='465',from:getFromAddress()},instructions:configured?'SMTP configurado mediante SMTP_USER + SMTP_PASS.':'Faltan SMTP_USER y/o SMTP_PASS en el entorno del servidor.'});});"
+          if old not in s:
+              raise SystemExit('Expected SMTP status route was not found; no changes made.')
+          p.write_text(s.replace(old, new), encoding='utf-8')
+          PY
+
+      - name: Validate
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+
+      - name: Commit canonical SMTP route
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/app.ts
+          git diff --cached --quiet && exit 0
+          git commit -m 'fix: make SMTP diagnostics use canonical variables only'
+          git push origin HEAD:main

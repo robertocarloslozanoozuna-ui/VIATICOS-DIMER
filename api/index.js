@@ -1437,11 +1437,11 @@ function err(res, e) {
   return res.status(status).json({ success: false, error: msg });
 }
 function createApp() {
-  const app = express();
-  app.set("trust proxy", 1);
-  app.use(cors({ origin: true, credentials: true }));
-  app.use(express.json({ limit: "10mb" }));
-  app.get(["/api/health", "/health"], async (_req, res) => {
+  const app2 = express();
+  app2.set("trust proxy", 1);
+  app2.use(cors({ origin: true, credentials: true }));
+  app2.use(express.json({ limit: "10mb" }));
+  app2.get(["/api/health", "/health"], async (_req, res) => {
     try {
       const { error } = await supabase.from("users").select("id", { head: true, count: "exact" });
       if (error) throw error;
@@ -1450,7 +1450,7 @@ function createApp() {
       res.status(503).json({ ok: false, database: "supabase", error: "Database unavailable" });
     }
   });
-  app.get(["/api/diagnostic", "/diagnostic"], async (_req, res) => {
+  app2.get(["/api/diagnostic", "/diagnostic"], async (_req, res) => {
     try {
       const [u, r] = await Promise.all([supabase.from("users").select("id", { head: true, count: "exact" }), supabase.from("travel_requests").select("id", { head: true, count: "exact" })]);
       if (u.error) throw u.error;
@@ -1460,7 +1460,7 @@ function createApp() {
       res.status(503).json({ status: "unavailable", database: { type: "supabase" }, error: e instanceof Error ? e.message : "Database unavailable" });
     }
   });
-  app.get(["/api/me", "/me"], async (req, res) => {
+  app2.get(["/api/me", "/me"], async (req, res) => {
     try {
       const u = await auth(req);
       const allUsers = await listUsers();
@@ -1469,7 +1469,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.post(["/api/auth/login", "/auth/login", "/api/login", "/login"], async (req, res) => {
+  app2.post(["/api/auth/login", "/auth/login", "/api/login", "/login"], async (req, res) => {
     try {
       const email = String(req.body?.email || "").trim().toLowerCase(), password = String(req.body?.password || "");
       if (!email || !password) return res.status(400).json({ success: false, error: "Correo electr\xF3nico y contrase\xF1a requeridos" });
@@ -1487,7 +1487,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.post("/api/auth/logout", async (req, res) => {
+  app2.post("/api/auth/logout", async (req, res) => {
     try {
       const u = await auth(req);
       if (u) await recordAuditLog({ userId: u.id, action: "CIERRE_SESION", details: { email: u.email } });
@@ -1497,8 +1497,8 @@ function createApp() {
       err(res, e);
     }
   });
-  app.post("/api/switch-user", (_req, res) => res.status(403).json({ error: "Cambio de usuario deshabilitado en producci\xF3n. Inicia sesi\xF3n con credenciales reales." }));
-  app.post("/api/auth/register-init", async (req, res) => {
+  app2.post("/api/switch-user", (_req, res) => res.status(403).json({ error: "Cambio de usuario deshabilitado en producci\xF3n. Inicia sesi\xF3n con credenciales reales." }));
+  app2.post("/api/auth/register-init", async (req, res) => {
     try {
       const { name, email, password, department } = req.body || {};
       const clean = String(email || "").trim().toLowerCase();
@@ -1514,7 +1514,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.post("/api/auth/verify-code", async (req, res) => {
+  app2.post("/api/auth/verify-code", async (req, res) => {
     try {
       const result = await verifyCodeAndActivateUser(String(req.body?.email || ""), String(req.body?.code || ""));
       if (!result.success || !result.user) return res.status(400).json({ error: result.error });
@@ -1532,7 +1532,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.post("/api/auth/resend-code", async (req, res) => {
+  app2.post("/api/auth/resend-code", async (req, res) => {
     try {
       const clean = String(req.body?.email || "").trim().toLowerCase();
       const { data, error } = await supabase.from("verification_codes").select("*").eq("email", clean).maybeSingle();
@@ -1548,7 +1548,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.post("/api/auth/register", requireAuth, requirePermission("administrar_usuarios"), async (req, res) => {
+  app2.post("/api/auth/register", requireAuth, requirePermission("administrar_usuarios"), async (req, res) => {
     try {
       const { name, email, password, department, roleId, status } = req.body || {};
       const clean = String(email || "").trim().toLowerCase();
@@ -1565,14 +1565,14 @@ function createApp() {
       err(res, e);
     }
   });
-  app.get("/api/users", requireAuth, requirePermission("administrar_usuarios"), async (_req, res) => {
+  app2.get("/api/users", requireAuth, requirePermission("administrar_usuarios"), async (_req, res) => {
     try {
       res.json(await listUsers());
     } catch (e) {
       err(res, e);
     }
   });
-  app.post("/api/users", requireAuth, requirePermission("administrar_usuarios"), async (req, res) => {
+  app2.post("/api/users", requireAuth, requirePermission("administrar_usuarios"), async (req, res) => {
     try {
       const { name, email, password, department, roleId, status } = req.body || {};
       const clean = String(email || "").trim().toLowerCase();
@@ -1588,7 +1588,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.put("/api/users/:id", requireAuth, requirePermission("administrar_usuarios"), async (req, res) => {
+  app2.put("/api/users/:id", requireAuth, requirePermission("administrar_usuarios"), async (req, res) => {
     try {
       const id = String(req.params.id);
       const existing = await getUserById(id);
@@ -1612,7 +1612,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.delete("/api/users/:id", requireAuth, requirePermission("administrar_usuarios"), async (req, res) => {
+  app2.delete("/api/users/:id", requireAuth, requirePermission("administrar_usuarios"), async (req, res) => {
     try {
       const u = await getUserById(String(req.params.id));
       if (!u) return res.status(404).json({ error: "Usuario no encontrado" });
@@ -1624,14 +1624,14 @@ function createApp() {
       err(res, e);
     }
   });
-  app.get("/api/departments", async (_req, res) => {
+  app2.get("/api/departments", async (_req, res) => {
     try {
       res.json(await listDepartments());
     } catch (e) {
       err(res, e);
     }
   });
-  app.post("/api/departments", requireAuth, requirePermission("administrar_departamentos"), async (req, res) => {
+  app2.post("/api/departments", requireAuth, requirePermission("administrar_departamentos"), async (req, res) => {
     try {
       const d = await createDepartment(String(req.body?.name || ""), String(req.body?.description || ""));
       await recordAuditLog({ userId: req.dimerUser.id, action: "CREACION_DEPARTAMENTO", details: { departmentName: d.name } });
@@ -1640,21 +1640,21 @@ function createApp() {
       err(res, e);
     }
   });
-  app.put("/api/departments/:id", requireAuth, requirePermission("administrar_departamentos"), async (req, res) => {
+  app2.put("/api/departments/:id", requireAuth, requirePermission("administrar_departamentos"), async (req, res) => {
     try {
       res.json({ success: true, department: await updateDepartment(String(req.params.id), req.body) });
     } catch (e) {
       err(res, e);
     }
   });
-  app.get("/api/bosses", async (_req, res) => {
+  app2.get("/api/bosses", async (_req, res) => {
     try {
       res.json(await listBosses());
     } catch (e) {
       err(res, e);
     }
   });
-  app.post("/api/bosses", requireAuth, requirePermission("administrar_jefes"), async (req, res) => {
+  app2.post("/api/bosses", requireAuth, requirePermission("administrar_jefes"), async (req, res) => {
     try {
       const b = await createBoss(String(req.body?.name || ""), String(req.body?.email || ""), String(req.body?.department || ""));
       res.status(201).json({ success: true, boss: b });
@@ -1662,14 +1662,14 @@ function createApp() {
       err(res, e);
     }
   });
-  for (const method of ["put", "patch", "post"]) app[method]("/api/bosses/:id", requireAuth, requirePermission("administrar_jefes"), async (req, res) => {
+  for (const method of ["put", "patch", "post"]) app2[method]("/api/bosses/:id", requireAuth, requirePermission("administrar_jefes"), async (req, res) => {
     try {
       res.json({ success: true, boss: await updateBoss(String(req.params.id), req.body) });
     } catch (e) {
       err(res, e);
     }
   });
-  app.delete("/api/bosses/:id", requireAuth, requirePermission("administrar_jefes"), async (req, res) => {
+  app2.delete("/api/bosses/:id", requireAuth, requirePermission("administrar_jefes"), async (req, res) => {
     try {
       await deleteBoss(String(req.params.id));
       res.json({ success: true });
@@ -1677,29 +1677,29 @@ function createApp() {
       err(res, e);
     }
   });
-  app.get("/api/roles", async (_req, res) => {
+  app2.get("/api/roles", async (_req, res) => {
     try {
       res.json(await listRoles());
     } catch (e) {
       err(res, e);
     }
   });
-  app.get("/api/permissions", (_req, res) => res.json(ALL_SYSTEM_PERMISSIONS));
-  app.post("/api/roles", requireAuth, requirePermission("administrar_roles"), async (req, res) => {
+  app2.get("/api/permissions", (_req, res) => res.json(ALL_SYSTEM_PERMISSIONS));
+  app2.post("/api/roles", requireAuth, requirePermission("administrar_roles"), async (req, res) => {
     try {
       res.status(201).json({ success: true, role: await createRole(req.body) });
     } catch (e) {
       err(res, e);
     }
   });
-  app.put("/api/roles/:id", requireAuth, requirePermission("administrar_roles"), async (req, res) => {
+  app2.put("/api/roles/:id", requireAuth, requirePermission("administrar_roles"), async (req, res) => {
     try {
       res.json({ success: true, role: await updateRole(String(req.params.id), req.body) });
     } catch (e) {
       err(res, e);
     }
   });
-  app.get("/api/requests", async (req, res) => {
+  app2.get("/api/requests", async (req, res) => {
     try {
       const u = await auth(req);
       if (!u) return res.status(401).json({ error: "Autenticaci\xF3n requerida" });
@@ -1717,7 +1717,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.get("/api/requests/:id", requireAuth, async (req, res) => {
+  app2.get("/api/requests/:id", requireAuth, async (req, res) => {
     try {
       const r = await getRequest(String(req.params.id));
       if (!r) return res.status(404).json({ error: "Solicitud no encontrada" });
@@ -1733,7 +1733,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.post("/api/requests", requireAuth, async (req, res) => {
+  app2.post("/api/requests", requireAuth, async (req, res) => {
     try {
       const u = req.dimerUser;
       const b = req.body || {};
@@ -1760,7 +1760,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.put("/api/requests/:id", requireAuth, async (req, res) => {
+  app2.put("/api/requests/:id", requireAuth, async (req, res) => {
     try {
       const u = req.dimerUser;
       const r = await getRequest(String(req.params.id));
@@ -1774,7 +1774,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.patch("/api/requests/:id", requireAuth, async (req, res) => {
+  app2.patch("/api/requests/:id", requireAuth, async (req, res) => {
     try {
       const r = await getRequest(String(req.params.id));
       if (!r) return res.status(404).json({ error: "Solicitud no encontrada" });
@@ -1785,7 +1785,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.delete("/api/requests/:id", requireAuth, async (req, res) => {
+  app2.delete("/api/requests/:id", requireAuth, async (req, res) => {
     try {
       const u = req.dimerUser;
       const r = await getRequest(String(req.params.id));
@@ -1798,7 +1798,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.post("/api/requests/:id/cancel", requireAuth, async (req, res) => {
+  app2.post("/api/requests/:id/cancel", requireAuth, async (req, res) => {
     try {
       const u = req.dimerUser;
       const r = await getRequest(String(req.params.id));
@@ -1840,18 +1840,18 @@ function createApp() {
       return res.status(/ya fue utilizado|expirado|inválido|procesada/i.test(msg) ? 400 : 500).send(buildTokenApprovalResultPageHtml({ status: "INVALIDA", errorMessage: msg }));
     }
   }
-  app.get("/api/approval/token-action", tokenAction);
-  app.get("/approval-response/:token/:decision", async (req, res) => {
+  app2.get("/api/approval/token-action", tokenAction);
+  app2.get("/approval-response/:token/:decision", async (req, res) => {
     req.query.token = String(req.params.token);
     req.query.action = String(req.params.decision);
     return tokenAction(req, res);
   });
-  app.get("/api/approval-response/:token/:decision", async (req, res) => {
+  app2.get("/api/approval-response/:token/:decision", async (req, res) => {
     req.query.token = String(req.params.token);
     req.query.action = String(req.params.decision);
     return tokenAction(req, res);
   });
-  app.get("/api/approval-tokens/:token", async (req, res) => {
+  app2.get("/api/approval-tokens/:token", async (req, res) => {
     try {
       const v = await validateApprovalToken(String(req.params.token));
       if (!v.valid) return res.status(400).json({ valid: false, error: v.error });
@@ -1861,7 +1861,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.post("/api/requests/:id/approve", requireAuth, async (req, res) => {
+  app2.post("/api/requests/:id/approve", requireAuth, async (req, res) => {
     try {
       const u = req.dimerUser;
       const r = await getRequest(String(req.params.id));
@@ -1882,7 +1882,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.post("/api/requests/:id/reject", requireAuth, async (req, res) => {
+  app2.post("/api/requests/:id/reject", requireAuth, async (req, res) => {
     try {
       const u = req.dimerUser;
       const r = await getRequest(String(req.params.id));
@@ -1900,7 +1900,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.post("/api/requests/:id/request-correction", requireAuth, async (req, res) => {
+  app2.post("/api/requests/:id/request-correction", requireAuth, async (req, res) => {
     try {
       const u = req.dimerUser;
       const r = await getRequest(String(req.params.id));
@@ -1913,7 +1913,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.post("/api/requests/:id/pay", requireAuth, requirePermission("ver_reportes"), async (req, res) => {
+  app2.post("/api/requests/:id/pay", requireAuth, requirePermission("ver_reportes"), async (req, res) => {
     try {
       const r = await getRequest(String(req.params.id));
       if (!r) return res.status(404).json({ error: "Solicitud no encontrada" });
@@ -1924,7 +1924,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.post("/api/requests/:id/finalize", requireAuth, requirePermission("ver_reportes"), async (req, res) => {
+  app2.post("/api/requests/:id/finalize", requireAuth, requirePermission("ver_reportes"), async (req, res) => {
     try {
       const r = await getRequest(String(req.params.id));
       if (!r) return res.status(404).json({ error: "Solicitud no encontrada" });
@@ -1935,22 +1935,22 @@ function createApp() {
       err(res, e);
     }
   });
-  app.get("/api/audit-logs", requireAuth, requirePermission("administrar_configuracion"), async (req, res) => {
+  app2.get("/api/audit-logs", requireAuth, requirePermission("administrar_configuracion"), async (req, res) => {
     try {
       res.json(await listAuditLogs(typeof req.query.requestId === "string" ? req.query.requestId : void 0));
     } catch (e) {
       err(res, e);
     }
   });
-  app.get("/api/outbox", requireAuth, async (_req, res) => res.json(outboxLogs));
-  app.get("/api/smtp/status", requireAuth, async (_req, res) => {
+  app2.get("/api/outbox", requireAuth, async (_req, res) => res.json(outboxLogs));
+  app2.get("/api/smtp/status", requireAuth, async (_req, res) => {
     const host = process.env.SMTP_HOST || process.env.EMAIL_HOST || "smtp.gmail.com";
     const port = process.env.SMTP_PORT || process.env.EMAIL_PORT || "465";
     const user = (process.env.SMTP_USER || process.env.SMTP_USERNAME || process.env.EMAIL_USER || process.env.GMAIL_USER || "").trim();
     const pass = (process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.EMAIL_PASS || process.env.GMAIL_APP_PASSWORD || "").trim().replace(/\s+/g, "");
     res.json({ configured: Boolean(user && pass), details: { host, port, user: user ? `${user.slice(0, 3)}***@${user.split("@")[1] || ""}` : "", hasPassword: Boolean(pass), passwordLength: pass.length, secure: port === "465", from: getFromAddress() } });
   });
-  app.post("/api/smtp/test", requireAuth, requirePermission("administrar_configuracion"), async (req, res) => {
+  app2.post("/api/smtp/test", requireAuth, requirePermission("administrar_configuracion"), async (req, res) => {
     try {
       const to = String(req.body?.targetEmail || "sistemas@dimer.com.mx");
       const result = await sendEmail({ to, subject: `[PRUEBA] SMTP Dimer ${(/* @__PURE__ */ new Date()).toISOString()}`, html: `<p>Prueba SMTP Dimer exitosa.</p><p>${(/* @__PURE__ */ new Date()).toLocaleString("es-MX")}</p>` });
@@ -1959,7 +1959,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.get("/api/stats", requireAuth, async (_req, res) => {
+  app2.get("/api/stats", requireAuth, async (_req, res) => {
     try {
       const rs = await getPopulatedRequests();
       const total = (s) => rs.filter((r) => r.status === s).length;
@@ -1968,7 +1968,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app.get("/api/code-artifacts", async (_req, res) => {
+  app2.get("/api/code-artifacts", async (_req, res) => {
     try {
       const { NEXTJS_CODE_ARTIFACTS: NEXTJS_CODE_ARTIFACTS2 } = await Promise.resolve().then(() => (init_nextjsArtifacts(), nextjsArtifacts_exports));
       res.json(NEXTJS_CODE_ARTIFACTS2);
@@ -1976,16 +1976,54 @@ function createApp() {
       err(res, e);
     }
   });
-  app.all("/api/*", (_req, res) => res.status(404).json({ error: "Ruta API no encontrada" }));
-  app.use((e, _req, res, _next) => {
+  app2.all("/api/*", (_req, res) => res.status(404).json({ error: "Ruta API no encontrada" }));
+  app2.use((e, _req, res, _next) => {
     console.error("[DIMER]", e);
     if (!res.headersSent) res.status(500).json({ success: false, error: "Error interno del servidor" });
   });
-  return app;
+  return app2;
+}
+
+// server/smtpDiagnostic.ts
+import crypto3 from "node:crypto";
+function getSmtpEnvironmentFingerprint() {
+  const read = (name) => process.env[name] ?? "";
+  const fingerprint = (value) => value ? crypto3.createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16) : null;
+  const passwordCandidates = [
+    "SMTP_PASS",
+    "SMTP_PASSWORD",
+    "EMAIL_PASS",
+    "EMAIL_PASSWORD",
+    "GMAIL_APP_PASSWORD",
+    "GMAIL_PASSWORD"
+  ];
+  const present = (name) => Boolean(read(name));
+  const selectedPassword = passwordCandidates.find(present) ?? null;
+  return {
+    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    smtpUser: read("SMTP_USER") || null,
+    smtpUserFingerprint: fingerprint(read("SMTP_USER")),
+    smtpHost: read("SMTP_HOST") || read("EMAIL_HOST") || null,
+    smtpPort: read("SMTP_PORT") || read("EMAIL_PORT") || null,
+    passwordResolution: {
+      selectedVariable: selectedPassword,
+      candidates: Object.fromEntries(passwordCandidates.map((name) => [name, present(name)])),
+      selectedPasswordFingerprint: selectedPassword ? fingerprint(read(selectedPassword)) : null
+    },
+    smtpFrom: read("SMTP_FROM") || read("EMAIL_FROM") || read("MAIL_FROM") || null
+  };
 }
 
 // server/apiEntry.ts
-var apiEntry_default = createApp();
+var app = createApp();
+function handler(req, res) {
+  const path = String(req?.url || "").split("?")[0];
+  if (path === "/api/smtp/environment-diagnostic" || path === "/smtp/environment-diagnostic") {
+    return res.status(200).json(getSmtpEnvironmentFingerprint());
+  }
+  return app(req, res);
+}
 export {
-  apiEntry_default as default
+  app,
+  handler as default
 };

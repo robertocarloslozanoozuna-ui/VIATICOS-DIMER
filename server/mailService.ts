@@ -3,30 +3,45 @@ import type { TravelRequest, User, EmailLog } from '../src/types';
 
 export const outboxLogs: EmailLog[] = [];
 
+/**
+ * SMTP configuration is intentionally canonical and deterministic.
+ * Only SMTP_* variables are used by production mail delivery.
+ * This prevents stale fallback variables from silently overriding the
+ * credentials configured in Vercel / AI Studio.
+ */
 function credentials(){
-  const host=process.env.SMTP_HOST?.trim()||process.env.EMAIL_HOST?.trim()||'smtp.gmail.com';
-  const port=parseInt(process.env.SMTP_PORT||process.env.EMAIL_PORT||'465',10);
-  const user=(process.env.SMTP_USER||process.env.SMTP_USERNAME||process.env.EMAIL_USER||process.env.GMAIL_USER||'').trim().replace(/^["']|["']$/g,'');
-  const pass=(process.env.SMTP_PASS||process.env.SMTP_PASSWORD||process.env.EMAIL_PASS||process.env.EMAIL_PASSWORD||process.env.GMAIL_APP_PASSWORD||process.env.GMAIL_PASSWORD||'').trim().replace(/^["']|["']$/g,'').replace(/\s+/g,'');
-  return {host,port,user,pass,secure:process.env.SMTP_SECURE==='true'||port===465};
+  const host=(process.env.SMTP_HOST||'smtp.gmail.com').trim();
+  const port=parseInt(process.env.SMTP_PORT||'465',10);
+  const user=(process.env.SMTP_USER||'').trim().replace(/^["']|["']$/g,'');
+  const pass=(process.env.SMTP_PASS||'').trim().replace(/^["']|["']$/g,'').replace(/\s+/g,'');
+  const secure=(process.env.SMTP_SECURE||'').trim().toLowerCase()==='true'||port===465;
+  return {host,port,user,pass,secure};
 }
 
 export function getMailTransporter(){
   const c=credentials();
   if(!c.user||!c.pass)return null;
-  if(c.host.toLowerCase()==='smtp.gmail.com')return nodemailer.createTransport({service:'gmail',auth:{user:c.user,pass:c.pass},tls:{rejectUnauthorized:false}});
-  return nodemailer.createTransport({host:c.host,port:c.port,secure:c.secure,auth:{user:c.user,pass:c.pass},tls:{rejectUnauthorized:false},connectionTimeout:15000,greetingTimeout:15000,socketTimeout:20000});
+  return nodemailer.createTransport({
+    host:c.host,
+    port:c.port,
+    secure:c.secure,
+    auth:{user:c.user,pass:c.pass},
+    tls:{rejectUnauthorized:false},
+    connectionTimeout:15000,
+    greetingTimeout:15000,
+    socketTimeout:20000,
+  });
 }
 
 export function getFromAddress(customFrom?:string){
-  if(customFrom?.trim())return customFrom.trim();
-  const from=process.env.SMTP_FROM||process.env.EMAIL_FROM||process.env.MAIL_FROM;
-  if(from?.trim())return from.trim();
   const c=credentials();
+  // Never allow a secret/password-looking value to become the From address.
+  const candidate=customFrom?.trim()||process.env.SMTP_FROM?.trim();
+  if(candidate && candidate.includes('@') && !candidate.includes(c.pass))return candidate;
   return `Dimer Notificaciones <${c.user||'sistemas@dimer.com.mx'}>`;
 }
 
-const esc=(v:unknown)=>String(v??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]!));
+const esc=(v:unknown)=>String(v??'').replace(/[&<>\"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[m]!));
 const formatCurrency=(amount:number)=>new Intl.NumberFormat('es-MX',{style:'currency',currency:'MXN'}).format(Number(amount||0));
 
 export function buildBossApprovalEmailHtml(params:{request:TravelRequest;user:User;approveUrl:string;rejectUrl:string;token:string}){
@@ -68,7 +83,9 @@ export function buildTokenApprovalResultPageHtml(p:{status:string;request?:Trave
 export async function sendEmail(p:{to:string;subject:string;html:string;from?:string;replyTo?:string;requestId?:string;folio?:string}):Promise<{success:boolean;logId:string;status:'ENVIADO'|'SIMULADO'|'FALLIDO';error?:string}>{
   const logId=`MAIL-${Date.now()}-${Math.floor(Math.random()*100000)}`;
   const transporter=getMailTransporter();
-  if(!transporter){const error='Faltan credenciales SMTP';return {success:false,logId,status:process.env.VERCEL||process.env.NODE_ENV==='production'?'FALLIDO':'SIMULADO',error};}
-  try{await transporter.sendMail({from:getFromAddress(p.from),replyTo:p.replyTo,to:p.to,subject:p.subject,html:p.html});return {success:true,logId,status:'ENVIADO'};}
-  catch(e:any){return {success:false,logId,status:'FALLIDO',error:e?.message||'Error SMTP'};}
+  if(!transporter){const error='Faltan credenciales SMTP: se requieren SMTP_USER y SMTP_PASS';return {success:false,logId,status:process.env.VERCEL||process.env.NODE_ENV==='production'?'FALLIDO':'SIMULADO',error};}
+  try{
+    await transporter.sendMail({from:getFromAddress(p.from),replyTo:p.replyTo,to:p.to,subject:p.subject,html:p.html});
+    return {success:true,logId,status:'ENVIADO'};
+  }catch(e:any){return {success:false,logId,status:'FALLIDO',error:e?.message||'Error SMTP'};}
 }

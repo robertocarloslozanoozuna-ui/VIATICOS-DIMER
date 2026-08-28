@@ -1984,50 +1984,10 @@ function createApp() {
   return app2;
 }
 
-// server/smtpDiagnostic.ts
-import crypto3 from "node:crypto";
-function getSmtpEnvironmentFingerprint() {
-  const read = (name) => process.env[name] ?? "";
-  const fingerprint = (value) => value ? crypto3.createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16) : null;
-  const passwordCandidates = [
-    "SMTP_PASS",
-    "SMTP_PASSWORD",
-    "EMAIL_PASS",
-    "EMAIL_PASSWORD",
-    "GMAIL_APP_PASSWORD",
-    "GMAIL_PASSWORD"
-  ];
-  const present = (name) => Boolean(read(name));
-  const selectedPassword = passwordCandidates.find(present) ?? null;
-  return {
-    generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
-    smtpUser: read("SMTP_USER") || null,
-    smtpUserFingerprint: fingerprint(read("SMTP_USER")),
-    smtpHost: read("SMTP_HOST") || read("EMAIL_HOST") || null,
-    smtpPort: read("SMTP_PORT") || read("EMAIL_PORT") || null,
-    passwordResolution: {
-      selectedVariable: selectedPassword,
-      candidates: Object.fromEntries(passwordCandidates.map((name) => [name, present(name)])),
-      selectedPasswordFingerprint: selectedPassword ? fingerprint(read(selectedPassword)) : null
-    },
-    smtpFrom: read("SMTP_FROM") || read("EMAIL_FROM") || read("MAIL_FROM") || null
-  };
-}
-
 // server/apiEntry.ts
-var freshSmtpPassword = process.env.DIMER_SMTP_APP_PASSWORD?.trim();
-if (freshSmtpPassword) {
-  process.env.SMTP_PASSWORD = freshSmtpPassword;
-}
 var app = createApp();
-function handler(req, res) {
-  const path = String(req?.url || "").split("?")[0];
-  if (path === "/api/smtp/environment-diagnostic" || path === "/smtp/environment-diagnostic") {
-    return res.status(200).json(getSmtpEnvironmentFingerprint());
-  }
-  return app(req, res);
-}
+var apiEntry_default = app;
 export {
   app,
-  handler as default
+  apiEntry_default as default
 };

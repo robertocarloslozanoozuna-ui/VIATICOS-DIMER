@@ -1,0 +1,129 @@
+name: Fix SMTP outbox persistence
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/fix-smtp-outbox.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch SMTP outbox persistence
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          mail = Path('server/mailService.ts')
+          text = mail.read_text(encoding='utf-8')
+          text = text.replace(
+              "import type { TravelRequest, User, EmailLog } from '../src/types';",
+              "import type { TravelRequest, User, EmailLog } from '../src/types';\nimport { recordAuditLog } from './db.js';"
+          )
+
+          start = text.index('export async function sendEmail(')
+          replacement = '''export async function sendEmail(p:{to:string;subject:string;html:string;from?:string;replyTo?:string;requestId?:string;folio?:string}):Promise<{success:boolean;logId:string;status:'ENVIADO'|'SIMULADO'|'FALLIDO';error?:string}>{
+            const logId=`MAIL-${Date.now()}-${Math.floor(Math.random()*100000)}`;
+            const timestamp=new Date().toISOString();
+            const transporter=getMailTransporter();
+            let status:'ENVIADO'|'SIMULADO'|'FALLIDO'='ENVIADO';
+            let errorMsg:string|undefined;
+
+            if(!transporter){
+              errorMsg='Faltan credenciales SMTP: se requieren SMTP_USER y SMTP_PASS';
+              status=process.env.VERCEL||process.env.NODE_ENV==='production'?'FALLIDO':'SIMULADO';
+            } else {
+              try{
+                await transporter.sendMail({from:getFromAddress(p.from),replyTo:p.replyTo,to:p.to,subject:p.subject,html:p.html});
+                status='ENVIADO';
+              }catch(e:any){
+                status='FALLIDO';
+                errorMsg=e?.message||'Error SMTP';
+              }
+            }
+
+            const log:EmailLog={
+              id:logId,
+              requestId:p.requestId,
+              folio:p.folio,
+              to:p.to,
+              subject:p.subject,
+              html:p.html,
+              status,
+              error:errorMsg,
+              createdAt:timestamp
+            };
+
+            // Keep a short-lived in-memory cache for the current invocation.
+            outboxLogs.unshift(log);
+            if(outboxLogs.length>200)outboxLogs.pop();
+
+            // Persist the SMTP outbox in Supabase through audit_logs so it survives
+            // Vercel serverless instance recycling and is visible from any instance.
+            try{
+              const isTest=p.subject.includes('[PRUEBA]');
+              await recordAuditLog({
+                requestId:p.requestId||null,
+                userName:isTest?'Prueba Diagnóstico SMTP':'Sistema de Notificaciones',
+                userEmail:p.to,
+                action:isTest?'PRUEBA_SMTP':'ENVIO_CORREO_SMTP',
+                details:{
+                  logId,
+                  to:p.to,
+                  subject:p.subject,
+                  html:p.html,
+                  status,
+                  error:errorMsg||null,
+                  requestId:p.requestId||null,
+                  folio:p.folio||null,
+                  timestamp
+                }
+              });
+            }catch(auditErr){
+              console.error('[SMTP-OUTBOX-PERSISTENCE-WARNING] No se pudo registrar correo en audit_logs:',auditErr);
+            }
+
+            return {success:status==='ENVIADO'||status==='SIMULADO',logId,status,error:errorMsg};
+          }
+          '''
+          text = text[:start] + replacement
+          mail.write_text(text, encoding='utf-8')
+
+          app = Path('server/app.ts')
+          text = app.read_text(encoding='utf-8')
+          old = "app.get('/api/outbox',requireAuth,async(_req,res)=>res.json(outboxLogs));"
+          new = "app.get('/api/outbox',requireAuth,async(_req,res)=>{try{const persisted=(await listAuditLogs()).filter(l=>l.action==='ENVIO_CORREO_SMTP'||l.action==='PRUEBA_SMTP').map(l=>{const d=l.details||{};return {id:String(d.logId||l.id),requestId:d.requestId??l.requestId??undefined,folio:d.folio??undefined,to:String(d.to||l.userEmail||''),subject:String(d.subject||''),html:String(d.html||''),status:(d.status==='FALLIDO'||d.status==='SIMULADO'?'FALLIDO'===d.status?'FALLIDO':'SIMULADO':'ENVIADO'),error:d.error||undefined,createdAt:String(d.timestamp||l.createdAt)}});const seen=new Set<string>();const merged=[...persisted,...outboxLogs].filter(x=>{if(seen.has(x.id))return false;seen.add(x.id);return true;}).sort((a,b)=>String(b.createdAt).localeCompare(String(a.createdAt)));res.json(merged);}catch(e){err(res,e);}});"
+          if old not in text:
+              raise SystemExit('Expected /api/outbox route not found')
+          text = text.replace(old, new, 1)
+          app.write_text(text, encoding='utf-8')
+
+      - name: Validate
+        run: |
+          npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+          npm ci
+          npm run lint
+          npm run build
+          test -s api/index.js
+          node --check api/index.js
+
+      - name: Commit source fix and remove temporary workflow
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/fix-smtp-outbox.yml
+          git add server/mailService.ts server/app.ts package-lock.json api/index.js
+          git commit -m "fix: persist SMTP outbox logs in Supabase"
+          git push origin main

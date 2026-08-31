@@ -1,4 +1,4 @@
-name: Fix and verify multi-role branch
+name: Repair multi-role branch
 
 on:
   push:
@@ -11,160 +11,158 @@ permissions:
   contents: write
 
 jobs:
-  fix-and-verify:
+  repair:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout branch
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Apply safe multi-role implementation
+      - name: Repair RBAC and Admin UI
         shell: python
         run: |
           from pathlib import Path
+          import re
 
-          def replace(path, old, new, label):
+          def edit(path, fn):
               p = Path(path)
               s = p.read_text(encoding='utf-8')
+              out = fn(s)
+              if out == s:
+                  print(f'No textual change required: {path}')
+              else:
+                  p.write_text(out, encoding='utf-8')
+                  print(f'Updated: {path}')
+
+          # securityGate must resolve the complete role catalog so permissions from
+          # every assigned role are available on protected requests.
+          def security(s):
+              old = "return sanitizeUser(u,roles.find(r=>r.id===u.roleId));"
+              new = "return sanitizeUser(u,roles,roles);"
               if old not in s:
-                  raise SystemExit(f'{label}: anchor not found')
-              p.write_text(s.replace(old, new, 1), encoding='utf-8')
+                  if "return sanitizeUser(u,roles,roles);" in s:
+                      return s
+                  raise SystemExit('securityGate.ts: expected currentUser sanitize anchor not found')
+              return s.replace(old, new, 1)
+          edit('server/securityGate.ts', security)
 
-          # types: additive only; legacy roleId remains the primary role.
-          replace(
-              'src/types.ts',
-              "  roleId?: string;\n  permissions?: Permission[];",
-              "  roleId?: string;\n  /** All assigned role IDs. roleId remains the primary/legacy role. */\n  roleIds?: string[];\n  permissions?: Permission[];",
-              'types.ts'
-          )
+          # Admin UI: keep roleId as primary/legacy role, while allowing any number
+          # of additional roles through roleIds. The backend already persists them.
+          def admin(s):
+              if "const [userRoleIds, setUserRoleIds]" not in s:
+                  anchor = "  const [userRoleId, setUserRoleId] = useState('role_empleado');"
+                  if anchor not in s:
+                      raise SystemExit('AdminView.tsx: role state anchor not found')
+                  s = s.replace(anchor, anchor + "\n  const [userRoleIds, setUserRoleIds] = useState<string[]>(['role_empleado']);", 1)
 
-          # db: persist assignments in the new user_roles table and merge permissions.
-          p = Path('server/db.ts')
-          s = p.read_text(encoding='utf-8')
-          replace('server/db.ts',
-              "const toUser=(r:any):StoredUserRecord=>({id:r.id,name:r.name,email:r.email,role:r.role,roleId:r.role_id||undefined,department:r.department||'',status:r.status,isVerified:r.is_verified,passwordHash:r.password_hash,salt:r.salt,createdAt:r.created_at,avatar:r.avatar});",
-              "const toUser=(r:any):StoredUserRecord=>({id:r.id,name:r.name,email:r.email,role:r.role,roleId:r.role_id||undefined,roleIds:Array.isArray(r.role_ids)?r.role_ids:(r.role_id?[String(r.role_id)]:[]),department:r.department||'',status:r.status,isVerified:r.is_verified,passwordHash:r.password_hash,salt:r.salt,createdAt:r.created_at,avatar:r.avatar});",
-              'db.ts toUser')
-          replace('server/db.ts',
-              "export function sanitizeUser(u:StoredUserRecord,role?:RoleDefinition):User{const roleId=u.roleId||(u.role==='ADMIN'?'role_admin':u.role==='JEFE'?'role_jefe':u.role==='FINANZAS'?'role_finanzas':u.role==='SOLO_LECTURA_APROBADAS'?'role_solo_lectura':'role_solicitante');const perms=role?.permissions||[];return {id:u.id,name:u.name,email:u.email,department:u.department||'',role:u.role,roleId,permissions:u.role==='ADMIN'?ALL_SYSTEM_PERMISSIONS.map(p=>p.id):perms,status:u.status,isVerified:u.isVerified??true,avatar:u.avatar,createdAt:u.createdAt};}",
-              "export function sanitizeUser(u:StoredUserRecord,role?:RoleDefinition|RoleDefinition[],allRoles?:RoleDefinition[]):User{const roleId=u.roleId||(u.role==='ADMIN'?'role_admin':u.role==='JEFE'?'role_jefe':u.role==='FINANZAS'?'role_finanzas':u.role==='SOLO_LECTURA_APROBADAS'?'role_solo_lectura':'role_solicitante');const roleIds=Array.from(new Set((u.roleIds&&u.roleIds.length?u.roleIds:[roleId]).filter(Boolean)));const defs=Array.isArray(role)?role:(role?[role]:[]);const catalog=allRoles||defs;const perms=u.role==='ADMIN'?ALL_SYSTEM_PERMISSIONS.map(p=>p.id):Array.from(new Set(catalog.filter(r=>roleIds.includes(r.id)).flatMap(r=>r.permissions||[])));return {id:u.id,name:u.name,email:u.email,department:u.department||'',role:u.role,roleId,roleIds,permissions:perms,status:u.status,isVerified:u.isVerified??true,avatar:u.avatar,createdAt:u.createdAt};}",
-              'db.ts sanitizeUser')
+              s = s.replace(
+                  "setUserRoleId(rolesList[3]?.id || 'role_empleado');\n    setUserStatus('ACTIVO');",
+                  "setUserRoleId(rolesList[3]?.id || 'role_empleado');\n    setUserRoleIds([rolesList[3]?.id || 'role_empleado']);\n    setUserStatus('ACTIVO');",
+                  1
+              )
 
-          marker = "export async function getUserById(id:string){"
-          helper = """async function getUserRoleIds(userId:string,legacyRoleId?:string){
-            try{const {data,error}=await supabase.from('user_roles').select('role_id').eq('user_id',userId);if(error)throw error;const ids=(data||[]).map((r:any)=>String(r.role_id)).filter(Boolean);return ids.length?Array.from(new Set(ids)):(legacyRoleId?[legacyRoleId]:[]);}catch{return legacyRoleId?[legacyRoleId]:[];}
-          }
-          async function setUserRoleIds(userId:string,roleIds:string[]){
-            const ids=Array.from(new Set(roleIds.map(String).filter(Boolean)));
-            const {error}=await supabase.from('user_roles').delete().eq('user_id',userId);if(error)throw error;
-            if(ids.length){const {error:e}=await supabase.from('user_roles').insert(ids.map(role_id=>({user_id:userId,role_id})));if(e)throw e;}
-          }
-          """
-          if marker not in s: raise SystemExit('db.ts role helper anchor not found')
-          s=s.replace(marker,helper+marker,1)
+              old_edit = "setUserRoleId(user.roleId || (rolesList.find(r => r.name.toUpperCase() === String(user.role).toUpperCase())?.id || 'role_empleado'));\n    setUserStatus"
+              new_edit = "const assignedRoleIds = user.roleIds?.length ? user.roleIds : [user.roleId || (rolesList.find(r => r.name.toUpperCase() === String(user.role).toUpperCase())?.id || 'role_empleado')];\n    setUserRoleIds(assignedRoleIds);\n    setUserRoleId(assignedRoleIds[0]);\n    setUserStatus"
+              if old_edit in s:
+                  s = s.replace(old_edit, new_edit, 1)
+              elif "const assignedRoleIds = user.roleIds?.length" not in s:
+                  raise SystemExit('AdminView.tsx: edit-user role anchor not found')
 
-          old="""export async function getUserById(id:string){const {data,error}=await supabase.from('users').select('*').eq('id',id).maybeSingle();if(error)throw error;return data?toUser(data):null;}
-          export async function getUserByEmail(email:string){const {data,error}=await supabase.from('users').select('*').eq('email',email.trim().toLowerCase()).maybeSingle();if(error)throw error;return data?toUser(data):null;}
-          export async function listUsers(){const {data,error}=await supabase.from('users').select('*').order('created_at',{ascending:false});if(error)throw error;const roles=await listRoles();return (data||[]).map(toUser).map(u=>sanitizeUser(u,roles.find(r=>r.id===u.roleId)));}
-          export async function insertUser(u:StoredUserRecord){const {data,error}=await supabase.from('users').insert({id:u.id,name:u.name,email:u.email.toLowerCase(),role:u.role,role_id:u.roleId||'role_solicitante',department:u.department||'General',status:u.status,is_verified:u.isVerified??true,password_hash:u.passwordHash||'',salt:u.salt||'',created_at:u.createdAt||new Date().toISOString()}).select('*').single();if(error)throw error;return toUser(data);}
-          export async function updateUser(id:string,p:Partial<StoredUserRecord>){const row:any={};for(const [k,v] of Object.entries(p)){const m:any={name:'name',email:'email',role:'role',roleId:'role_id',department:'department',status:'status',isVerified:'is_verified',passwordHash:'password_hash',salt:'salt'};if(m[k]!==undefined&&v!==undefined)row[m[k]]=k==='email'?String(v).toLowerCase():v;}const {data,error}=await supabase.from('users').update(row).eq('id',id).select('*').single();if(error)throw error;return toUser(data);}
-          export async function deleteUser(id:string){const {error}=await supabase.from('users').delete().eq('id',id);if(error)throw error;}"""
-          new="""export async function getUserById(id:string){const {data,error}=await supabase.from('users').select('*').eq('id',id).maybeSingle();if(error)throw error;if(!data)return null;const u=toUser(data);u.roleIds=await getUserRoleIds(u.id,u.roleId);return u;}
-          export async function getUserByEmail(email:string){const {data,error}=await supabase.from('users').select('*').eq('email',email.trim().toLowerCase()).maybeSingle();if(error)throw error;if(!data)return null;const u=toUser(data);u.roleIds=await getUserRoleIds(u.id,u.roleId);return u;}
-          export async function listUsers(){const {data,error}=await supabase.from('users').select('*').order('created_at',{ascending:false});if(error)throw error;const roles=await listRoles();const users=(data||[]).map(toUser);let assignments:any[]=[];try{const q=await supabase.from('user_roles').select('user_id,role_id').in('user_id',users.map(u=>u.id));if(!q.error)assignments=q.data||[];}catch{}const byUser=new Map<string,string[]>();for(const a of assignments){const x=byUser.get(a.user_id)||[];x.push(String(a.role_id));byUser.set(a.user_id,x);}return users.map(u=>{u.roleIds=byUser.get(u.id)?.length?Array.from(new Set(byUser.get(u.id)!)):(u.roleId?[u.roleId]:[]);return sanitizeUser(u,roles,roles);});}
-          export async function insertUser(u:StoredUserRecord){const primary=u.roleIds?.[0]||u.roleId||'role_solicitante';const {data,error}=await supabase.from('users').insert({id:u.id,name:u.name,email:u.email.toLowerCase(),role:u.role,role_id:primary,department:u.department||'General',status:u.status,is_verified:u.isVerified??true,password_hash:u.passwordHash||'',salt:u.salt||'',created_at:u.createdAt||new Date().toISOString()}).select('*').single();if(error)throw error;await setUserRoleIds(u.id,u.roleIds?.length?u.roleIds:[primary]);const out=toUser(data);out.roleIds=u.roleIds?.length?u.roleIds:[primary];return out;}
-          export async function updateUser(id:string,p:Partial<StoredUserRecord>){const row:any={};for(const [k,v] of Object.entries(p)){const m:any={name:'name',email:'email',role:'role',roleId:'role_id',department:'department',status:'status',isVerified:'is_verified',passwordHash:'password_hash',salt:'salt'};if(m[k]!==undefined&&v!==undefined)row[m[k]]=k==='email'?String(v).toLowerCase():v;}if(Array.isArray(p.roleIds)&&p.roleIds.length)row.role_id=p.roleIds[0];const {data,error}=await supabase.from('users').update(row).eq('id',id).select('*').single();if(error)throw error;if(Array.isArray(p.roleIds)&&p.roleIds.length)await setUserRoleIds(id,p.roleIds);const out=toUser(data);out.roleIds=Array.isArray(p.roleIds)&&p.roleIds.length?p.roleIds:await getUserRoleIds(id,out.roleId);return out;}
-          export async function deleteUser(id:string){const {error}=await supabase.from('users').delete().eq('id',id);if(error)throw error;}"""
-          if old not in s: raise SystemExit('db.ts user persistence block not found')
-          p.write_text(s.replace(old,new,1),encoding='utf-8')
+              s = s.replace(
+                  "roleId: userRoleId,\n            status: userStatus,",
+                  "roleId: userRoleIds[0] || userRoleId,\n            roleIds: userRoleIds,\n            status: userStatus,"
+              )
 
-          # app: accept roleIds on create/update and merge permissions through sanitizeUser.
-          replace('server/app.ts',
-              "const user=sanitizeUser(u,roles.find(r=>r.id===u.roleId));",
-              "const user=sanitizeUser(u,roles,roles);",
-              'app.ts login')
-          replace('server/app.ts',
-              "const {name,email,password,department,roleId,status}=req.body||{};const clean=String(email||'').trim().toLowerCase();",
-              "const {name,email,password,department,roleId,roleIds,status}=req.body||{};const requestedRoleIds=Array.from(new Set((Array.isArray(roleIds)?roleIds:[roleId]).map((x:any)=>String(x||'').trim()).filter(Boolean)));const clean=String(email||'').trim().toLowerCase();",
-              'app.ts create destructure')
-          replace('server/app.ts',
-              "const roleDef=(await listRoles()).find(r=>r.id===roleId)||{id:'role_solicitante',name:'Solicitante',description:'',active:true,isSystem:true,permissions:[]};const role:Role=",
-              "const primaryRoleId=requestedRoleIds[0]||'role_solicitante';const roleDef=(await listRoles()).find(r=>r.id===primaryRoleId)||{id:'role_solicitante',name:'Solicitante',description:'',active:true,isSystem:true,permissions:[]};const role:Role=",
-              'app.ts role definition')
-          replace('server/app.ts',
-              "role,roleId:roleDef.id,department:dept.name,status:status==='INACTIVO'?'INACTIVO':'ACTIVO'",
-              "role,roleId:primaryRoleId,roleIds:requestedRoleIds.length?requestedRoleIds:[primaryRoleId],department:dept.name,status:status==='INACTIVO'?'INACTIVO':'ACTIVO'",
-              'app.ts insert user')
-          replace('server/app.ts',
-              "const {name,email,password,department,roleId,status}=req.body||{};const clean=String(email||'').trim().toLowerCase();if(await getUserByEmail(clean))",
-              "const {name,email,password,department,roleId,roleIds,status}=req.body||{};const requestedRoleIds=Array.from(new Set((Array.isArray(roleIds)?roleIds:[roleId]).map((x:any)=>String(x||'').trim()).filter(Boolean)));const clean=String(email||'').trim().toLowerCase();if(await getUserByEmail(clean))",
-              'app.ts second create destructure')
-          replace('server/app.ts',
-              "const roleDef=(await listRoles()).find(r=>r.id===roleId)||{id:'role_solicitante',name:'Solicitante',description:'',active:true,isSystem:true,permissions:[]};const role:Role=",
-              "const primaryRoleId=requestedRoleIds[0]||'role_solicitante';const roleDef=(await listRoles()).find(r=>r.id===primaryRoleId)||{id:'role_solicitante',name:'Solicitante',description:'',active:true,isSystem:true,permissions:[]};const role:Role=",
-              'app.ts second role definition')
-          replace('server/app.ts',
-              "role,roleId:roleDef.id,department:dept.name,status:status==='INACTIVO'?'INACTIVO':'ACTIVO'",
-              "role,roleId:primaryRoleId,roleIds:requestedRoleIds.length?requestedRoleIds:[primaryRoleId],department:dept.name,status:status==='INACTIVO'?'INACTIVO':'ACTIVO'",
-              'app.ts second insert user')
-          replace('server/app.ts',
-              "if(req.body.roleId)p.roleId=req.body.roleId;",
-              "if(req.body.roleId)p.roleId=req.body.roleId;if(Array.isArray(req.body.roleIds)&&req.body.roleIds.length)p.roleIds=Array.from(new Set(req.body.roleIds.map((x:any)=>String(x)).filter(Boolean)));",
-              'app.ts update roles')
-          replace('server/app.ts',
-              "res.json({success:true,user:sanitizeUser(u)});",
-              "const roles=await listRoles();res.json({success:true,user:sanitizeUser(u,roles,roles)});",
-              'app.ts update response')
+              # Add a multi-select role panel immediately before the Estado field.
+              role_panel = '''                  <div className="mt-2 rounded-md border border-indigo-100 bg-indigo-50/40 p-2">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] font-bold text-slate-600 uppercase">Roles adicionales</span>
+                      <span className="text-[10px] text-indigo-600 font-semibold">{userRoleIds.length} seleccionado(s)</span>
+                    </div>
+                    <div className="max-h-32 overflow-y-auto space-y-1">
+                      {rolesList.map((r) => {
+                        const checked = userRoleIds.includes(r.id);
+                        return (
+                          <label key={r.id} className="flex items-center gap-2 cursor-pointer rounded px-1.5 py-1 hover:bg-white">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => {
+                                setUserRoleIds(prev => checked ? prev.filter(id => id !== r.id) : [...prev, r.id]);
+                              }}
+                              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                            />
+                            <span className="text-[11px] text-slate-700">{r.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
+'''
+              if "Roles adicionales" not in s:
+                  marker = '''                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Estado *</label>'''
+                  if marker not in s:
+                      raise SystemExit('AdminView.tsx: Estado field anchor not found')
+                  s = s.replace(marker, role_panel + marker, 1)
 
-          # Admin UI: replace single-role select with multi-select checkboxes and submit roleIds.
-          p=Path('src/components/AdminView.tsx'); s=p.read_text(encoding='utf-8')
-          replace('src/components/AdminView.tsx',
-              "const [userRoleId, setUserRoleId] = useState('role_empleado');",
-              "const [userRoleId, setUserRoleId] = useState('role_empleado');\n  const [userRoleIds, setUserRoleIds] = useState<string[]>(['role_empleado']);",
-              'AdminView state')
-          replace('src/components/AdminView.tsx',
-              "setUserRoleId(rolesList[3]?.id || 'role_empleado');\n    setUserStatus('ACTIVO');",
-              "setUserRoleId(rolesList[3]?.id || 'role_empleado');\n    setUserRoleIds([rolesList[3]?.id || 'role_empleado']);\n    setUserStatus('ACTIVO');",
-              'AdminView new user')
-          replace('src/components/AdminView.tsx',
-              "setUserRoleId(user.roleId || (rolesList.find(r => r.name.toUpperCase() === String(user.role).toUpperCase())?.id || 'role_empleado'));\n    setUserStatus",
-              "const assigned = user.roleIds?.length ? user.roleIds : [user.roleId || (rolesList.find(r => r.name.toUpperCase() === String(user.role).toUpperCase())?.id || 'role_empleado')];\n    setUserRoleIds(assigned);\n    setUserRoleId(assigned[0]);\n    setUserStatus",
-              'AdminView edit user')
-          replace('src/components/AdminView.tsx',
-              "roleId: userRoleId,\n            status: userStatus,",
-              "roleId: userRoleIds[0] || userRoleId,\n            roleIds: userRoleIds,\n            status: userStatus,",
-              'AdminView edit payload')
-          replace('src/components/AdminView.tsx',
-              "roleId: userRoleId,\n            status: userStatus,\n          }),",
-              "roleId: userRoleIds[0] || userRoleId,\n            roleIds: userRoleIds,\n            status: userStatus,\n          }),",
-              'AdminView create payload')
-          old='''<select\n                    value={userRoleId}\n                    onChange={(e) => setUserRoleId(e.target.value)}\n                    className="w-full px-3 py-1.5 border border-slate-300 rounded-md focus:ring-1 focus:ring-indigo-500 focus:outline-none bg-white"\n                  >'''
-          new='''<div className="max-h-32 overflow-y-auto border border-slate-300 rounded-md p-2 bg-slate-50 space-y-1">\n                    {rolesList.map((r) => {\n                      const checked = userRoleIds.includes(r.id);\n                      return <label key={r.id} className="flex items-center gap-2 px-2 py-1 rounded hover:bg-white cursor-pointer">\n                        <input type="checkbox" checked={checked} onChange={() => { const next = checked ? userRoleIds.filter(id => id !== r.id) : [...userRoleIds, r.id]; if (!next.length) return; setUserRoleIds(next); setUserRoleId(next[0]); }} />\n                        <span className="text-[11px] font-semibold">{r.name}</span>\n                      </label>;\n                    })}\n                  </div>\n                  <div className="hidden">'''
-          replace('src/components/AdminView.tsx',old,new,'AdminView role selector open')
-          # Close the hidden wrapper immediately before the original select options close sequence.
-          p=Path('src/components/AdminView.tsx'); s=p.read_text(encoding='utf-8')
-          marker='''                  </select>\n                </div>'''
-          if marker in s:
-              s=s.replace(marker,'''                  </select>\n                  </div>\n                </div>''',1)
-          else:
-              # The selector was already replaced; no-op.
-              pass
-          p.write_text(s,encoding='utf-8')
+              # Never allow an empty role assignment; keep the visible legacy selector
+              # as the primary role while the checkboxes control the complete set.
+              s = s.replace(
+                  "value={userRoleId}\n                    onChange={(e) => setUserRoleId(e.target.value)}",
+                  "value={userRoleId}\n                    onChange={(e) => { const id = e.target.value; setUserRoleId(id); setUserRoleIds(prev => prev.includes(id) ? prev : [id, ...prev]); }}"
+              )
+
+              # Show all assigned role names in the user table.
+              s = s.replace("<th className=\"py-2.5 px-3\">Rol Asignado</th>", "<th className=\"py-2.5 px-3\">Roles Asignados</th>")
+              s = s.replace("{user.role}\n                      </span>", "{(user.roleIds?.length ? user.roleIds : [user.roleId]).map((id) => rolesList.find(r => r.id === id)?.name || id).filter(Boolean).join(' • ')}\n                      </span>", 1)
+
+              # New-user payload may have been missed by a prior partial patch.
+              s = s.replace(
+                  "department: finalDept,\n            roleId: userRoleId,\n            status: userStatus,",
+                  "department: finalDept,\n            roleId: userRoleIds[0] || userRoleId,\n            roleIds: userRoleIds,\n            status: userStatus,"
+              )
+              return s
+          edit('src/components/AdminView.tsx', admin)
+
+          # Verify backend invariants before compiling.
+          db = Path('server/db.ts').read_text(encoding='utf-8')
+          app = Path('server/app.ts').read_text(encoding='utf-8')
+          sec = Path('server/securityGate.ts').read_text(encoding='utf-8')
+          ui = Path('src/components/AdminView.tsx').read_text(encoding='utf-8')
+          required = [
+              ('server/db.ts', 'roleIds'),
+              ('server/db.ts', 'user_roles'),
+              ('server/app.ts', 'roleIds'),
+              ('server/securityGate.ts', 'sanitizeUser(u,roles,roles)'),
+              ('src/components/AdminView.tsx', 'userRoleIds'),
+              ('src/components/AdminView.tsx', 'roleIds: userRoleIds'),
+              ('src/components/AdminView.tsx', 'Roles adicionales'),
+          ]
+          blobs = {'server/db.ts':db,'server/app.ts':app,'server/securityGate.ts':sec,'src/components/AdminView.tsx':ui}
+          for file, needle in required:
+              if needle not in blobs[file]:
+                  raise SystemExit(f'Invariant failed: {file} missing {needle}')
 
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck
+      - name: TypeScript lint
         run: npm run lint
 
       - name: Production build
         run: npm run build
 
-      - name: Commit implementation
+      - name: Commit repaired branch
+        shell: bash
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add src/types.ts server/db.ts server/app.ts src/components/AdminView.tsx
-          git diff --cached --quiet || git commit -m "feat: enable safe multi-role user administration"
-          git push origin HEAD:feat/multi-role-admin-ui
+          if git diff --quiet; then
+            echo 'No changes to commit.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/securityGate.ts src/components/AdminView.tsx api/index.js
+          git commit -m 'fix: complete multi-role admin flow and verify build'
+          git push origin feat/multi-role-admin-ui

@@ -66,6 +66,8 @@ export interface User {
   department: string;
   role: Role;
   roleId?: string;
+  /** All assigned role IDs; roleId remains the primary/legacy role. */
+  roleIds?: string[];
   permissions?: Permission[];
   status: UserStatus;
   isVerified?: boolean;
@@ -86,7 +88,7 @@ export interface VerificationRecord {
   roleId: string;
   passwordHash: string;
   salt: string;
-  expiresAt: number; // timestamp in ms
+  expiresAt: number;
   attempts: number;
 }
 
@@ -176,4 +178,3 @@ export interface SystemStats {
   totalBosses?: number;
   totalRoles?: number;
 }
-

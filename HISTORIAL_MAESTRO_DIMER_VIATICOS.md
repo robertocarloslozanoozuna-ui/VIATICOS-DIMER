@@ -27,7 +27,7 @@ Variables auxiliares históricas que NO deben introducir ambigüedad ni sobreesc
 - `DIMER_SMTP_USER`
 - `DIMER_SMTP_APP_PASSWORD`
 
-Nunca registrar valores de estas variables en este documento.
+Nunca registrar valores de estas variables.
 
 ## Cambios realizados recientemente
 
@@ -60,37 +60,40 @@ Objetivo funcional:
 
 No guardar en este documento la contraseña ni secretos.
 
+## 5. Persistencia definitiva de Bandeja SMTP / Outbox
+Fecha: `2026-08-31`
+
+Se identificó que `outboxLogs` en `server/mailService.ts` era únicamente memoria RAM. Esto no es persistente en Vercel Serverless y se perdía después de reinicios o entre invocaciones.
+
+Corrección implementada en Google AI Studio:
+- Los eventos de correo se registran de forma persistente en la tabla existente `audit_logs` de Supabase.
+- Se utiliza la acción `ENVIO_CORREO_SMTP` para envíos de correo y `PRUEBA_SMTP` para diagnósticos cuando corresponde.
+- Los detalles persistidos incluyen `logId`, destinatario, asunto, contenido HTML, estado, error, `requestId`, folio y timestamp cuando están disponibles.
+- La persistencia está aislada con `try/catch` para que un fallo de auditoría no impida entregar un correo correctamente.
+- `GET /api/outbox` recupera los últimos registros persistidos y los transforma al modelo consumido por `OutboxView.tsx`.
+- Se mantiene compatibilidad con los registros existentes en memoria sin depender de ellos para la persistencia.
+- No se creó una tabla nueva y no se modificó el esquema de Supabase.
+
+### 6. Corrección de observaciones de aprobación/rechazo por correo
+Fecha: `2026-08-31`
+
+Problema corregido: las notificaciones posteriores podían mostrar como observación del aprobador el texto técnico `Rechazado directamente desde el correo electrónico`.
+
+Comportamiento definitivo:
+- Al aprobar desde correo sin observaciones, `comments` queda vacío/null y no se muestra una observación falsa.
+- Al rechazar, se conserva únicamente el motivo/observación real proporcionado por el aprobador.
+- El texto técnico del evento, si se requiere para auditoría, no debe presentarse como comentario escrito por el aprobador.
+- No se modificaron tokens ni el flujo general de aprobación/rechazo.
+
 ## PROBLEMA ACTUAL — OBSERVACIONES DE RECHAZO
 
-### Síntoma
-Cuando una solicitud es rechazada directamente desde el enlace del correo, el correo/notificación posterior muestra en **Observaciones**:
-
-`Rechazado directamente desde el correo electrónico`
-
-### Diagnóstico actual
-La base de datos y la RPC existente manejan un campo de comentarios/observaciones (`p_comments`). No se debe modificar Supabase ni la RPC sin evidencia adicional.
-
-La corrección debe hacerse en el flujo que procesa la acción del token de aprobación/rechazo y determina el valor que se envía como comentario/observación.
-
-### Comportamiento deseado
-- Si el usuario/jefe introduce observaciones al rechazar: guardar y mostrar exactamente esas observaciones.
-- Si rechaza sin escribir observaciones: dejar el campo de observaciones vacío o usar un valor neutro claramente distinguible de una observación del usuario.
-- El texto técnico `Rechazado directamente desde el correo electrónico` puede conservarse como información de auditoría/evento si se necesita, pero **NO debe aparecer como si fuera la observación escrita por el aprobador**.
-- No alterar el flujo de aprobación/rechazo ni los tokens.
-
-### Regla para la siguiente corrección
-Revisar primero:
-1. `server/app.ts` — endpoint que procesa `/api/approval-tokens/:token/action` y/o la acción desde correo.
-2. `server/db.ts` — llamada a `process_approval_token_action` y mapeo de `p_comments`.
-3. `server/mailService.ts` — plantilla que presenta `comments`/`rejection_reason`.
-
-No modificar `schema.sql` ni Supabase hasta confirmar que el origen no está en código.
+El problema descrito originalmente quedó corregido en el entorno de Google AI Studio. Antes de cualquier cambio adicional, verificar en GitHub que la corrección esté sincronizada y que `server/app.ts`, `server/db.ts` y `server/mailService.ts` mantengan el mismo comportamiento.
 
 ## Vercel / Google AI Studio
-- Los dos entornos ya lograron envío SMTP real.
-- Google AI Studio también logró enviar correo de prueba.
-- Vercel también logró enviar correo de prueba.
-- El problema de `535 BadCredentials` quedó resuelto después de corregir las variables/secreto SMTP.
+- Ambos entornos lograron envío SMTP real.
+- Google AI Studio logró enviar correo de prueba.
+- Vercel logró enviar correo de prueba.
+- El problema `535 BadCredentials` quedó resuelto después de corregir las variables/secreto SMTP.
 - No asumir que los Secrets de Google AI Studio y Vercel se sincronizan automáticamente: deben verificarse por separado.
 
 ## GitHub / sincronización
@@ -99,6 +102,7 @@ Existen/han existido diferencias entre la copia de AI Studio y GitHub. Antes de 
 - Evitar workflows antiguos que puedan restaurar `server/app.ts` desde commits históricos.
 - No ejecutar restauraciones destructivas sin verificar el contenido actual.
 - Recompilar `api/index.js` después de cambios de backend cuando el proyecto lo requiera.
+- El historial maestro debe reflejar cualquier cambio realizado en AI Studio antes de continuar con otra modificación.
 
 ## Validaciones obligatorias después de cambios
 1. `npx tsc --noEmit`
@@ -111,6 +115,7 @@ Existen/han existido diferencias entre la copia de AI Studio y GitHub. Antes de 
 8. Aprobar y rechazar mediante correo.
 9. Verificar que las observaciones sean las introducidas por el aprobador y no texto técnico.
 10. Verificar Bandeja SMTP y Log de Auditoría.
+11. Reiniciar/redeployar y comprobar que el historial de Bandeja SMTP permanezca disponible.
 
 ## Regla de continuidad para Google AI Studio
 Cuando se retome el proyecto, entregar este archivo a Google AI Studio y solicitar:
@@ -122,4 +127,4 @@ Cuando se retome el proyecto, entregar este archivo a Google AI Studio y solicit
 - actualizar este historial después de cada cambio.
 
 ## Última actualización
-28-08-2026 — Se creó este historial maestro en GitHub para documentar continuidad y preparar la corrección de observaciones de rechazo.
+`2026-08-31` — Se sincronizó el historial maestro con los resultados de la corrección de persistencia de Bandeja SMTP/Outbox y la corrección de observaciones de aprobación/rechazo. No se almacenan secretos.

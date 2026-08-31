@@ -1,0 +1,96 @@
+name: Force multi-role repair
+
+on:
+  push:
+    branches: [feat/multi-role-admin-ui]
+    paths: ['.github/workflows/force-multi-role-repair.yml']
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch multi-role UI safely
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('src/components/AdminView.tsx')
+          s = p.read_text(encoding='utf-8')
+
+          if 'const [userRoleIds, setUserRoleIds]' not in s:
+              anchor = "  const [userRoleId, setUserRoleId] = useState('role_empleado');"
+              if anchor not in s:
+                  raise SystemExit('AdminView: role state anchor not found')
+              s = s.replace(anchor, anchor + "\n  const [userRoleIds, setUserRoleIds] = useState<string[]>(['role_empleado']);", 1)
+
+          s = s.replace(
+              "setUserRoleId(rolesList[3]?.id || 'role_empleado');\n    setUserStatus('ACTIVO');",
+              "setUserRoleId(rolesList[3]?.id || 'role_empleado');\n    setUserRoleIds([rolesList[3]?.id || 'role_empleado']);\n    setUserStatus('ACTIVO');",
+              1
+          )
+
+          old_edit = "setUserRoleId(user.roleId || (rolesList.find(r => r.name.toUpperCase() === String(user.role).toUpperCase())?.id || 'role_empleado'));\n    setUserStatus"
+          new_edit = "const assignedRoleIds = user.roleIds?.length ? user.roleIds : [user.roleId || (rolesList.find(r => r.name.toUpperCase() === String(user.role).toUpperCase())?.id || 'role_empleado')];\n    setUserRoleIds(assignedRoleIds);\n    setUserRoleId(assignedRoleIds[0]);\n    setUserStatus"
+          if old_edit in s:
+              s = s.replace(old_edit, new_edit, 1)
+          elif 'const assignedRoleIds = user.roleIds?.length' not in s:
+              raise SystemExit('AdminView: edit-user role anchor not found')
+
+          s = s.replace(
+              "roleId: userRoleId,\n            status: userStatus,",
+              "roleId: userRoleIds[0] || userRoleId,\n            roleIds: userRoleIds,\n            status: userStatus,"
+          )
+
+          if 'Roles adicionales' not in s:
+              marker = '''                <div>\n                  <label className="block font-bold text-slate-700 mb-1">Estado *</label>'''
+              panel = '''                  <div className="mt-2 rounded-md border border-indigo-100 bg-indigo-50/40 p-2">\n                    <div className="flex items-center justify-between mb-1.5">\n                      <span className="text-[10px] font-bold text-slate-600 uppercase">Roles adicionales</span>\n                      <span className="text-[10px] text-indigo-600 font-semibold">{userRoleIds.length} seleccionado(s)</span>\n                    </div>\n                    <div className="max-h-32 overflow-y-auto space-y-1">\n                      {rolesList.map((r) => {\n                        const checked = userRoleIds.includes(r.id);\n                        return (\n                          <label key={r.id} className="flex items-center gap-2 cursor-pointer rounded px-1.5 py-1 hover:bg-white">\n                            <input type="checkbox" checked={checked} onChange={() => setUserRoleIds(prev => checked ? prev.filter(id => id !== r.id) : [...prev, r.id])} className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />\n                            <span className="text-[11px] text-slate-700">{r.name}</span>\n                          </label>\n                        );\n                      })}\n                    </div>\n                  </div>\n'''
+              if marker not in s:
+                  raise SystemExit('AdminView: Estado field anchor not found')
+              s = s.replace(marker, panel + marker, 1)
+
+          s = s.replace(
+              "value={userRoleId}\n                    onChange={(e) => setUserRoleId(e.target.value)}",
+              "value={userRoleId}\n                    onChange={(e) => { const id = e.target.value; setUserRoleId(id); setUserRoleIds(prev => prev.includes(id) ? prev : [id, ...prev]); }}"
+          )
+          s = s.replace('<th className="py-2.5 px-3">Rol Asignado</th>', '<th className="py-2.5 px-3">Roles Asignados</th>')
+          s = s.replace(
+              "{user.role}\n                      </span>",
+              "{(user.roleIds?.length ? user.roleIds : [user.roleId]).map((id) => rolesList.find(r => r.id === id)?.name || id).filter(Boolean).join(' • ')}\n                      </span>",
+              1
+          )
+
+          p.write_text(s, encoding='utf-8')
+
+          checks = ['userRoleIds', 'roleIds: userRoleIds', 'Roles adicionales']
+          for needle in checks:
+              if needle not in s:
+                  raise SystemExit(f'Invariant failed: {needle}')
+
+      - name: Verify source invariants
+        run: |
+          grep -q "roleIds" server/db.ts
+          grep -q "user_roles" server/db.ts
+          grep -q "roleIds" server/app.ts
+          grep -q "sanitizeUser(u,roles,roles)" server/securityGate.ts
+
+      - name: Install and verify
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+
+      - name: Commit repaired UI
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/components/AdminView.tsx
+          if git diff --cached --quiet; then echo 'No UI changes required'; exit 0; fi
+          git commit -m 'fix: enable multi-role assignment in admin UI'
+          git push origin feat/multi-role-admin-ui

@@ -5,6 +5,10 @@ on:
     branches: [feat/multi-role-admin-ui]
     paths:
       - '.github/workflows/fix-multi-role.yml'
+      - 'server/securityGate.ts'
+      - 'server/db.ts'
+      - 'server/app.ts'
+      - 'src/components/AdminView.tsx'
   workflow_dispatch:
 
 permissions:

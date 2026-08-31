@@ -1287,6 +1287,9 @@ export default async function AprobarPage({ params }: Props) {
   }
 });
 
+// server/apiEntry.ts
+import express2 from "express";
+
 // server/app.ts
 init_supabase();
 init_db();
@@ -1298,26 +1301,34 @@ import crypto2 from "crypto";
 import nodemailer from "nodemailer";
 var outboxLogs = [];
 function credentials() {
-  const host = process.env.SMTP_HOST?.trim() || process.env.EMAIL_HOST?.trim() || "smtp.gmail.com";
-  const port = parseInt(process.env.SMTP_PORT || process.env.EMAIL_PORT || "465", 10);
-  const user = (process.env.SMTP_USER || process.env.SMTP_USERNAME || process.env.EMAIL_USER || process.env.GMAIL_USER || "").trim().replace(/^["']|["']$/g, "");
-  const pass = (process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.EMAIL_PASS || process.env.EMAIL_PASSWORD || process.env.GMAIL_APP_PASSWORD || process.env.GMAIL_PASSWORD || "").trim().replace(/^["']|["']$/g, "").replace(/\s+/g, "");
-  return { host, port, user, pass, secure: process.env.SMTP_SECURE === "true" || port === 465 };
+  const host = (process.env.SMTP_HOST || "smtp.gmail.com").trim();
+  const port = parseInt(process.env.SMTP_PORT || "465", 10);
+  const user = (process.env.SMTP_USER || "").trim().replace(/^["']|["']$/g, "");
+  const pass = (process.env.SMTP_PASS || "").trim().replace(/^["']|["']$/g, "").replace(/\s+/g, "");
+  const secure = (process.env.SMTP_SECURE || "").trim().toLowerCase() === "true" || port === 465;
+  return { host, port, user, pass, secure };
 }
 function getMailTransporter() {
   const c = credentials();
   if (!c.user || !c.pass) return null;
-  if (c.host.toLowerCase() === "smtp.gmail.com") return nodemailer.createTransport({ service: "gmail", auth: { user: c.user, pass: c.pass }, tls: { rejectUnauthorized: false } });
-  return nodemailer.createTransport({ host: c.host, port: c.port, secure: c.secure, auth: { user: c.user, pass: c.pass }, tls: { rejectUnauthorized: false }, connectionTimeout: 15e3, greetingTimeout: 15e3, socketTimeout: 2e4 });
+  return nodemailer.createTransport({
+    host: c.host,
+    port: c.port,
+    secure: c.secure,
+    auth: { user: c.user, pass: c.pass },
+    tls: { rejectUnauthorized: false },
+    connectionTimeout: 15e3,
+    greetingTimeout: 15e3,
+    socketTimeout: 2e4
+  });
 }
 function getFromAddress(customFrom) {
-  if (customFrom?.trim()) return customFrom.trim();
-  const from = process.env.SMTP_FROM || process.env.EMAIL_FROM || process.env.MAIL_FROM;
-  if (from?.trim()) return from.trim();
   const c = credentials();
+  const candidate = customFrom?.trim() || process.env.SMTP_FROM?.trim();
+  if (candidate && candidate.includes("@") && !candidate.includes(c.pass)) return candidate;
   return `Dimer Notificaciones <${c.user || "sistemas@dimer.com.mx"}>`;
 }
-var esc = (v) => String(v ?? "").replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[m]);
+var esc = (v) => String(v ?? "").replace(/[&<>\"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[m]);
 var formatCurrency = (amount) => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(Number(amount || 0));
 function buildBossApprovalEmailHtml(params) {
   const { request, user, approveUrl, rejectUrl, token } = params;
@@ -1354,7 +1365,7 @@ async function sendEmail(p) {
   const logId = `MAIL-${Date.now()}-${Math.floor(Math.random() * 1e5)}`;
   const transporter = getMailTransporter();
   if (!transporter) {
-    const error = "Faltan credenciales SMTP";
+    const error = "Faltan credenciales SMTP: se requieren SMTP_USER y SMTP_PASS";
     return { success: false, logId, status: process.env.VERCEL || process.env.NODE_ENV === "production" ? "FALLIDO" : "SIMULADO", error };
   }
   try {
@@ -1944,11 +1955,12 @@ function createApp() {
   });
   app2.get("/api/outbox", requireAuth, async (_req, res) => res.json(outboxLogs));
   app2.get("/api/smtp/status", requireAuth, async (_req, res) => {
-    const host = process.env.SMTP_HOST || process.env.EMAIL_HOST || "smtp.gmail.com";
-    const port = process.env.SMTP_PORT || process.env.EMAIL_PORT || "465";
-    const user = (process.env.SMTP_USER || process.env.SMTP_USERNAME || process.env.EMAIL_USER || process.env.GMAIL_USER || "").trim();
-    const pass = (process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.EMAIL_PASS || process.env.GMAIL_APP_PASSWORD || "").trim().replace(/\s+/g, "");
-    res.json({ configured: Boolean(user && pass), details: { host, port, user: user ? `${user.slice(0, 3)}***@${user.split("@")[1] || ""}` : "", hasPassword: Boolean(pass), passwordLength: pass.length, secure: port === "465", from: getFromAddress() } });
+    const host = (process.env.SMTP_HOST || "smtp.gmail.com").trim();
+    const port = (process.env.SMTP_PORT || "465").trim();
+    const user = (process.env.SMTP_USER || "").trim();
+    const pass = (process.env.SMTP_PASS || "").trim().replace(/\s+/g, "");
+    const configured = Boolean(user && pass);
+    res.json({ configured, details: { host, port, user: user ? `${user.slice(0, 3)}***@${user.split("@")[1] || ""}` : "", hasPassword: Boolean(pass), passwordLength: pass.length, secure: port === "465", from: getFromAddress() }, instructions: configured ? "SMTP configurado mediante SMTP_USER + SMTP_PASS." : "Faltan SMTP_USER y/o SMTP_PASS en el entorno del servidor." });
   });
   app2.post("/api/smtp/test", requireAuth, requirePermission("administrar_configuracion"), async (req, res) => {
     try {
@@ -1984,10 +1996,147 @@ function createApp() {
   return app2;
 }
 
+// server/securityGate.ts
+init_db();
+import crypto3 from "crypto";
+var PUBLIC_EXACT = /* @__PURE__ */ new Set(["/api/health", "/health", "/api/diagnostic", "/diagnostic", "/api/auth/login", "/auth/login", "/api/login", "/login", "/api/auth/register-init", "/api/auth/verify-code", "/api/auth/resend-code", "/api/departments"]);
+var ADMIN_EXACT = /* @__PURE__ */ new Set(["/api/outbox", "/api/stats", "/api/code-artifacts", "/api/permissions", "/api/roles"]);
+var CONFIG_EXACT = /* @__PURE__ */ new Set(["/api/smtp/status", "/api/smtp/test", "/api/audit-logs"]);
+function pathOf(req) {
+  const raw = String(req.originalUrl || req.url || "/");
+  return new URL(raw, "http://localhost").pathname;
+}
+function parseCookies2(req) {
+  const raw = String(req.headers.cookie || "");
+  return Object.fromEntries(raw.split(";").map((x) => x.trim()).filter(Boolean).map((x) => {
+    const i = x.indexOf("=");
+    return i < 0 ? [x, ""] : [x.slice(0, i), decodeURIComponent(x.slice(i + 1))];
+  }));
+}
+function verifyJwt(token) {
+  const secret = process.env.JWT_SECRET;
+  if (!secret) return null;
+  const p = token.split(".");
+  if (p.length !== 3) return null;
+  const expected = crypto3.createHmac("sha256", secret).update(`${p[0]}.${p[1]}`).digest("base64url");
+  const a = Buffer.from(expected), b = Buffer.from(p[2]);
+  if (a.length !== b.length || !crypto3.timingSafeEqual(a, b)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(p[1], "base64url").toString("utf8"));
+    if (!payload.sub || !payload.exp || payload.exp < Math.floor(Date.now() / 1e3)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+async function currentUser(req) {
+  const cookies = parseCookies2(req);
+  const bearer = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
+  const token = cookies.dimer_session || bearer;
+  if (!token) return null;
+  const payload = verifyJwt(token);
+  if (!payload?.sub) return null;
+  try {
+    const u = await getUserById(payload.sub);
+    if (!u || u.status !== "ACTIVO") return null;
+    const roles = await listRoles();
+    return sanitizeUser(u, roles.find((r) => r.id === u.roleId));
+  } catch {
+    return null;
+  }
+}
+function originAllowed(req) {
+  const origin = String(req.headers.origin || "").trim();
+  if (!origin) return true;
+  const configured = process.env.APP_URL?.trim().replace(/\/+$/, "");
+  if (configured) return origin === configured;
+  const production = process.env.VERCEL_PROJECT_PRODUCTION_URL || process.env.VERCEL_URL;
+  if (production) return origin === `https://${production}`;
+  return true;
+}
+function escapeHtml(v) {
+  return String(v ?? "").replace(/[&<>\"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[m]);
+}
+function approvalPage(token, action, request) {
+  const title = action === "approve" ? "Autorizar solicitud" : "Rechazar solicitud";
+  const color = action === "approve" ? "#059669" : "#dc2626";
+  const reason = action === "reject" ? '<textarea id="reason" placeholder="Motivo del rechazo" style="width:100%;min-height:100px;padding:10px;border:1px solid #cbd5e1;border-radius:8px;margin:12px 0;box-sizing:border-box"></textarea>' : "";
+  const js = `async function go(){const reasonEl=document.getElementById('reason');const reason=reasonEl?reasonEl.value.trim():'';if('${action}'==='reject'&&!reason){alert('El motivo del rechazo es obligatorio.');return;}const q=new URLSearchParams({token:${JSON.stringify(token)},action:${JSON.stringify(action)}});if(reason)q.set('reason',reason);const r=await fetch('/api/approval/token-action/confirm?'+q.toString(),{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest'}});document.open();document.write(await r.text());document.close();}`;
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)}</title></head><body style="font-family:Arial,sans-serif;background:#f1f5f9;padding:24px;color:#0f172a"><div style="max-width:620px;margin:auto;background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden"><div style="background:#0f172a;color:#fff;padding:24px"><h2 style="margin:0">${escapeHtml(title)}</h2><p style="margin-bottom:0">Vi\xE1ticos Dimer \u2022 Folio ${escapeHtml(request.folio)}</p></div><div style="padding:28px"><p><strong>Solicitante:</strong> ${escapeHtml(request.requesterName)}</p><p><strong>Departamento:</strong> ${escapeHtml(request.department)}</p><p><strong>Destino:</strong> ${escapeHtml(request.destination)}</p><p><strong>Monto:</strong> $${Number(request.amountRequested || 0).toLocaleString("es-MX", { minimumFractionDigits: 2 })} MXN</p>${reason}<button onclick="go()" style="background:${color};color:#fff;border:0;border-radius:8px;padding:13px 22px;font-weight:700;cursor:pointer">Confirmar</button></div><div style="padding:16px;background:#f8fafc;color:#64748b;font-size:11px;text-align:center">La acci\xF3n s\xF3lo se ejecuta despu\xE9s de una confirmaci\xF3n humana.</div></div><script>${js}</script></body></html>`;
+}
+async function handleApproval(req, res) {
+  const path = pathOf(req);
+  const isConfirm = path === "/api/approval/token-action/confirm";
+  const legacy = path.startsWith("/approval-response/") || path.startsWith("/api/approval-response/");
+  const url = new URL(String(req.originalUrl || req.url || "/"), "http://localhost");
+  let token = url.searchParams.get("token") || "";
+  let action = url.searchParams.get("action") || "";
+  if (legacy) {
+    const parts = path.split("/");
+    token = decodeURIComponent(parts.at(-2) || "");
+    action = decodeURIComponent(parts.at(-1) || "");
+  }
+  const decision = action === "reject" || action === "rechazar" ? "RECHAZADA" : action === "approve" || action === "aprobar" ? "APROBADA" : null;
+  if (!token || !decision) return res.status(400).send(buildTokenApprovalResultPageHtml({ status: "INVALIDA", errorMessage: "Token o acci\xF3n inv\xE1lidos." }));
+  if (req.method === "GET") {
+    const v = await validateApprovalToken(token);
+    if (!v.valid) return res.status(400).send(buildTokenApprovalResultPageHtml({ status: "INVALIDA", errorMessage: v.error }));
+    return res.status(200).send(approvalPage(token, decision === "APROBADA" ? "approve" : "reject", v.request));
+  }
+  if (req.method !== "POST" || !isConfirm) return res.status(405).send("M\xE9todo no permitido");
+  const site = String(req.headers["sec-fetch-site"] || "");
+  if (site === "cross-site" || !originAllowed(req)) return res.status(403).send("Origen no permitido");
+  const reason = String(url.searchParams.get("reason") || "").trim();
+  if (decision === "RECHAZADA" && !reason) return res.status(400).send(buildTokenApprovalResultPageHtml({ status: "INVALIDA", errorMessage: "El motivo del rechazo es obligatorio." }));
+  try {
+    const result = await processApprovalTokenAction(token, decision, void 0, reason || null);
+    const r = await getRequest(String(result.requestId));
+    if (!r) throw new Error("La solicitud procesada no fue encontrada");
+    const requester = result.userId ? await getUserById(String(result.userId)) : null;
+    const user = requester ? sanitizeUser(requester) : null;
+    if (decision === "APROBADA" && user) {
+      const html = buildSystemsApprovedEmailHtml({ request: r, user, approverName: String(result.bossEmail || "Jefe Aprobador"), approverEmail: String(result.bossEmail || ""), approvedAt: String(r.approvedAt || result.processedAt || (/* @__PURE__ */ new Date()).toISOString()) });
+      await sendEmail({ to: user.email, subject: `SOLICITUD DE VI\xC1TICOS APROBADA - ${r.folio}`, html, requestId: r.id, folio: r.folio });
+      await sendEmail({ to: "sistemas@dimer.com.mx", subject: `SOLICITUD DE VI\xC1TICOS APROBADA - ${r.folio}`, html, requestId: r.id, folio: r.folio });
+      const fin = process.env.FINANZAS_EMAIL || "finanzas@dimer.com.mx";
+      if (fin.toLowerCase() !== "sistemas@dimer.com.mx") await sendEmail({ to: fin, subject: `SOLICITUD DE VI\xC1TICOS APROBADA - ${r.folio}`, html, requestId: r.id, folio: r.folio });
+    } else if (decision === "RECHAZADA" && user) {
+      await sendEmail({ to: user.email, subject: `SOLICITUD DE VI\xC1TICOS RECHAZADA - ${r.folio}`, html: `<p>Su solicitud <strong>${escapeHtml(r.folio)}</strong> fue rechazada.</p><p>${escapeHtml(r.comments || reason)}</p>`, requestId: r.id, folio: r.folio });
+    }
+    return res.status(200).send(buildTokenApprovalResultPageHtml({ status: decision, request: r, actionTaken: decision, processedBy: String(result.bossEmail || ""), processedAt: String(result.processedAt || (/* @__PURE__ */ new Date()).toISOString()) }));
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Error procesando autorizaci\xF3n";
+    return res.status(/utilizado|expirado|inválido|procesada/i.test(msg) ? 400 : 500).send(buildTokenApprovalResultPageHtml({ status: "INVALIDA", errorMessage: msg }));
+  }
+}
+async function securityGate(req, res, next) {
+  const path = pathOf(req);
+  if (path === "/api/approval/token-action" || path === "/api/approval/token-action/confirm" || path.startsWith("/approval-response/") || path.startsWith("/api/approval-response/")) return handleApproval(req, res);
+  if (req.method !== "GET" && req.method !== "HEAD" && req.method !== "OPTIONS") {
+    const site = String(req.headers["sec-fetch-site"] || "");
+    if (site === "cross-site" || !originAllowed(req)) return res.status(403).json({ error: "Origen no permitido" });
+  }
+  if (PUBLIC_EXACT.has(path)) return next();
+  if (path.startsWith("/api/")) {
+    const user = await currentUser(req);
+    if (!user) return res.status(401).json({ error: "Autenticaci\xF3n requerida" });
+    if (path === "/api/me") return res.json({ user, appUrl: process.env.APP_URL || void 0, finanzasEmail: process.env.FINANZAS_EMAIL || "finanzas@dimer.com.mx", systemsEmail: "sistemas@dimer.com.mx" });
+    if (ADMIN_EXACT.has(path) && user.role !== "ADMIN") return res.status(403).json({ error: "Permiso de administraci\xF3n requerido" });
+    if (CONFIG_EXACT.has(path) && !hasPermission(user, "administrar_configuracion")) return res.status(403).json({ error: "Permiso de configuraci\xF3n requerido" });
+    req.dimerUser = user;
+  }
+  return next();
+}
+
 // server/apiEntry.ts
 var app = createApp();
-var apiEntry_default = app;
+var handler = express2();
+handler.set("trust proxy", 1);
+handler.use(securityGate);
+handler.use(app);
+var apiEntry_default = handler;
 export {
   app,
-  apiEntry_default as default
+  apiEntry_default as default,
+  handler
 };

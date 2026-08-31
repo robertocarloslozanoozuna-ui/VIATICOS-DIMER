@@ -23,7 +23,6 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
-          import re
 
           mail = Path('server/mailService.ts')
           text = mail.read_text(encoding='utf-8')
@@ -65,18 +64,14 @@ jobs:
               createdAt:timestamp
             };
 
-            // Keep a short-lived in-memory cache for the current invocation.
             outboxLogs.unshift(log);
             if(outboxLogs.length>200)outboxLogs.pop();
 
-            // Persist the SMTP outbox in Supabase through audit_logs so it survives
-            // Vercel serverless instance recycling and is visible from any instance.
             try{
               const isTest=p.subject.includes('[PRUEBA]');
               await recordAuditLog({
                 requestId:p.requestId||null,
-                userName:isTest?'Prueba Diagnóstico SMTP':'Sistema de Notificaciones',
-                userEmail:p.to,
+                userId:null,
                 action:isTest?'PRUEBA_SMTP':'ENVIO_CORREO_SMTP',
                 details:{
                   logId,
@@ -87,6 +82,8 @@ jobs:
                   error:errorMsg||null,
                   requestId:p.requestId||null,
                   folio:p.folio||null,
+                  userEmail:p.to,
+                  userName:isTest?'Prueba Diagnóstico SMTP':'Sistema de Notificaciones',
                   timestamp
                 }
               });

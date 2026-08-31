@@ -2002,6 +2002,7 @@ import crypto3 from "crypto";
 var PUBLIC_EXACT = /* @__PURE__ */ new Set(["/api/health", "/health", "/api/diagnostic", "/diagnostic", "/api/auth/login", "/auth/login", "/api/login", "/login", "/api/auth/register-init", "/api/auth/verify-code", "/api/auth/resend-code", "/api/departments"]);
 var ADMIN_EXACT = /* @__PURE__ */ new Set(["/api/outbox", "/api/stats", "/api/code-artifacts", "/api/permissions", "/api/roles"]);
 var CONFIG_EXACT = /* @__PURE__ */ new Set(["/api/smtp/status", "/api/smtp/test", "/api/audit-logs"]);
+var PROTECTED_REQUEST_FIELDS = /* @__PURE__ */ new Set(["id", "folio", "userId", "status", "approvalToken", "approvedBy", "approvedAt", "rejectedBy", "rejectedAt", "rejectionReason", "createdAt", "updatedAt"]);
 function pathOf(req) {
   const raw = String(req.originalUrl || req.url || "/");
   return new URL(raw, "http://localhost").pathname;
@@ -2123,6 +2124,13 @@ async function securityGate(req, res, next) {
     if (path === "/api/me") return res.json({ user, appUrl: process.env.APP_URL || void 0, finanzasEmail: process.env.FINANZAS_EMAIL || "finanzas@dimer.com.mx", systemsEmail: "sistemas@dimer.com.mx" });
     if (ADMIN_EXACT.has(path) && user.role !== "ADMIN") return res.status(403).json({ error: "Permiso de administraci\xF3n requerido" });
     if (CONFIG_EXACT.has(path) && !hasPermission(user, "administrar_configuracion")) return res.status(403).json({ error: "Permiso de configuraci\xF3n requerido" });
+    const requestMatch = /^\/api\/requests\/([^/]+)$/.exec(path);
+    if (requestMatch && (req.method === "PUT" || req.method === "PATCH")) {
+      const r = await getRequest(decodeURIComponent(requestMatch[1]));
+      if (!r) return res.status(404).json({ error: "Solicitud no encontrada" });
+      if (user.role !== "ADMIN" && (r.userId !== user.id || !["PENDIENTE_APROBACION", "CORRECCION_SOLICITADA", "BORRADOR"].includes(r.status))) return res.status(403).json({ error: "No puedes modificar esta solicitud en su estado actual" });
+      if (req.body && typeof req.body === "object") for (const key of PROTECTED_REQUEST_FIELDS) delete req.body[key];
+    }
     req.dimerUser = user;
   }
   return next();
@@ -2132,6 +2140,7 @@ async function securityGate(req, res, next) {
 var app = createApp();
 var handler = express2();
 handler.set("trust proxy", 1);
+handler.use(express2.json({ limit: "10mb" }));
 handler.use(securityGate);
 handler.use(app);
 var apiEntry_default = handler;

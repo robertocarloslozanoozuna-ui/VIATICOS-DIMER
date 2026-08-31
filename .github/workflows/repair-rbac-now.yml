@@ -1,0 +1,89 @@
+name: Deterministic multi-role repair
+
+on:
+  push:
+    branches:
+      - feat/multi-role-admin-ui
+    paths:
+      - '.github/workflows/repair-rbac-now.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch securityGate and AdminView
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          # securityGate: merge permissions from every assigned role.
+          p = Path('server/securityGate.ts')
+          s = p.read_text()
+          s = s.replace('return sanitizeUser(u,roles.find(r=>r.id===u.roleId));', 'return sanitizeUser(u,roles,roles);')
+          p.write_text(s)
+
+          # AdminView: multi-role state and payload.
+          p = Path('src/components/AdminView.tsx')
+          s = p.read_text()
+          anchor = "  const [userRoleId, setUserRoleId] = useState('role_empleado');"
+          if 'const [userRoleIds, setUserRoleIds]' not in s:
+              assert anchor in s
+              s = s.replace(anchor, anchor + "\n  const [userRoleIds, setUserRoleIds] = useState<string[]>(['role_empleado']);", 1)
+
+          s = s.replace("setUserRoleId(rolesList[3]?.id || 'role_empleado');\n    setUserStatus('ACTIVO');", "setUserRoleId(rolesList[3]?.id || 'role_empleado');\n    setUserRoleIds([rolesList[3]?.id || 'role_empleado']);\n    setUserStatus('ACTIVO');", 1)
+
+          old = "setUserRoleId(user.roleId || (rolesList.find(r => r.name.toUpperCase() === String(user.role).toUpperCase())?.id || 'role_empleado'));\n    setUserStatus"
+          new = "const assignedRoleIds = user.roleIds?.length ? user.roleIds : [user.roleId || (rolesList.find(r => r.name.toUpperCase() === String(user.role).toUpperCase())?.id || 'role_empleado')];\n    setUserRoleIds(assignedRoleIds);\n    setUserRoleId(assignedRoleIds[0]);\n    setUserStatus"
+          if old in s: s = s.replace(old, new, 1)
+
+          s = s.replace('roleId: userRoleId,\n            status: userStatus,', 'roleId: userRoleIds[0] || userRoleId,\n            roleIds: userRoleIds,\n            status: userStatus,')
+          s = s.replace('roleId: userRoleId,\n            status: userStatus,', 'roleId: userRoleIds[0] || userRoleId,\n            roleIds: userRoleIds,\n            status: userStatus,')
+
+          role_panel = '''                  <div className="mt-2 rounded-md border border-indigo-100 bg-indigo-50/40 p-2">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] font-bold text-slate-600 uppercase">Roles adicionales</span>
+                      <span className="text-[10px] text-indigo-600 font-semibold">{userRoleIds.length} seleccionado(s)</span>
+                    </div>
+                    <div className="max-h-32 overflow-y-auto space-y-1">
+                      {rolesList.map((r) => {
+                        const checked = userRoleIds.includes(r.id);
+                        return <label key={r.id} className="flex items-center gap-2 cursor-pointer rounded px-1.5 py-1 hover:bg-white">
+                          <input type="checkbox" checked={checked} onChange={() => setUserRoleIds(prev => checked ? prev.filter(id => id !== r.id) : [...prev, r.id])} className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
+                          <span className="text-[11px] text-slate-700">{r.name}</span>
+                        </label>;
+                      })}
+                    </div>
+                  </div>
+'''
+          if 'Roles adicionales' not in s:
+              marker = '''                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Estado *</label>'''
+              assert marker in s
+              s = s.replace(marker, role_panel + marker, 1)
+
+          p.write_text(s)
+          PY
+
+      - name: Verify
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+          grep -q 'userRoleIds' src/components/AdminView.tsx
+          grep -q 'roleIds: userRoleIds' src/components/AdminView.tsx
+          grep -q 'sanitizeUser(u,roles,roles)' server/securityGate.ts
+
+      - name: Commit repaired files
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/securityGate.ts src/components/AdminView.tsx api/index.js
+          git diff --cached --quiet || (git commit -m 'fix: finish multi-role admin UI and permission resolution' && git push origin feat/multi-role-admin-ui)

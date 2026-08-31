@@ -67,6 +67,7 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
   const [isCustomDept, setIsCustomDept] = useState(false);
   const [customDeptName, setCustomDeptName] = useState('');
   const [userRoleId, setUserRoleId] = useState('role_empleado');
+  const [userRoleIds, setUserRoleIds] = useState<string[]>(['role_empleado']);
   const [userStatus, setUserStatus] = useState<'ACTIVO' | 'INACTIVO'>('ACTIVO');
 
   // Role Modal State
@@ -133,6 +134,7 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
     setIsCustomDept(false);
     setCustomDeptName('');
     setUserRoleId(rolesList[3]?.id || 'role_empleado');
+    setUserRoleIds([rolesList[3]?.id || 'role_empleado']);
     setUserStatus('ACTIVO');
     setShowUserModal(true);
   };
@@ -145,7 +147,9 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
     setUserDept(user.department);
     setIsCustomDept(false);
     setCustomDeptName('');
-    setUserRoleId(user.roleId || (rolesList.find(r => r.name.toUpperCase() === String(user.role).toUpperCase())?.id || 'role_empleado'));
+    const assignedRoleIds = user.roleIds?.length ? user.roleIds : [user.roleId || (rolesList.find(r => r.name.toUpperCase() === String(user.role).toUpperCase())?.id || 'role_empleado')];
+    setUserRoleIds(assignedRoleIds);
+    setUserRoleId(assignedRoleIds[0]);
     setUserStatus(user.status || 'ACTIVO');
     setShowUserModal(true);
   };
@@ -177,7 +181,8 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
             name: userName.trim(),
             email: userEmail.trim(),
             department: finalDept,
-            roleId: userRoleId,
+            roleId: userRoleIds[0] || userRoleId,
+            roleIds: userRoleIds,
             status: userStatus,
             password: userPassword.trim() ? userPassword.trim() : undefined,
           }),
@@ -195,7 +200,8 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
             email: userEmail.trim(),
             password: userPassword.trim(),
             department: finalDept,
-            roleId: userRoleId,
+            roleId: userRoleIds[0] || userRoleId,
+            roleIds: userRoleIds,
             status: userStatus,
           }),
         });
@@ -603,7 +609,7 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
                 <tr className="bg-slate-100/70 border-b border-slate-200 text-slate-600 font-bold uppercase text-[10px]">
                   <th className="py-2.5 px-3">Colaborador / Correo</th>
                   <th className="py-2.5 px-3">Departamento</th>
-                  <th className="py-2.5 px-3">Rol Asignado</th>
+                  <th className="py-2.5 px-3">Roles Asignados</th>
                   <th className="py-2.5 px-3">Estado</th>
                   <th className="py-2.5 px-3 text-right">Acciones</th>
                 </tr>
@@ -632,7 +638,7 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
                             : 'bg-slate-50 text-slate-700 border-slate-200'
                         }`}
                       >
-                        {user.role}
+                        {(user.roleIds?.length ? user.roleIds : [user.roleId]).map((id) => rolesList.find(r => r.id === id)?.name || id).filter(Boolean).join(' • ')}
                       </span>
                     </td>
                     <td className="py-2.5 px-3">
@@ -1009,7 +1015,7 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
                   <label className="block font-bold text-slate-700 mb-1">Rol Asignado *</label>
                   <select
                     value={userRoleId}
-                    onChange={(e) => setUserRoleId(e.target.value)}
+                    onChange={(e) => { const id = e.target.value; setUserRoleId(id); setUserRoleIds(prev => prev.includes(id) ? prev : [id, ...prev]); }}
                     className="w-full px-3 py-1.5 border border-slate-300 rounded-md focus:ring-1 focus:ring-indigo-500 focus:outline-none bg-white"
                   >
                     {rolesList.map((r) => (
@@ -1020,6 +1026,23 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
                   </select>
                 </div>
 
+                  <div className="mt-2 rounded-md border border-indigo-100 bg-indigo-50/40 p-2">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[10px] font-bold text-slate-600 uppercase">Roles adicionales</span>
+                      <span className="text-[10px] text-indigo-600 font-semibold">{userRoleIds.length} seleccionado(s)</span>
+                    </div>
+                    <div className="max-h-32 overflow-y-auto space-y-1">
+                      {rolesList.map((r) => {
+                        const checked = userRoleIds.includes(r.id);
+                        return (
+                          <label key={r.id} className="flex items-center gap-2 cursor-pointer rounded px-1.5 py-1 hover:bg-white">
+                            <input type="checkbox" checked={checked} onChange={() => setUserRoleIds(prev => checked ? prev.filter(id => id !== r.id) : [...prev, r.id])} className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
+                            <span className="text-[11px] text-slate-700">{r.name}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  </div>
                 <div>
                   <label className="block font-bold text-slate-700 mb-1">Estado *</label>
                   <select

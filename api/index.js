@@ -1298,6 +1298,7 @@ import cors from "cors";
 import crypto2 from "crypto";
 
 // server/mailService.ts
+init_db();
 import nodemailer from "nodemailer";
 var outboxLogs = [];
 function credentials() {
@@ -1363,17 +1364,59 @@ function buildTokenApprovalResultPageHtml(p) {
 }
 async function sendEmail(p) {
   const logId = `MAIL-${Date.now()}-${Math.floor(Math.random() * 1e5)}`;
+  const timestamp = (/* @__PURE__ */ new Date()).toISOString();
   const transporter = getMailTransporter();
+  let status = "ENVIADO";
+  let errorMsg;
   if (!transporter) {
-    const error = "Faltan credenciales SMTP: se requieren SMTP_USER y SMTP_PASS";
-    return { success: false, logId, status: process.env.VERCEL || process.env.NODE_ENV === "production" ? "FALLIDO" : "SIMULADO", error };
+    errorMsg = "Faltan credenciales SMTP: se requieren SMTP_USER y SMTP_PASS";
+    status = process.env.VERCEL || process.env.NODE_ENV === "production" ? "FALLIDO" : "SIMULADO";
+  } else {
+    try {
+      await transporter.sendMail({ from: getFromAddress(p.from), replyTo: p.replyTo, to: p.to, subject: p.subject, html: p.html });
+      status = "ENVIADO";
+    } catch (e) {
+      status = "FALLIDO";
+      errorMsg = e?.message || "Error SMTP";
+    }
   }
+  const log = {
+    id: logId,
+    requestId: p.requestId,
+    folio: p.folio,
+    to: p.to,
+    subject: p.subject,
+    html: p.html,
+    status,
+    error: errorMsg,
+    createdAt: timestamp
+  };
+  outboxLogs.unshift(log);
+  if (outboxLogs.length > 200) outboxLogs.pop();
   try {
-    await transporter.sendMail({ from: getFromAddress(p.from), replyTo: p.replyTo, to: p.to, subject: p.subject, html: p.html });
-    return { success: true, logId, status: "ENVIADO" };
-  } catch (e) {
-    return { success: false, logId, status: "FALLIDO", error: e?.message || "Error SMTP" };
+    const isTest = p.subject.includes("[PRUEBA]");
+    await recordAuditLog({
+      requestId: p.requestId || null,
+      userId: null,
+      action: isTest ? "PRUEBA_SMTP" : "ENVIO_CORREO_SMTP",
+      details: {
+        logId,
+        to: p.to,
+        subject: p.subject,
+        html: p.html,
+        status,
+        error: errorMsg || null,
+        requestId: p.requestId || null,
+        folio: p.folio || null,
+        userEmail: p.to,
+        userName: isTest ? "Prueba Diagn\xF3stico SMTP" : "Sistema de Notificaciones",
+        timestamp
+      }
+    });
+  } catch (auditErr) {
+    console.error("[SMTP-OUTBOX-PERSISTENCE-WARNING] No se pudo registrar correo en audit_logs:", auditErr);
   }
+  return { success: status === "ENVIADO" || status === "SIMULADO", logId, status, error: errorMsg };
 }
 
 // server/app.ts
@@ -1953,7 +1996,23 @@ function createApp() {
       err(res, e);
     }
   });
-  app2.get("/api/outbox", requireAuth, async (_req, res) => res.json(outboxLogs));
+  app2.get("/api/outbox", requireAuth, async (_req, res) => {
+    try {
+      const persisted = (await listAuditLogs()).filter((l) => l.action === "ENVIO_CORREO_SMTP" || l.action === "PRUEBA_SMTP").map((l) => {
+        const d = l.details || {};
+        return { id: String(d.logId || l.id), requestId: d.requestId ?? l.requestId ?? void 0, folio: d.folio ?? void 0, to: String(d.to || l.userEmail || ""), subject: String(d.subject || ""), html: String(d.html || ""), status: d.status === "FALLIDO" || d.status === "SIMULADO" ? "FALLIDO" === d.status ? "FALLIDO" : "SIMULADO" : "ENVIADO", error: d.error || void 0, createdAt: String(d.timestamp || l.createdAt) };
+      });
+      const seen = /* @__PURE__ */ new Set();
+      const merged = [...persisted, ...outboxLogs].filter((x) => {
+        if (seen.has(x.id)) return false;
+        seen.add(x.id);
+        return true;
+      }).sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+      res.json(merged);
+    } catch (e) {
+      err(res, e);
+    }
+  });
   app2.get("/api/smtp/status", requireAuth, async (_req, res) => {
     const host = (process.env.SMTP_HOST || "smtp.gmail.com").trim();
     const port = (process.env.SMTP_PORT || "465").trim();

@@ -1,5 +1,6 @@
 import nodemailer from 'nodemailer';
 import type { TravelRequest, User, EmailLog } from '../src/types';
+import { recordAuditLog } from './db.js';
 
 export const outboxLogs: EmailLog[] = [];
 
@@ -82,10 +83,62 @@ export function buildTokenApprovalResultPageHtml(p:{status:string;request?:Trave
 
 export async function sendEmail(p:{to:string;subject:string;html:string;from?:string;replyTo?:string;requestId?:string;folio?:string}):Promise<{success:boolean;logId:string;status:'ENVIADO'|'SIMULADO'|'FALLIDO';error?:string}>{
   const logId=`MAIL-${Date.now()}-${Math.floor(Math.random()*100000)}`;
+  const timestamp=new Date().toISOString();
   const transporter=getMailTransporter();
-  if(!transporter){const error='Faltan credenciales SMTP: se requieren SMTP_USER y SMTP_PASS';return {success:false,logId,status:process.env.VERCEL||process.env.NODE_ENV==='production'?'FALLIDO':'SIMULADO',error};}
+  let status:'ENVIADO'|'SIMULADO'|'FALLIDO'='ENVIADO';
+  let errorMsg:string|undefined;
+
+  if(!transporter){
+    errorMsg='Faltan credenciales SMTP: se requieren SMTP_USER y SMTP_PASS';
+    status=process.env.VERCEL||process.env.NODE_ENV==='production'?'FALLIDO':'SIMULADO';
+  } else {
+    try{
+      await transporter.sendMail({from:getFromAddress(p.from),replyTo:p.replyTo,to:p.to,subject:p.subject,html:p.html});
+      status='ENVIADO';
+    }catch(e:any){
+      status='FALLIDO';
+      errorMsg=e?.message||'Error SMTP';
+    }
+  }
+
+  const log:EmailLog={
+    id:logId,
+    requestId:p.requestId,
+    folio:p.folio,
+    to:p.to,
+    subject:p.subject,
+    html:p.html,
+    status,
+    error:errorMsg,
+    createdAt:timestamp
+  };
+
+  outboxLogs.unshift(log);
+  if(outboxLogs.length>200)outboxLogs.pop();
+
   try{
-    await transporter.sendMail({from:getFromAddress(p.from),replyTo:p.replyTo,to:p.to,subject:p.subject,html:p.html});
-    return {success:true,logId,status:'ENVIADO'};
-  }catch(e:any){return {success:false,logId,status:'FALLIDO',error:e?.message||'Error SMTP'};}
+    const isTest=p.subject.includes('[PRUEBA]');
+    await recordAuditLog({
+      requestId:p.requestId||null,
+      userId:null,
+      action:isTest?'PRUEBA_SMTP':'ENVIO_CORREO_SMTP',
+      details:{
+        logId,
+        to:p.to,
+        subject:p.subject,
+        html:p.html,
+        status,
+        error:errorMsg||null,
+        requestId:p.requestId||null,
+        folio:p.folio||null,
+        userEmail:p.to,
+        userName:isTest?'Prueba Diagnóstico SMTP':'Sistema de Notificaciones',
+        timestamp
+      }
+    });
+  }catch(auditErr){
+    console.error('[SMTP-OUTBOX-PERSISTENCE-WARNING] No se pudo registrar correo en audit_logs:',auditErr);
+  }
+
+  return {success:status==='ENVIADO'||status==='SIMULADO',logId,status,error:errorMsg};
 }

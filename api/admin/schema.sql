@@ -16,6 +16,18 @@ CREATE INDEX IF NOT EXISTS idx_audit_request ON audit_logs(request_id); CREATE I
 CREATE TABLE IF NOT EXISTS travel_folio_counters (year INTEGER PRIMARY KEY,last_number BIGINT NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS verification_codes (email TEXT PRIMARY KEY,code TEXT NOT NULL,name TEXT NOT NULL,department TEXT NOT NULL,role_id TEXT NOT NULL DEFAULT 'role_solicitante',password_hash TEXT NOT NULL,salt TEXT NOT NULL,expires_at TIMESTAMPTZ NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
 
+ALTER TABLE travel_requests ADD CONSTRAINT travel_requests_amount_requested_nonnegative CHECK (amount_requested IS NULL OR amount_requested >= 0) NOT VALID;
+ALTER TABLE travel_requests ADD CONSTRAINT travel_requests_amount_authorized_nonnegative CHECK (amount_authorized IS NULL OR amount_authorized >= 0) NOT VALID;
+ALTER TABLE travel_requests ADD CONSTRAINT travel_requests_costs_nonnegative CHECK (
+  (transport_cost IS NULL OR transport_cost >= 0) AND
+  (hotel_cost IS NULL OR hotel_cost >= 0) AND
+  (food_cost IS NULL OR food_cost >= 0) AND
+  (misc_cost IS NULL OR misc_cost >= 0)
+) NOT VALID;
+ALTER TABLE travel_requests ADD CONSTRAINT travel_requests_authorized_not_above_requested CHECK (
+  amount_authorized IS NULL OR amount_requested IS NULL OR amount_authorized <= amount_requested
+) NOT VALID;
+
 CREATE OR REPLACE FUNCTION generate_next_travel_folio(target_year INTEGER) RETURNS TEXT LANGUAGE plpgsql AS $$ DECLARE n BIGINT; BEGIN INSERT INTO travel_folio_counters(year,last_number) VALUES(target_year,1) ON CONFLICT(year) DO UPDATE SET last_number=travel_folio_counters.last_number+1 RETURNING last_number INTO n; RETURN 'VIAT-'||target_year||'-'||LPAD(n::TEXT,6,'0'); END; $$;
 
 CREATE OR REPLACE FUNCTION process_approval_token_action(p_token TEXT,p_action TEXT,p_amount_authorized NUMERIC DEFAULT NULL,p_comments TEXT DEFAULT NULL) RETURNS JSONB LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
@@ -29,6 +41,11 @@ BEGIN
  SELECT * INTO r FROM travel_requests WHERE id=t.request_id FOR UPDATE;
  IF NOT FOUND THEN RAISE EXCEPTION 'No se encontró la solicitud asociada al token'; END IF;
  IF r.status NOT IN ('PENDIENTE','PENDIENTE_APROBACION') THEN RAISE EXCEPTION 'La solicitud % ya fue procesada y está en estado %',r.folio,r.status; END IF;
+ IF a='APROBADA' THEN
+   final_amount:=COALESCE(p_amount_authorized,r.amount_requested);
+   IF final_amount IS NULL OR final_amount<0 THEN RAISE EXCEPTION 'Monto autorizado no válido'; END IF;
+   IF r.amount_requested IS NOT NULL AND final_amount>r.amount_requested THEN RAISE EXCEPTION 'El monto autorizado no puede exceder el monto solicitado'; END IF;
+ END IF;
  UPDATE approval_tokens SET used=true,used_at=now_ts,action=a WHERE id=t.id;
  IF a='APROBADA' THEN final_amount:=COALESCE(p_amount_authorized,r.amount_requested); UPDATE travel_requests SET status='APROBADA',amount_authorized=final_amount,comments=COALESCE(p_comments,comments),approved_by=COALESCE(t.boss_email,'Jefe Directo'),approved_at=now_ts,updated_at=now_ts WHERE id=r.id RETURNING * INTO r;
  ELSE UPDATE travel_requests SET status='RECHAZADA',comments=COALESCE(p_comments,comments),rejected_by=t.boss_email,rejected_at=now_ts,rejection_reason=COALESCE(p_comments,rejection_reason),updated_at=now_ts WHERE id=r.id RETURNING * INTO r; END IF;
@@ -36,3 +53,21 @@ BEGIN
  INSERT INTO audit_logs(id,request_id,user_id,user_name,user_email,action,details,created_at) VALUES('aud_'||extract(epoch from now_ts)::text||'_'||substr(md5(random()::text),1,8),r.id,COALESCE(t.boss_id,'token_auth'),COALESCE(u.name,'Aprobador por token'),COALESCE(t.boss_email,''),CASE WHEN a='APROBADA' THEN 'APROBACION_VIA_TOKEN_TRANSACTIONAL' ELSE 'RECHAZO_VIA_TOKEN_TRANSACTIONAL' END,jsonb_build_object('folio',r.folio,'bossEmail',t.boss_email,'action',a,'amountAuthorized',r.amount_authorized,'comments',p_comments),now_ts);
  RETURN jsonb_build_object('success',true,'action',a,'requestId',r.id,'folio',r.folio,'userId',r.user_id,'requesterName',r.requester_name,'requesterEmail',u.email,'department',r.department,'destination',r.destination,'reason',r.reason,'amountRequested',r.amount_requested,'amountAuthorized',r.amount_authorized,'bossEmail',t.boss_email,'comments',r.comments,'approvedAt',r.approved_at,'processedAt',now_ts);
 END; $$;
+
+-- The application is server-only and uses the Supabase service role/secret key.
+-- Block direct Data API access for browser roles and keep every table behind RLS.
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE departments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE bosses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE roles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE travel_requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE approval_tokens ENABLE ROW LEVEL SECURITY;
+ALTER TABLE audit_logs ENABLE ROW LEVEL SECURITY;
+ALTER TABLE travel_folio_counters ENABLE ROW LEVEL SECURITY;
+ALTER TABLE verification_codes ENABLE ROW LEVEL SECURITY;
+REVOKE ALL ON TABLE users, departments, bosses, roles, travel_requests, approval_tokens, audit_logs, travel_folio_counters, verification_codes FROM anon, authenticated;
+REVOKE ALL ON FUNCTION generate_next_travel_folio(INTEGER) FROM anon, authenticated;
+REVOKE ALL ON FUNCTION process_approval_token_action(TEXT,TEXT,NUMERIC,TEXT) FROM anon, authenticated;
+GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT EXECUTE ON FUNCTION generate_next_travel_folio(INTEGER) TO service_role;
+GRANT EXECUTE ON FUNCTION process_approval_token_action(TEXT,TEXT,NUMERIC,TEXT) TO service_role;

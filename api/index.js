@@ -1327,16 +1327,22 @@ function getFromAddress(customFrom) {
   const c = credentials();
   const rawFrom = customFrom?.trim() || process.env.SMTP_FROM?.trim() || "Dimer Notificaciones";
   let displayName = "Dimer Notificaciones";
-  if (rawFrom.includes("<") && rawFrom.includes(">")) {
-    const match = rawFrom.match(/^(.*?)\s*<.*?>$/);
-    if (match && match[1]?.trim()) {
-      displayName = match[1].trim().replace(/^["']|["']$/g, "");
+  let fromEmail = c.user || "sistemas@dimer.com.mx";
+  const bracketMatch = rawFrom.match(/^(.*?)\s*<([^>]+)>$/);
+  if (bracketMatch) {
+    const candidateEmail = bracketMatch[2]?.trim();
+    if (candidateEmail?.includes("@")) fromEmail = candidateEmail;
+    if (bracketMatch[1]?.trim()) {
+      displayName = bracketMatch[1].trim().replace(/^["']|["']$/g, "");
     }
-  } else if (!rawFrom.includes("@")) {
+  } else if (rawFrom.includes("@")) {
+    fromEmail = rawFrom.replace(/^["']|["']$/g, "").trim();
+    const localPart = fromEmail.split("@")[0]?.trim();
+    if (localPart) displayName = localPart;
+  } else {
     displayName = rawFrom.replace(/^["']|["']$/g, "");
   }
-  const authEmail = c.user || "sistemas@dimer.com.mx";
-  return `"${displayName}" <${authEmail}>`;
+  return `"${displayName}" <${fromEmail}>`;
 }
 var esc = (v) => String(v ?? "").replace(/[&<>\"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[m]);
 var formatCurrency = (amount) => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(Number(amount || 0));

@@ -101,12 +101,30 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
         fetch('/api/stats'),
       ]);
 
-      if (usersRes.ok) setUsersList(await usersRes.json());
-      if (rolesRes.ok) setRolesList(await rolesRes.json());
-      if (permRes.ok) setAllPermissions(await permRes.json());
-      if (deptRes.ok) setDeptList(await deptRes.json());
-      if (bossRes.ok) setBossList(await bossRes.json());
-      if (statsRes.ok) setStats(await statsRes.json());
+      if (usersRes.ok) {
+        const u = await usersRes.json();
+        if (Array.isArray(u)) setUsersList(u);
+      }
+      if (rolesRes.ok) {
+        const r = await rolesRes.json();
+        if (Array.isArray(r)) setRolesList(r);
+      }
+      if (permRes.ok) {
+        const p = await permRes.json();
+        if (Array.isArray(p)) setAllPermissions(p);
+      }
+      if (deptRes.ok) {
+        const d = await deptRes.json();
+        if (Array.isArray(d)) setDeptList(d);
+      }
+      if (bossRes.ok) {
+        const b = await bossRes.json();
+        if (Array.isArray(b)) setBossList(b);
+      }
+      if (statsRes.ok) {
+        const s = await statsRes.json();
+        if (s && typeof s === 'object') setStats(s);
+      }
     } catch (err: any) {
       console.error('Error cargando catálogos de administración:', err);
     } finally {
@@ -459,18 +477,23 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
   };
 
   // Filtered lists
-  const filteredUsers = usersList.filter(
+  const safeUsersList = Array.isArray(usersList) ? usersList : [];
+  const safeBossList = Array.isArray(bossList) ? bossList : [];
+
+  const filteredUsers = safeUsersList.filter(
     (u) =>
-      u.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      u.department?.toLowerCase().includes(searchTerm.toLowerCase())
+      u &&
+      (String(u.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(u.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(u.department || '').toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
-  const filteredBosses = bossList.filter(
+  const filteredBosses = safeBossList.filter(
     (b) =>
-      b.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      b.email.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      b.department.toLowerCase().includes(searchTerm.toLowerCase())
+      b &&
+      (String(b.name || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(b.email || '').toLowerCase().includes(searchTerm.toLowerCase()) ||
+      String(b.department || '').toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
   return (
@@ -767,7 +790,7 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
 
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
             {deptList.map((dept) => {
-              const membersCount = usersList.filter((u) => u.department === dept.name).length;
+              const membersCount = safeUsersList.filter((u) => u?.department === dept.name).length;
               return (
                 <div key={dept.id} className="p-3 bg-slate-50 rounded-lg border border-slate-200 space-y-1">
                   <div className="flex items-center justify-between">

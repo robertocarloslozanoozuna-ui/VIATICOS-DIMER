@@ -141,17 +141,20 @@ export default function App() {
 
     // Refresh requests list for the active user's permissions
     try {
-      const reqRes = await fetch('/api/requests');
-      if (reqRes.ok) {
-        setRequests(await reqRes.json());
+      const data = await safeFetchJson<TravelRequest[]>('/api/requests');
+      if (Array.isArray(data)) {
+        setRequests(data);
+      } else {
+        setRequests([]);
       }
     } catch (err) {
       console.error(err);
+      setRequests([]);
     }
   };
 
   const handleRequestCreated = (newReq: TravelRequest) => {
-    setRequests((prev) => [newReq, ...prev]);
+    setRequests((prev) => [newReq, ...(Array.isArray(prev) ? prev : [])]);
     setLastEventText(`EVENT: TravelRequest Created #${newReq.folio} | DISPATCH: Tokenized Email to Boss`);
   };
 
@@ -160,8 +163,9 @@ export default function App() {
     setActiveTab('aprobar');
   };
 
-  const pendingApprovalsCount = requests.filter((r) => r.status === 'PENDIENTE_APROBACION').length;
-  const approvedForFinanceCount = requests.filter((r) => r.status === 'APROBADA').length;
+  const safeRequests = Array.isArray(requests) ? requests : [];
+  const pendingApprovalsCount = safeRequests.filter((r) => r.status === 'PENDIENTE_APROBACION').length;
+  const approvedForFinanceCount = safeRequests.filter((r) => r.status === 'APROBADA').length;
 
   const userRole = currentUser?.role || 'SOLICITANTE';
   const isSoloLectura = userRole === 'SOLO_LECTURA_APROBADAS';

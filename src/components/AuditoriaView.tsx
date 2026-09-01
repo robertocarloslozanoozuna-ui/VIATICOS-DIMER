@@ -11,25 +11,37 @@ import {
   FilePlus,
   RefreshCw,
   Clock,
-  Code
+  Code,
+  AlertCircle
 } from 'lucide-react';
 import type { AuditLog } from '../types';
+import { safeFetchJson } from '../utils/apiHelper';
 
 export default function AuditoriaView() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [filterAction, setFilterAction] = useState('ALL');
   const [selectedLogDetails, setSelectedLogDetails] = useState<AuditLog | null>(null);
 
   const fetchLogs = async () => {
     setLoading(true);
+    setErrorMessage(null);
     try {
-      const res = await fetch('/api/audit-logs');
-      const data: AuditLog[] = await res.json();
-      setLogs(data);
-    } catch (e) {
-      console.error(e);
+      const data = await safeFetchJson<AuditLog[]>('/api/audit-logs');
+      if (Array.isArray(data)) {
+        setLogs(data);
+      } else {
+        setLogs([]);
+        if (data && typeof data === 'object' && 'error' in data) {
+          setErrorMessage(String((data as any).error));
+        }
+      }
+    } catch (e: any) {
+      console.error('Error cargando registros de auditoría:', e);
+      setLogs([]);
+      setErrorMessage(e?.message || 'No se pudieron cargar los registros de auditoría.');
     } finally {
       setLoading(false);
     }
@@ -39,14 +51,21 @@ export default function AuditoriaView() {
     fetchLogs();
   }, []);
 
-  const filteredLogs = logs.filter((log) => {
+  const safeLogs = Array.isArray(logs) ? logs : [];
+
+  const filteredLogs = safeLogs.filter((log) => {
+    if (!log || typeof log !== 'object') return false;
     const matchesAction = filterAction === 'ALL' || log.action === filterAction;
-    const searchLower = search.toLowerCase();
+    const searchLower = (search || '').toLowerCase();
+    const actionStr = String(log.action || '').toLowerCase();
+    const emailStr = String(log.userEmail || '').toLowerCase();
+    const nameStr = String(log.userName || '').toLowerCase();
+    const detailsStr = JSON.stringify(log.details || {}).toLowerCase();
     const matchesSearch =
-      log.action.toLowerCase().includes(searchLower) ||
-      (log.userEmail && log.userEmail.toLowerCase().includes(searchLower)) ||
-      (log.userName && log.userName.toLowerCase().includes(searchLower)) ||
-      JSON.stringify(log.details || {}).toLowerCase().includes(searchLower);
+      actionStr.includes(searchLower) ||
+      emailStr.includes(searchLower) ||
+      nameStr.includes(searchLower) ||
+      detailsStr.includes(searchLower);
 
     return matchesAction && matchesSearch;
   });
@@ -133,9 +152,20 @@ export default function AuditoriaView() {
       </div>
 
       {/* Audit Log Table */}
+      {errorMessage && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded-lg p-3 text-xs flex items-center gap-2">
+          <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+          <span>{errorMessage}</span>
+        </div>
+      )}
+
       <div className="bg-white rounded-lg shadow-xs border border-slate-200 overflow-hidden">
         {loading ? (
           <div className="p-8 text-center text-slate-400 text-xs">Cargando registros de auditoría...</div>
+        ) : errorMessage ? (
+          <div className="p-8 text-center text-slate-500 text-xs">
+            {errorMessage}
+          </div>
         ) : filteredLogs.length === 0 ? (
           <div className="p-8 text-center text-slate-400 text-xs">No hay registros de auditoría que coincidan.</div>
         ) : (

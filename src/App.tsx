@@ -5,6 +5,7 @@ import SolicitarView from './components/SolicitarView';
 import AprobarView from './components/AprobarView';
 import MisSolicitudesView from './components/MisSolicitudesView';
 import FinanzasView from './components/FinanzasView';
+import FinanzasDashboard from './components/FinanzasDashboard';
 import AdminView from './components/AdminView';
 import AuditoriaView from './components/AuditoriaView';
 import OutboxView from './components/OutboxView';
@@ -199,7 +200,12 @@ export default function App() {
               {activeTab === 'solicitar' && <SolicitarView currentUser={currentUser} onRequestCreated={handleRequestCreated} onNavigateToApprovals={handleNavigateToApprovals} onLogout={handleLogout} />}
               {activeTab === 'mis-solicitudes' && <MisSolicitudesView currentUser={currentUser} requests={requests} onNavigateToCreate={() => setActiveTab('solicitar')} onNavigateToApprove={handleNavigateToApprovals} onOpenPrintVoucher={(req) => setPrintRequest(req)} />}
               {activeTab === 'aprobar' && <AprobarView currentUser={currentUser} selectedRequestId={selectedRequestIdForApproval} onClearSelectedRequest={() => setSelectedRequestIdForApproval(null)} onSwitchUser={handleSwitchUser} onRefreshData={fetchData} />}
-              {activeTab === 'finanzas' && <FinanzasView currentUser={currentUser} requests={requests} onRefreshData={fetchData} onOpenPrintVoucher={(req) => setPrintRequest(req)} />}
+              {activeTab === 'finanzas' && (
+                <>
+                  <FinanzasDashboard requests={safeRequests} />
+                  <FinanzasView currentUser={currentUser} requests={requests} onRefreshData={fetchData} onOpenPrintVoucher={(req) => setPrintRequest(req)} />
+                </>
+              )}
               {activeTab === 'administracion' && <AdminView currentUser={currentUser} onRefreshData={fetchData} />}
               {activeTab === 'auditoria' && <AuditoriaView />}
               {activeTab === 'outbox' && <OutboxView />}

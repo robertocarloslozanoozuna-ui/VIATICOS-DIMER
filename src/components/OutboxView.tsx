@@ -1,21 +1,24 @@
 import React, { useState, useEffect } from 'react';
-import { Mail, Zap, AlertCircle, CheckCircle2, Info, ShieldAlert, Server } from 'lucide-react';
+import { Mail, Zap, AlertCircle, CheckCircle2, Info, ShieldAlert, Server, Send } from 'lucide-react';
 import type { EmailLog } from '../types';
+import { safeFetchJson } from '../utils/apiHelper';
 
 export default function OutboxView() {
   const [emails, setEmails] = useState<EmailLog[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedEmail, setSelectedEmail] = useState<EmailLog | null>(null);
   const [smtpStatus, setSmtpStatus] = useState<any>(null);
+  const [targetEmail, setTargetEmail] = useState('sistemas@dimer.com.mx');
   const [testingSmtp, setTestingSmtp] = useState(false);
   const [testResult, setTestResult] = useState<any>(null);
 
   const fetchStatusAndEmails = async () => {
     setLoading(true);
     try {
-      const [resOutbox, resStatus] = await Promise.all([fetch('/api/outbox'), fetch('/api/smtp/status')]);
-      const dataOutbox = await resOutbox.json().catch(() => []);
-      const dataStatus = await resStatus.json().catch(() => ({}));
+      const [dataOutbox, dataStatus] = await Promise.all([
+        safeFetchJson<EmailLog[]>('/api/outbox').catch(() => []),
+        safeFetchJson<any>('/api/smtp/status').catch(() => ({})),
+      ]);
       const safeOutbox: EmailLog[] = Array.isArray(dataOutbox) ? dataOutbox : [];
       setEmails(safeOutbox);
       setSmtpStatus(dataStatus && typeof dataStatus === 'object' ? dataStatus : {});
@@ -30,19 +33,21 @@ export default function OutboxView() {
   };
 
   const handleTestSend = async () => {
+    if (!targetEmail.trim()) return;
     setTestingSmtp(true);
     setTestResult(null);
     try {
-      const res = await fetch('/api/smtp/test', {
+      const data = await safeFetchJson('/api/smtp/test', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ targetEmail: 'sistemas@dimer.com.mx' }),
+        body: JSON.stringify({ targetEmail: targetEmail.trim() }),
       });
-      const data = await res.json().catch(() => ({ success: false, status: 'FALLIDO', error: `HTTP ${res.status}` }));
       setTestResult(data);
-      const outboxRes = await fetch('/api/outbox');
-      const outboxData = await outboxRes.json().catch(() => []);
-      setEmails(Array.isArray(outboxData) ? outboxData : []);
+      const outboxData = await safeFetchJson<EmailLog[]>('/api/outbox').catch(() => []);
+      if (Array.isArray(outboxData)) {
+        setEmails(outboxData);
+        if (outboxData.length > 0) setSelectedEmail(outboxData[0]);
+      }
     } catch (err: any) {
       setTestResult({ success: false, status: 'FALLIDO', error: err?.message || 'Error de conexión' });
     } finally {
@@ -59,7 +64,7 @@ export default function OutboxView() {
   const user = details?.user || 'No configurado';
   const from = details?.from || 'No configurado';
   const hasPassword = Boolean(details?.hasPassword);
-  const instructions = smtpStatus?.instructions || (configured ? 'SMTP configurado.' : 'Configure SMTP_USER y SMTP_PASS en el entorno del servidor.');
+  const instructions = smtpStatus?.instructions || (configured ? 'SMTP configurado y listo para salida de correos.' : 'Configure SMTP_USER y SMTP_PASS en el entorno del servidor.');
 
   if (loading) {
     return <div className="bg-white rounded-xl border border-slate-200 p-10 text-center text-slate-500 text-sm">Cargando Bandeja SMTP...</div>;
@@ -68,7 +73,7 @@ export default function OutboxView() {
   return (
     <div className="space-y-4">
       <div className="bg-white rounded-xl p-4 shadow-xs border border-slate-200 space-y-3">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 border-b border-slate-100 pb-3">
           <div className="flex items-center gap-2.5">
             <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${configured ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
               <Server className="w-4 h-4" />
@@ -83,10 +88,25 @@ export default function OutboxView() {
               <p className="text-[11px] text-slate-500 mt-0.5">{instructions}</p>
             </div>
           </div>
-          <button onClick={handleTestSend} disabled={testingSmtp} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-xs">
-            <Zap className={`w-3.5 h-3.5 ${testingSmtp ? 'animate-bounce' : ''}`} />
-            <span>{testingSmtp ? 'Verificando...' : 'Enviar Prueba a sistemas@dimer.com.mx'}</span>
-          </button>
+          
+          {/* Quick test box */}
+          <div className="flex items-center gap-2">
+            <input
+              type="email"
+              value={targetEmail}
+              onChange={(e) => setTargetEmail(e.target.value)}
+              placeholder="correo@dimer.com.mx"
+              className="text-xs px-2.5 py-1.5 border border-slate-200 rounded-lg focus:outline-none focus:ring-1 focus:ring-indigo-500 font-mono w-56"
+            />
+            <button
+              onClick={handleTestSend}
+              disabled={testingSmtp || !targetEmail.trim()}
+              className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-xs cursor-pointer"
+            >
+              <Send className={`w-3.5 h-3.5 ${testingSmtp ? 'animate-bounce' : ''}`} />
+              <span>{testingSmtp ? 'Enviando...' : 'Enviar Prueba'}</span>
+            </button>
+          </div>
         </div>
 
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-xs bg-slate-50 p-2.5 rounded-lg border border-slate-200">
@@ -102,7 +122,7 @@ export default function OutboxView() {
             <div className={`p-2.5 rounded-lg text-xs flex items-center justify-between border ${testResult.status === 'ENVIADO' ? 'bg-emerald-50 text-emerald-900 border-emerald-300' : testResult.status === 'SIMULADO' ? 'bg-blue-50 text-blue-900 border-blue-300' : 'bg-rose-50 text-rose-900 border-rose-300'}`}>
               <div className="flex items-center gap-2">
                 {testResult.status === 'ENVIADO' ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" /> : testResult.status === 'SIMULADO' ? <Info className="w-4 h-4 text-blue-600 shrink-0" /> : <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />}
-                <span>{testResult.status === 'ENVIADO' ? `¡Correo de prueba enviado con éxito vía SMTP a ${testResult.targetEmail || 'sistemas@dimer.com.mx'}!` : testResult.status === 'SIMULADO' ? 'Correo guardado en modo simulación.' : `Error al enviar vía SMTP: ${testResult.error || 'Error SMTP desconocido'}`}</span>
+                <span>{testResult.status === 'ENVIADO' ? `¡Correo de prueba enviado con éxito vía SMTP a ${testResult.targetEmail || targetEmail}!` : testResult.status === 'SIMULADO' ? 'Correo guardado en modo simulación.' : `Error al enviar vía SMTP: ${testResult.error || 'Error SMTP desconocido'}`}</span>
               </div>
               <span className="font-mono font-bold text-[10px] uppercase shrink-0">{testResult.status || 'FALLIDO'}</span>
             </div>
@@ -150,3 +170,4 @@ export default function OutboxView() {
     </div>
   );
 }
+

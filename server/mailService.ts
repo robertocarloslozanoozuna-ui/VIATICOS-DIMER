@@ -10,11 +10,11 @@ export const outboxLogs: EmailLog[] = [];
  * This prevents stale fallback variables from silently overriding the
  * credentials configured in Vercel / AI Studio.
  */
-function credentials(){
-  const host=(process.env.SMTP_HOST||'smtp.gmail.com').trim();
-  const port=parseInt(process.env.SMTP_PORT||'465',10);
-  const user=(process.env.SMTP_USER||'').trim().replace(/^["']|["']$/g,'');
-  const pass=(process.env.SMTP_PASS||'').trim().replace(/^["']|["']$/g,'').replace(/\s+/g,'');
+export function credentials(){
+  const host=(process.env.SMTP_HOST||process.env.EMAIL_HOST||'smtp.gmail.com').trim();
+  const port=parseInt(process.env.SMTP_PORT||process.env.EMAIL_PORT||'465',10);
+  const user=(process.env.DIMER_SMTP_USER||process.env.SMTP_USER||process.env.GMAIL_USER||process.env.EMAIL_USER||'sistemas@dimer.com.mx').trim().replace(/^["']|["']$/g,'');
+  const pass=(process.env.DIMER_SMTP_APP_PASSWORD||process.env.SMTP_PASS||process.env.SMTP_PASSWORD||process.env.GMAIL_APP_PASSWORD||process.env.EMAIL_PASS||'').trim().replace(/^["']|["']$/g,'').replace(/\s+/g,'');
   const secure=(process.env.SMTP_SECURE||'').trim().toLowerCase()==='true'||port===465;
   return {host,port,user,pass,secure};
 }
@@ -36,10 +36,18 @@ export function getMailTransporter(){
 
 export function getFromAddress(customFrom?:string){
   const c=credentials();
-  // Never allow a secret/password-looking value to become the From address.
-  const candidate=customFrom?.trim()||process.env.SMTP_FROM?.trim();
-  if(candidate && candidate.includes('@') && !candidate.includes(c.pass))return candidate;
-  return `Dimer Notificaciones <${c.user||'sistemas@dimer.com.mx'}>`;
+  const rawFrom=customFrom?.trim()||process.env.SMTP_FROM?.trim()||'Dimer Notificaciones';
+  let displayName='Dimer Notificaciones';
+  if(rawFrom.includes('<') && rawFrom.includes('>')){
+    const match=rawFrom.match(/^(.*?)\s*<.*?>$/);
+    if(match && match[1]?.trim()){
+      displayName=match[1].trim().replace(/^["']|["']$/g,'');
+    }
+  } else if(!rawFrom.includes('@')){
+    displayName=rawFrom.replace(/^["']|["']$/g,'');
+  }
+  const authEmail=c.user||'sistemas@dimer.com.mx';
+  return `"${displayName}" <${authEmail}>`;
 }
 
 const esc=(v:unknown)=>String(v??'').replace(/[&<>\"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[m]!));
@@ -93,11 +101,27 @@ export async function sendEmail(p:{to:string;subject:string;html:string;from?:st
     status=process.env.VERCEL||process.env.NODE_ENV==='production'?'FALLIDO':'SIMULADO';
   } else {
     try{
-      await transporter.sendMail({from:getFromAddress(p.from),replyTo:p.replyTo,to:p.to,subject:p.subject,html:p.html});
+      const c=credentials();
+      const rawUserVar=process.env.DIMER_SMTP_USER?'DIMER_SMTP_USER':process.env.SMTP_USER?'SMTP_USER':process.env.GMAIL_USER?'GMAIL_USER':'DEFAULT';
+      const rawPass=process.env.DIMER_SMTP_APP_PASSWORD||process.env.SMTP_PASS||process.env.SMTP_PASSWORD||'';
+      const hasLeadingTrailingWhitespace=rawPass!==rawPass.trim();
+      const fromFormatted=getFromAddress(p.from);
+
+      console.log(`[SMTP-DEBUG] Enviando correo a ${p.to} usando variable_usuario=${rawUserVar} (${c.user}), pass_length=${c.pass.length}, pass_prefix="${c.pass.slice(0, 2)}***", pass_has_spaces_at_edges=${hasLeadingTrailingWhitespace}, from="${fromFormatted}"`);
+
+      const sendResult=await transporter.sendMail({
+        from:fromFormatted,
+        replyTo:p.replyTo,
+        to:p.to,
+        subject:p.subject,
+        html:p.html
+      });
       status='ENVIADO';
+      console.log(`[SMTP-DEBUG] Correo enviado exitosamente a ${p.to} (${logId}): ${sendResult.response||sendResult.messageId}`);
     }catch(e:any){
       status='FALLIDO';
       errorMsg=e?.message||'Error SMTP';
+      console.error(`[SMTP-DEBUG-ERROR] Falló envío a ${p.to}: message="${e?.message}", code="${e?.code}", response="${e?.response}", responseCode="${e?.responseCode}"`);
     }
   }
 

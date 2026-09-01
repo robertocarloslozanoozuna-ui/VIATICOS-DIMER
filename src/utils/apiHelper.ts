@@ -11,13 +11,46 @@ export interface ApiResponse<T = any> {
   [key: string]: any;
 }
 
+export function getAuthToken(): string | null {
+  try {
+    return localStorage.getItem('dimer_token');
+  } catch {
+    return null;
+  }
+}
+
+export function setAuthToken(token: string | null): void {
+  try {
+    if (token) {
+      localStorage.setItem('dimer_token', token);
+    } else {
+      localStorage.removeItem('dimer_token');
+    }
+  } catch (e) {
+    console.warn('No se pudo guardar el token en localStorage:', e);
+  }
+}
+
 export async function safeFetchJson<T = any>(
   url: string,
   options?: RequestInit
 ): Promise<T> {
+  const token = getAuthToken();
+  const headers = new Headers(options?.headers || {});
+  
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const fetchOptions: RequestInit = {
+    ...options,
+    credentials: 'include',
+    headers,
+  };
+
   let res: Response;
   try {
-    res = await fetch(url, options);
+    res = await fetch(url, fetchOptions);
   } catch (netErr: any) {
     throw new Error(
       `Error de conexión con el servidor (${netErr.message || 'Sin conexión'}). Por favor verifica tu red.`

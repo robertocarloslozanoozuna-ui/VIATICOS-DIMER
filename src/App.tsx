@@ -36,6 +36,7 @@ import PrintVoucherModal from './components/PrintVoucherModal';
 import AuthModal from './components/AuthModal';
 import LoginView from './components/LoginView';
 import type { User, TravelRequest, Role } from './types';
+import { safeFetchJson, setAuthToken } from './utils/apiHelper';
 
 export default function App() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -56,32 +57,23 @@ export default function App() {
   // Fetch initial session and data
   const fetchData = async () => {
     try {
-      const [meRes, reqRes] = await Promise.all([
-        fetch('/api/me').catch(() => null),
-        fetch('/api/requests').catch(() => null),
+      const [meData, reqData] = await Promise.all([
+        safeFetchJson<any>('/api/me').catch(() => null),
+        safeFetchJson<TravelRequest[]>('/api/requests').catch(() => null),
       ]);
 
-      if (meRes && meRes.ok) {
-        try {
-          const meData = await meRes.json();
-          setCurrentUser(meData.user);
-          setAllUsers(meData.allUsers || []);
-        } catch (jsonErr) {
-          console.warn('Non-JSON response from /api/me');
+      if (meData?.user) {
+        setCurrentUser(meData.user);
+        setAllUsers(meData.allUsers || []);
+        if (meData.token) {
+          setAuthToken(meData.token);
         }
       }
 
-      if (reqRes && reqRes.ok) {
-        try {
-          const reqData = await reqRes.json();
-          if (Array.isArray(reqData)) {
-            setRequests(reqData);
-            if (reqData.length > 0) {
-              setLastEventText(`EVENT: TravelRequest #${reqData[0].folio} | STATUS: ${reqData[0].status}`);
-            }
-          }
-        } catch (jsonErr) {
-          console.warn('Non-JSON response from /api/requests');
+      if (Array.isArray(reqData)) {
+        setRequests(reqData);
+        if (reqData.length > 0) {
+          setLastEventText(`EVENT: TravelRequest #${reqData[0].folio} | STATUS: ${reqData[0].status}`);
         }
       }
     } catch (e) {
@@ -98,13 +90,15 @@ export default function App() {
   // Handle switching simulated Google Account / Registered user
   const handleSwitchUser = async (emailOrId: string) => {
     try {
-      const res = await fetch('/api/switch-user', {
+      const data = await safeFetchJson<any>('/api/switch-user', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ emailOrId }),
       });
-      const data = await res.json();
-      if (data.user) {
+      if (data?.user) {
+        if (data.token) {
+          setAuthToken(data.token);
+        }
         handleUserChanged(data.user);
       }
     } catch (e) {
@@ -115,16 +109,20 @@ export default function App() {
   // Handle Logout
   const handleLogout = async () => {
     try {
-      await fetch('/api/auth/logout', { method: 'POST' });
+      await safeFetchJson('/api/auth/logout', { method: 'POST' });
     } catch (e) {
       console.error('Error logging out:', e);
     }
+    setAuthToken(null);
     setCurrentUser(null);
     setLastEventText('AUTH: Sesión cerrada correctamente');
   };
 
   // When user signs in or switches role
-  const handleUserChanged = async (user: User) => {
+  const handleUserChanged = async (user: User, token?: string) => {
+    if (token) {
+      setAuthToken(token);
+    }
     setCurrentUser(user);
     setLastEventText(`AUTH_SWITCH: ${user.email} (${user.role})`);
 

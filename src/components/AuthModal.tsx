@@ -18,7 +18,7 @@ import {
 } from 'lucide-react';
 import EmailAutocompleteInput from './EmailAutocompleteInput';
 import DimerLogo from './DimerLogo';
-import { safeFetchJson } from '../utils/apiHelper';
+import { safeFetchJson, setAuthToken } from '../utils/apiHelper';
 import type { CompanyEmployee } from '../data/companyDirectory';
 import type { User as UserType } from '../types';
 
@@ -91,8 +91,12 @@ export default function AuthModal({
         }),
       });
 
-      if (!data.success) {
-        throw new Error(data.error || 'Credenciales inválidas');
+      if (!data?.success) {
+        throw new Error(data?.error || 'Credenciales inválidas');
+      }
+
+      if (data.token) {
+        setAuthToken(data.token);
       }
 
       onSuccess(data.user);
@@ -168,8 +172,12 @@ export default function AuthModal({
         }),
       });
 
-      if (!data.success) {
-        throw new Error(data.error || 'Código incorrecto o expirado');
+      if (!data?.success) {
+        throw new Error(data?.error || 'Código incorrecto o expirado');
+      }
+
+      if (data.token) {
+        setAuthToken(data.token);
       }
 
       onSuccess(data.user);

@@ -39,8 +39,10 @@ export default function MisSolicitudesView({
   const [statusFilter, setStatusFilter] = useState('TODAS');
   const [selectedDetailRequest, setSelectedDetailRequest] = useState<TravelRequest | null>(null);
 
+  const safeRequests = Array.isArray(requests) ? requests : [];
+
   const filteredRequests = useMemo(() => {
-    return requests.filter((r) => {
+    return safeRequests.filter((r) => {
       const matchesStatus = statusFilter === 'TODAS' || r.status === statusFilter;
       const searchLower = searchTerm.toLowerCase();
       const matchesSearch =
@@ -52,17 +54,17 @@ export default function MisSolicitudesView({
 
       return matchesStatus && matchesSearch;
     });
-  }, [requests, statusFilter, searchTerm]);
+  }, [safeRequests, statusFilter, searchTerm]);
 
   const formatCurrency = (val: number) =>
     new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(val);
 
   // KPIs
-  const totalCount = requests.length;
-  const pendingCount = requests.filter((r) => r.status === 'PENDIENTE_APROBACION').length;
-  const approvedCount = requests.filter((r) => r.status === 'APROBADA' || r.status === 'PAGADA').length;
-  const totalRequestedAmount = requests.reduce((acc, r) => acc + (r.amountRequested || 0), 0);
-  const totalAuthorizedAmount = requests.reduce((acc, r) => acc + (r.amountAuthorized || 0), 0);
+  const totalCount = safeRequests.length;
+  const pendingCount = safeRequests.filter((r) => r.status === 'PENDIENTE_APROBACION').length;
+  const approvedCount = safeRequests.filter((r) => r.status === 'APROBADA' || r.status === 'PAGADA').length;
+  const totalRequestedAmount = safeRequests.reduce((acc, r) => acc + (r.amountRequested || 0), 0);
+  const totalAuthorizedAmount = safeRequests.reduce((acc, r) => acc + (r.amountAuthorized || 0), 0);
 
   const getStatusBadge = (status: string) => {
     switch (status) {

@@ -1302,10 +1302,10 @@ init_db();
 import nodemailer from "nodemailer";
 var outboxLogs = [];
 function credentials() {
-  const host = (process.env.SMTP_HOST || "smtp.gmail.com").trim();
-  const port = parseInt(process.env.SMTP_PORT || "465", 10);
-  const user = (process.env.SMTP_USER || "").trim().replace(/^["']|["']$/g, "");
-  const pass = (process.env.SMTP_PASS || "").trim().replace(/^["']|["']$/g, "").replace(/\s+/g, "");
+  const host = (process.env.SMTP_HOST || process.env.EMAIL_HOST || "smtp.gmail.com").trim();
+  const port = parseInt(process.env.SMTP_PORT || process.env.EMAIL_PORT || "465", 10);
+  const user = (process.env.DIMER_SMTP_USER || process.env.SMTP_USER || process.env.GMAIL_USER || process.env.EMAIL_USER || "sistemas@dimer.com.mx").trim().replace(/^["']|["']$/g, "");
+  const pass = (process.env.DIMER_SMTP_APP_PASSWORD || process.env.SMTP_PASS || process.env.SMTP_PASSWORD || process.env.GMAIL_APP_PASSWORD || process.env.EMAIL_PASS || "").trim().replace(/^["']|["']$/g, "").replace(/\s+/g, "");
   const secure = (process.env.SMTP_SECURE || "").trim().toLowerCase() === "true" || port === 465;
   return { host, port, user, pass, secure };
 }
@@ -1325,9 +1325,18 @@ function getMailTransporter() {
 }
 function getFromAddress(customFrom) {
   const c = credentials();
-  const candidate = customFrom?.trim() || process.env.SMTP_FROM?.trim();
-  if (candidate && candidate.includes("@") && !candidate.includes(c.pass)) return candidate;
-  return `Dimer Notificaciones <${c.user || "sistemas@dimer.com.mx"}>`;
+  const rawFrom = customFrom?.trim() || process.env.SMTP_FROM?.trim() || "Dimer Notificaciones";
+  let displayName = "Dimer Notificaciones";
+  if (rawFrom.includes("<") && rawFrom.includes(">")) {
+    const match = rawFrom.match(/^(.*?)\s*<.*?>$/);
+    if (match && match[1]?.trim()) {
+      displayName = match[1].trim().replace(/^["']|["']$/g, "");
+    }
+  } else if (!rawFrom.includes("@")) {
+    displayName = rawFrom.replace(/^["']|["']$/g, "");
+  }
+  const authEmail = c.user || "sistemas@dimer.com.mx";
+  return `"${displayName}" <${authEmail}>`;
 }
 var esc = (v) => String(v ?? "").replace(/[&<>\"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[m]);
 var formatCurrency = (amount) => new Intl.NumberFormat("es-MX", { style: "currency", currency: "MXN" }).format(Number(amount || 0));
@@ -1373,11 +1382,25 @@ async function sendEmail(p) {
     status = process.env.VERCEL || process.env.NODE_ENV === "production" ? "FALLIDO" : "SIMULADO";
   } else {
     try {
-      await transporter.sendMail({ from: getFromAddress(p.from), replyTo: p.replyTo, to: p.to, subject: p.subject, html: p.html });
+      const c = credentials();
+      const rawUserVar = process.env.DIMER_SMTP_USER ? "DIMER_SMTP_USER" : process.env.SMTP_USER ? "SMTP_USER" : process.env.GMAIL_USER ? "GMAIL_USER" : "DEFAULT";
+      const rawPass = process.env.DIMER_SMTP_APP_PASSWORD || process.env.SMTP_PASS || process.env.SMTP_PASSWORD || "";
+      const hasLeadingTrailingWhitespace = rawPass !== rawPass.trim();
+      const fromFormatted = getFromAddress(p.from);
+      console.log(`[SMTP-DEBUG] Enviando correo a ${p.to} usando variable_usuario=${rawUserVar} (${c.user}), pass_length=${c.pass.length}, pass_prefix="${c.pass.slice(0, 2)}***", pass_has_spaces_at_edges=${hasLeadingTrailingWhitespace}, from="${fromFormatted}"`);
+      const sendResult = await transporter.sendMail({
+        from: fromFormatted,
+        replyTo: p.replyTo,
+        to: p.to,
+        subject: p.subject,
+        html: p.html
+      });
       status = "ENVIADO";
+      console.log(`[SMTP-DEBUG] Correo enviado exitosamente a ${p.to} (${logId}): ${sendResult.response || sendResult.messageId}`);
     } catch (e) {
       status = "FALLIDO";
       errorMsg = e?.message || "Error SMTP";
+      console.error(`[SMTP-DEBUG-ERROR] Fall\xF3 env\xEDo a ${p.to}: message="${e?.message}", code="${e?.code}", response="${e?.response}", responseCode="${e?.responseCode}"`);
     }
   }
   const log = {
@@ -1506,10 +1529,11 @@ function createApp() {
   });
   app2.get(["/api/diagnostic", "/diagnostic"], async (_req, res) => {
     try {
+      const c = credentials();
       const [u, r] = await Promise.all([supabase.from("users").select("id", { head: true, count: "exact" }), supabase.from("travel_requests").select("id", { head: true, count: "exact" })]);
       if (u.error) throw u.error;
       if (r.error) throw r.error;
-      res.json({ status: "operational", runtime: process.env.VERCEL ? "vercel-serverless" : "node", database: { type: "supabase", usersCount: u.count || 0, requestsCount: r.count || 0, persistenceType: "supabase-postgresql" }, environmentChecks: { isVercel: Boolean(process.env.VERCEL), hasAppUrl: Boolean(process.env.APP_URL), hasJwtSecret: Boolean(process.env.JWT_SECRET), hasSmtpHost: Boolean(process.env.SMTP_HOST || process.env.EMAIL_HOST), hasSmtpUser: Boolean(process.env.SMTP_USER || process.env.GMAIL_USER), hasSmtpPass: Boolean(process.env.SMTP_PASS || process.env.SMTP_PASSWORD), finanzasEmailConfigured: Boolean(process.env.FINANZAS_EMAIL) } });
+      res.json({ status: "operational", runtime: process.env.VERCEL ? "vercel-serverless" : "node", database: { type: "supabase", usersCount: u.count || 0, requestsCount: r.count || 0, persistenceType: "supabase-postgresql" }, environmentChecks: { isVercel: Boolean(process.env.VERCEL), hasAppUrl: Boolean(process.env.APP_URL), hasJwtSecret: Boolean(process.env.JWT_SECRET), hasSmtpHost: Boolean(c.host), hasSmtpUser: Boolean(c.user), hasSmtpPass: Boolean(c.pass), finanzasEmailConfigured: Boolean(process.env.FINANZAS_EMAIL) } });
     } catch (e) {
       res.status(503).json({ status: "unavailable", database: { type: "supabase" }, error: e instanceof Error ? e.message : "Database unavailable" });
     }
@@ -2013,13 +2037,10 @@ function createApp() {
       err(res, e);
     }
   });
-  app2.get("/api/smtp/status", requireAuth, async (_req, res) => {
-    const host = (process.env.SMTP_HOST || "smtp.gmail.com").trim();
-    const port = (process.env.SMTP_PORT || "465").trim();
-    const user = (process.env.SMTP_USER || "").trim();
-    const pass = (process.env.SMTP_PASS || "").trim().replace(/\s+/g, "");
-    const configured = Boolean(user && pass);
-    res.json({ configured, details: { host, port, user: user ? `${user.slice(0, 3)}***@${user.split("@")[1] || ""}` : "", hasPassword: Boolean(pass), passwordLength: pass.length, secure: port === "465", from: getFromAddress() }, instructions: configured ? "SMTP configurado mediante SMTP_USER + SMTP_PASS." : "Faltan SMTP_USER y/o SMTP_PASS en el entorno del servidor." });
+  app2.get(["/api/smtp/status", "/smtp/status"], async (_req, res) => {
+    const c = credentials();
+    const configured = Boolean(c.user && c.pass);
+    res.json({ configured, details: { host: c.host, port: String(c.port), user: c.user ? `${c.user.slice(0, 3)}***@${c.user.split("@")[1] || ""}` : "No configurado", hasPassword: Boolean(c.pass), passwordLength: c.pass.length, secure: c.secure, from: getFromAddress() }, instructions: configured ? `SMTP configurado y listo para salida de correos (${c.user}).` : "Faltan credenciales SMTP (SMTP_USER y SMTP_PASS / DIMER_SMTP_APP_PASSWORD) en el entorno del servidor." });
   });
   app2.post("/api/smtp/test", requireAuth, requirePermission("administrar_configuracion"), async (req, res) => {
     try {

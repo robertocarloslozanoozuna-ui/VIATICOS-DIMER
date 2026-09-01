@@ -72,20 +72,25 @@ export default function AprobarView({
     setLoading(true);
     try {
       const res = await fetch('/api/requests');
-      const data: TravelRequest[] = await res.json();
-      setRequests(data);
+      const data = await res.json().catch(() => []);
+      if (Array.isArray(data)) {
+        setRequests(data);
 
-      if (selectedRequestId) {
-        const found = data.find((r) => r.id === selectedRequestId || r.folio === selectedRequestId);
-        if (found) {
-          selectRequestForReview(found);
+        if (selectedRequestId) {
+          const found = data.find((r) => r.id === selectedRequestId || r.folio === selectedRequestId);
+          if (found) {
+            selectRequestForReview(found);
+          }
+        } else if (data.length > 0 && !activeRequest) {
+          const pending = data.find((r) => r.status === 'PENDIENTE_APROBACION') || data[0];
+          selectRequestForReview(pending);
         }
-      } else if (data.length > 0 && !activeRequest) {
-        const pending = data.find((r) => r.status === 'PENDIENTE_APROBACION') || data[0];
-        selectRequestForReview(pending);
+      } else {
+        setRequests([]);
       }
     } catch (err) {
       console.error('Error fetching requests:', err);
+      setRequests([]);
     } finally {
       setLoading(false);
     }
@@ -273,6 +278,8 @@ export default function AprobarView({
   const formatCurrency = (val: number) =>
     new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(val);
 
+  const safeRequests = Array.isArray(requests) ? requests : [];
+
   return (
     <div className="space-y-4">
       {/* Top Header / Security Banner */}
@@ -362,17 +369,17 @@ export default function AprobarView({
             <div className="text-[10px] font-black text-slate-500 uppercase tracking-wider mb-2 flex items-center justify-between">
               <span>Bandeja de Solicitudes</span>
               <span className="bg-slate-100 text-slate-700 font-mono px-1.5 py-0.5 rounded text-[9px]">
-                {requests.length}
+                {safeRequests.length}
               </span>
             </div>
 
             {loading ? (
               <div className="text-center py-6 text-slate-400 text-xs">Cargando solicitudes...</div>
-            ) : requests.length === 0 ? (
+            ) : safeRequests.length === 0 ? (
               <div className="text-center py-6 text-slate-400 text-xs">No hay solicitudes registradas.</div>
             ) : (
               <div className="space-y-1.5 max-h-[620px] overflow-y-auto pr-1">
-                {requests.map((r) => {
+                {safeRequests.map((r) => {
                   const isSelected = activeRequest?.id === r.id;
                   const isPending = r.status === 'PENDIENTE_APROBACION';
                   return (

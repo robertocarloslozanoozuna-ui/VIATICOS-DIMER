@@ -33,9 +33,11 @@ export default function FinanzasView({
   const [processing, setProcessing] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  const approvedForPayment = requests.filter((r) => r.status === 'APROBADA');
-  const paidRequests = requests.filter((r) => r.status === 'PAGADA');
-  const finalizedRequests = requests.filter((r) => r.status === 'FINALIZADA');
+  const safeRequests = Array.isArray(requests) ? requests : [];
+
+  const approvedForPayment = safeRequests.filter((r) => r.status === 'APROBADA');
+  const paidRequests = safeRequests.filter((r) => r.status === 'PAGADA');
+  const finalizedRequests = safeRequests.filter((r) => r.status === 'FINALIZADA');
 
   const totalAuthorizedPendingPayment = approvedForPayment.reduce(
     (acc, r) => acc + (r.amountAuthorized || r.amountRequested),

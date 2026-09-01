@@ -13,7 +13,7 @@ import {
   Building2,
 } from 'lucide-react';
 import DimerLogo from './DimerLogo';
-import { safeFetchJson } from '../utils/apiHelper';
+import { safeFetchJson, setAuthToken } from '../utils/apiHelper';
 import type { User } from '../types';
 
 interface LoginViewProps {
@@ -42,7 +42,7 @@ export default function LoginView({
     setError(null);
 
     try {
-      const data = await safeFetchJson('/api/auth/login', {
+      const data = await safeFetchJson<any>('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -51,8 +51,12 @@ export default function LoginView({
         }),
       });
 
-      if (!data.success) {
-        throw new Error(data.error || 'Error al iniciar sesión');
+      if (!data?.success) {
+        throw new Error(data?.error || 'Error al iniciar sesión');
+      }
+
+      if (data.token) {
+        setAuthToken(data.token);
       }
 
       onLoginSuccess(data.user);

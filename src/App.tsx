@@ -7,7 +7,6 @@ import MisSolicitudesView from './components/MisSolicitudesView';
 import FinanzasView from './components/FinanzasView';
 import FinanzasDashboard from './components/FinanzasDashboard';
 import AdminView from './components/AdminView';
-import AdminRequestManagement from './components/AdminRequestManagement';
 import AuditoriaView from './components/AuditoriaView';
 import OutboxView from './components/OutboxView';
 import NextjsCodeView from './components/NextjsCodeView';
@@ -104,7 +103,6 @@ export default function App() {
   const approvedForFinanceCount = safeRequests.filter((r) => r.status === 'APROBADA').length;
   const userRole = currentUser?.role || 'SOLICITANTE';
   const isSoloLectura = userRole === 'SOLO_LECTURA_APROBADAS';
-  const isAdmin = userRole === 'ADMIN';
 
   const getTabTitle = () => {
     if (!currentUser) return 'Portal Corporativo - Iniciar Sesión';
@@ -158,7 +156,7 @@ export default function App() {
             <div className={`hidden md:flex items-center gap-1.5 border px-2 py-1 rounded-lg text-[10px] ${currentUser ? 'bg-slate-100 border-slate-200 text-slate-600' : 'bg-slate-900 border-slate-800 text-slate-400'}`}>
               <span className="font-semibold text-slate-400">Vista:</span>
               <button type="button" onClick={() => currentUser ? handleLogout() : handleSwitchUser('sistemas@dimer.com.mx')} className={`px-2 py-0.5 rounded font-bold transition flex items-center gap-1 cursor-pointer ${currentUser ? 'bg-indigo-600 text-white shadow-xs' : 'bg-slate-800 hover:bg-slate-700 text-slate-200'}`}>
-                {currentUser ? <><ToggleRight className="w-3.5 h-3.5 text-white" /><span>Con Sesión</span></> : <><ToggleLeft className="w-3.5 h-3.5 text-slate-500" /><span>Sin Sesión</span></></>}
+                {currentUser ? <><ToggleRight className="w-3.5 h-3.5 text-white" /><span>Con Sesión</span></> : <><ToggleLeft className="w-3.5 h-3.5 text-slate-500" /><span>Sin Sesión</span></>}
               </button>
             </div>
 
@@ -207,12 +205,7 @@ export default function App() {
                   <FinanzasView currentUser={currentUser} requests={requests} onRefreshData={fetchData} onOpenPrintVoucher={(req) => setPrintRequest(req)} />
                 </>
               )}
-              {activeTab === 'administracion' && (
-                <>
-                  {isAdmin && <AdminRequestManagement requests={safeRequests} onRefreshData={fetchData} />}
-                  <AdminView currentUser={currentUser} onRefreshData={fetchData} />
-                </>
-              )}
+              {activeTab === 'administracion' && <AdminView currentUser={currentUser} onRefreshData={fetchData} />}
               {activeTab === 'auditoria' && <AuditoriaView />}
               {activeTab === 'outbox' && <OutboxView />}
               {activeTab === 'nextjs-code' && <NextjsCodeView />}

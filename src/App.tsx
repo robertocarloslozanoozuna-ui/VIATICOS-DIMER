@@ -7,6 +7,7 @@ import MisSolicitudesView from './components/MisSolicitudesView';
 import FinanzasView from './components/FinanzasView';
 import FinanzasDashboard from './components/FinanzasDashboard';
 import AdminView from './components/AdminView';
+import AdminRequestManagement from './components/AdminRequestManagement';
 import AuditoriaView from './components/AuditoriaView';
 import OutboxView from './components/OutboxView';
 import NextjsCodeView from './components/NextjsCodeView';
@@ -103,6 +104,7 @@ export default function App() {
   const approvedForFinanceCount = safeRequests.filter((r) => r.status === 'APROBADA').length;
   const userRole = currentUser?.role || 'SOLICITANTE';
   const isSoloLectura = userRole === 'SOLO_LECTURA_APROBADAS';
+  const isAdmin = userRole === 'ADMIN';
 
   const getTabTitle = () => {
     if (!currentUser) return 'Portal Corporativo - Iniciar Sesión';
@@ -205,7 +207,12 @@ export default function App() {
                   <FinanzasView currentUser={currentUser} requests={requests} onRefreshData={fetchData} onOpenPrintVoucher={(req) => setPrintRequest(req)} />
                 </>
               )}
-              {activeTab === 'administracion' && <AdminView currentUser={currentUser} onRefreshData={fetchData} />}
+              {activeTab === 'administracion' && (
+                <>
+                  {isAdmin && <AdminRequestManagement requests={safeRequests} onRefreshData={fetchData} />}
+                  <AdminView currentUser={currentUser} onRefreshData={fetchData} />
+                </>
+              )}
               {activeTab === 'auditoria' && <AuditoriaView />}
               {activeTab === 'outbox' && <OutboxView />}
               {activeTab === 'nextjs-code' && <NextjsCodeView />}

@@ -72,7 +72,8 @@ export function registerAdminRequestRoutes(app: Express) {
         });
       }
 
-      await deleteRequest(request.id);
+      // Registrar la auditoría antes de eliminar para evitar conflictos con
+      // instalaciones de Supabase que tengan una FK audit_logs.request_id.
       await recordAuditLog({
         requestId: request.id,
         userId: admin.id,
@@ -85,6 +86,7 @@ export function registerAdminRequestRoutes(app: Express) {
         }
       });
 
+      await deleteRequest(request.id);
       return res.json({ success: true, folio: request.folio });
     } catch (error) {
       return routeError(res, error);

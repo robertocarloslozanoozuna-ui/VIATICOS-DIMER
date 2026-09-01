@@ -38,16 +38,29 @@ export function getFromAddress(customFrom?:string){
   const c=credentials();
   const rawFrom=customFrom?.trim()||process.env.SMTP_FROM?.trim()||'Dimer Notificaciones';
   let displayName='Dimer Notificaciones';
-  if(rawFrom.includes('<') && rawFrom.includes('>')){
-    const match=rawFrom.match(/^(.*?)\s*<.*?>$/);
-    if(match && match[1]?.trim()){
-      displayName=match[1].trim().replace(/^["']|["']$/g,'');
+  let fromEmail=c.user||'sistemas@dimer.com.mx';
+
+  // SMTP_FROM can now be either:
+  //   - NO_REPLY@dimer.com.mx
+  //   - "Dimer Notificaciones" <NO_REPLY@dimer.com.mx>
+  // In both cases the address is used as the actual RFC From address,
+  // while SMTP authentication remains systems@dimer.com.mx.
+  const bracketMatch=rawFrom.match(/^(.*?)\s*<([^>]+)>$/);
+  if(bracketMatch){
+    const candidateEmail=bracketMatch[2]?.trim();
+    if(candidateEmail?.includes('@')) fromEmail=candidateEmail;
+    if(bracketMatch[1]?.trim()){
+      displayName=bracketMatch[1].trim().replace(/^["']|["']$/g,'');
     }
-  } else if(!rawFrom.includes('@')){
+  } else if(rawFrom.includes('@')){
+    fromEmail=rawFrom.replace(/^["']|["']$/g,'').trim();
+    const localPart=fromEmail.split('@')[0]?.trim();
+    if(localPart) displayName=localPart;
+  } else {
     displayName=rawFrom.replace(/^["']|["']$/g,'');
   }
-  const authEmail=c.user||'sistemas@dimer.com.mx';
-  return `"${displayName}" <${authEmail}>`;
+
+  return `"${displayName}" <${fromEmail}>`;
 }
 
 const esc=(v:unknown)=>String(v??'').replace(/[&<>\"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[m]!));

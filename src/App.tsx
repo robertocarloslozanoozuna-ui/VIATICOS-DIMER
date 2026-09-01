@@ -113,7 +113,8 @@ export default function App() {
       case 'mis-solicitudes': return isSoloLectura ? 'Consulta Exclusiva de Solicitudes Aprobadas' : userRole === 'SOLICITANTE' ? 'Mis Solicitudes de Viáticos' : 'Monitor y Control General de Viáticos';
       case 'aprobar': return 'Panel de Aprobación Jerárquica Directa';
       case 'finanzas': return 'Módulo de Finanzas, Dispersión y Pólizas';
-      case 'administracion': return 'Administración de Usuarios, Roles, Departamentos y Jefes (RBAC)';
+      case 'administracion-solicitudes': return 'Control Administrativo de Solicitudes';
+      case 'administracion-rbac': return 'Gestión de Usuarios, Roles, Departamentos y Jefes';
       case 'auditoria': return 'Bitácora Inmutable de Auditoría (AuditLog)';
       case 'outbox': return 'Bandeja de Salida SMTP & Plantillas HTML';
       case 'nextjs-code': return 'Esquema de Producción Next.js 14 App Router';
@@ -207,11 +208,11 @@ export default function App() {
                   <FinanzasView currentUser={currentUser} requests={requests} onRefreshData={fetchData} onOpenPrintVoucher={(req) => setPrintRequest(req)} />
                 </>
               )}
-              {activeTab === 'administracion' && (
-                <>
-                  {isAdmin && <AdminRequestManagement requests={safeRequests} onRefreshData={fetchData} />}
-                  <AdminView currentUser={currentUser} onRefreshData={fetchData} />
-                </>
+              {activeTab === 'administracion-solicitudes' && isAdmin && (
+                <AdminRequestManagement requests={safeRequests} onRefreshData={fetchData} />
+              )}
+              {activeTab === 'administracion-rbac' && isAdmin && (
+                <AdminView currentUser={currentUser} onRefreshData={fetchData} />
               )}
               {activeTab === 'auditoria' && <AuditoriaView />}
               {activeTab === 'outbox' && <OutboxView />}

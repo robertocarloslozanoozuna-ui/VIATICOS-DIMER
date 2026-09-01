@@ -3,10 +3,86 @@ import cors from 'cors';
 import crypto from 'crypto';
 import { supabase } from './supabase.js';
 import { ALL_SYSTEM_PERMISSIONS, getUserById, getUserByEmail, listUsers, listDepartments, getOrCreateDepartment, createDepartment, updateDepartment, listBosses, getBossById, createBoss, updateBoss, deleteBoss, listRoles, createRole, updateRole, getPopulatedRequests, getRequest, insertRequest, updateRequest, deleteRequest, generateNextFolio, createApprovalToken, validateApprovalToken, processApprovalTokenAction, recordAuditLog, listAuditLogs, createVerificationCode, verifyCodeAndActivateUser, hashPassword, verifyPassword, sanitizeUser, hasPermission } from './db.js';
-import { buildBossApprovalEmailHtml, buildSystemsApprovedEmailHtml, buildVerificationEmailHtml, buildNewAccountAdminEmailHtml, buildTokenApprovalResultPageHtml, sendEmail, getFromAddress, credentials, outboxLogs } from './mailService.js';
+import { buildBossApprovalEmailHtml, buildSystemsApprovedEmailHtml, buildRequesterConfirmationEmailHtml, buildRejectionEmailHtml, buildVerificationEmailHtml, buildNewAccountAdminEmailHtml, buildTokenApprovalDecisionPageHtml, buildTokenApprovalResultPageHtml, sendEmail, getFromAddress, credentials, outboxLogs } from './mailService.js';
 import type { User, Role, TravelRequest, StoredUserRecord } from '../src/types.js';
 
-function baseUrl(req:express.Request){const configured=process.env.APP_URL?.trim().replace(/\/+$/,'');if(configured&&!(process.env.VERCEL&&configured.includes('localhost')))return configured;if(process.env.VERCEL_PROJECT_PRODUCTION_URL)return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;if(process.env.VERCEL_URL)return `https://${process.env.VERCEL_URL}`;const host=req.headers['x-forwarded-host']||req.headers.host;const proto=String(req.headers['x-forwarded-proto']||'http').split(',')[0];return host?`${proto}://${host}`:'http://localhost:3000';}
+async function resolveRequesterUser(r: TravelRequest): Promise<User> {
+  let userRecord = r.userId ? await getUserById(r.userId) : null;
+  if (!userRecord && r.requesterName) {
+    const all = await listUsers();
+    userRecord = all.find(u => u.id === r.userId || u.name?.toLowerCase() === r.requesterName?.toLowerCase()) || null;
+  }
+  const email = (userRecord?.email || (r as any).requesterEmail || (r as any).userEmail || '').trim().toLowerCase();
+  return userRecord ? sanitizeUser(userRecord) : {
+    id: r.userId || 'usr_solicitante',
+    name: r.requesterName || 'Colaborador',
+    email,
+    department: r.department || 'General',
+    role: 'SOLICITANTE',
+    status: 'ACTIVO'
+  } as User;
+}
+
+async function notifyRequestApproval(params: { request: TravelRequest; approverName: string; approverEmail: string; approvedAt?: string }) {
+  const { request: r, approverName, approverEmail, approvedAt = new Date().toISOString() } = params;
+  const user = await resolveRequesterUser(r);
+  const finanzasEmail = (process.env.FINANZAS_EMAIL || 'finanzas@dimer.com.mx').trim().toLowerCase();
+  const requesterEmail = (user.email || '').trim().toLowerCase();
+  const sistemasEmail = 'sistemas@dimer.com.mx';
+
+  const html = buildSystemsApprovedEmailHtml({ request: r, user, approverName, approverEmail, approvedAt });
+  const targets: Array<{ to: string; subject: string; role: string }> = [];
+
+  if (requesterEmail) {
+    targets.push({ to: requesterEmail, subject: `SOLICITUD DE VIÁTICOS APROBADA - Folio ${r.folio}`, role: 'Solicitante' });
+  } else {
+    console.warn(`[NOTIFY-APPROVAL-WARN] No se encontró correo para el solicitante de la solicitud ${r.folio} (userId: ${r.userId})`);
+  }
+
+  if (finanzasEmail && finanzasEmail !== requesterEmail) {
+    targets.push({ to: finanzasEmail, subject: `SOLICITUD DE VIÁTICOS APROBADA - Folio ${r.folio} [FINANZAS]`, role: 'Finanzas' });
+  }
+
+  if (sistemasEmail !== requesterEmail && sistemasEmail !== finanzasEmail) {
+    targets.push({ to: sistemasEmail, subject: `SOLICITUD DE VIÁTICOS APROBADA - Folio ${r.folio} [SISTEMAS]`, role: 'Sistemas' });
+  }
+
+  for (const t of targets) {
+    try {
+      const res = await sendEmail({ to: t.to, subject: t.subject, html, requestId: r.id, folio: r.folio });
+      console.log(`[APPROVAL-NOTIFICATION] Notificación enviada a ${t.role} (${t.to}) para folio ${r.folio}: ${res.status}`);
+    } catch (mErr) {
+      console.error(`[APPROVAL-NOTIFICATION-ERROR] Error enviando a ${t.role} (${t.to}):`, mErr);
+    }
+  }
+}
+
+async function notifyRequestRejection(params: { request: TravelRequest; rejectorName: string; rejectorEmail: string; reason: string }) {
+  const { request: r, rejectorName, rejectorEmail, reason } = params;
+  const user = await resolveRequesterUser(r);
+  const requesterEmail = (user.email || '').trim().toLowerCase();
+  const sistemasEmail = 'sistemas@dimer.com.mx';
+
+  const html = buildRejectionEmailHtml({ request: r, user, rejectorName, rejectorEmail, reason });
+  const targets: Array<{ to: string; subject: string; role: string }> = [];
+
+  if (requesterEmail) {
+    targets.push({ to: requesterEmail, subject: `SOLICITUD DE VIÁTICOS NO AUTORIZADA - Folio ${r.folio}`, role: 'Solicitante' });
+  }
+  if (sistemasEmail !== requesterEmail) {
+    targets.push({ to: sistemasEmail, subject: `SOLICITUD RECHAZADA - Folio ${r.folio} [SISTEMAS]`, role: 'Sistemas' });
+  }
+
+  for (const t of targets) {
+    try {
+      await sendEmail({ to: t.to, subject: t.subject, html, requestId: r.id, folio: r.folio });
+    } catch (mErr) {
+      console.error(`[REJECTION-NOTIFICATION-ERROR] Error enviando a ${t.role} (${t.to}):`, mErr);
+    }
+  }
+}
+
+function baseUrl(req?:express.Request){if(process.env.VERCEL_PROJECT_PRODUCTION_URL)return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;if(process.env.VERCEL_URL)return `https://${process.env.VERCEL_URL}`;const configured=(process.env.PUBLIC_APP_URL||process.env.APP_URL||'').trim().replace(/\/+$/,'');if(configured&&!configured.includes('ai.studio')&&!configured.includes('aistudio.google.com')){if(!(process.env.VERCEL&&configured.includes('localhost')))return configured;}if(req){const rawHost=String(req.headers['x-forwarded-host']||req.headers.host||'').split(',')[0].trim();if(rawHost&&!rawHost.includes('ai.studio')&&!rawHost.includes('aistudio.google.com')){const proto=String(req.headers['x-forwarded-proto']||(req.secure?'https':'http')).split(',')[0].trim();return `${proto}://${rawHost}`;}}return 'http://localhost:3000';}
 function parseCookies(req:express.Request){const raw=req.headers.cookie||'';return Object.fromEntries(raw.split(';').map(x=>x.trim()).filter(Boolean).map(x=>{const i=x.indexOf('=');return i<0?[x,'']:[x.slice(0,i),decodeURIComponent(x.slice(i+1))];}));}
 function jwtSign(payload:Record<string,unknown>){const secret=process.env.JWT_SECRET; if(!secret)throw new Error('Falta JWT_SECRET');const enc=(v:string)=>Buffer.from(v).toString('base64url');const head=enc(JSON.stringify({alg:'HS256',typ:'JWT'}));const body=enc(JSON.stringify({...payload,iat:Math.floor(Date.now()/1000),exp:Math.floor(Date.now()/1000)+8*60*60}));const sig=crypto.createHmac('sha256',secret).update(`${head}.${body}`).digest('base64url');return `${head}.${body}.${sig}`;}
 function jwtVerify(token:string){const secret=process.env.JWT_SECRET;if(!secret)throw new Error('Falta JWT_SECRET');const p=token.split('.');if(p.length!==3)throw new Error('JWT inválido');const expected=crypto.createHmac('sha256',secret).update(`${p[0]}.${p[1]}`).digest('base64url');if(!crypto.timingSafeEqual(Buffer.from(expected),Buffer.from(p[2])))throw new Error('JWT inválido');const payload=JSON.parse(Buffer.from(p[1],'base64url').toString('utf8'));if(!payload.exp||payload.exp<Math.floor(Date.now()/1000))throw new Error('Sesión expirada');return payload as {sub:string};}
@@ -16,7 +92,7 @@ function requireAuth(req:express.Request,res:express.Response,next:express.NextF
 function requirePermission(permission:any){return (req:express.Request,res:express.Response,next:express.NextFunction)=>{const u=(req as any).dimerUser as User|undefined;if(!hasPermission(u,permission))return res.status(403).json({error:'No tienes permiso para esta operación'});next();};}
 function err(res:express.Response,e:unknown){const msg=e instanceof Error?e.message:'Error interno';const status=/JWT|autentic|token inválido|no se encontró/i.test(msg)?400:503;return res.status(status).json({success:false,error:msg});}
 
-export function createApp(){const app=express();app.set('trust proxy',1);app.use(cors({origin:true,credentials:true}));app.use(express.json({limit:'10mb'}));
+export function createApp(){const app=express();app.set('trust proxy',1);app.use(cors({origin:true,credentials:true}));app.use(express.json({limit:'10mb'}));app.use(express.urlencoded({extended:true,limit:'10mb'}));
 app.get(['/api/health','/health'],async(_req,res)=>{try{const {error}=await supabase.from('users').select('id',{head:true,count:'exact'});if(error)throw error;res.json({ok:true,service:'viaticos-dimer-api',database:'supabase',runtime:process.env.VERCEL?'vercel-serverless':'node',timestamp:new Date().toISOString()});}catch(e){res.status(503).json({ok:false,database:'supabase',error:'Database unavailable'});}});
 app.get(['/api/diagnostic','/diagnostic'],async(_req,res)=>{try{const c=credentials();const [u,r]=await Promise.all([supabase.from('users').select('id',{head:true,count:'exact'}),supabase.from('travel_requests').select('id',{head:true,count:'exact'})]);if(u.error)throw u.error;if(r.error)throw r.error;res.json({status:'operational',runtime:process.env.VERCEL?'vercel-serverless':'node',database:{type:'supabase',usersCount:u.count||0,requestsCount:r.count||0,persistenceType:'supabase-postgresql'},environmentChecks:{isVercel:Boolean(process.env.VERCEL),hasAppUrl:Boolean(process.env.APP_URL),hasJwtSecret:Boolean(process.env.JWT_SECRET),hasSmtpHost:Boolean(c.host),hasSmtpUser:Boolean(c.user),hasSmtpPass:Boolean(c.pass),finanzasEmailConfigured:Boolean(process.env.FINANZAS_EMAIL)}});}catch(e){res.status(503).json({status:'unavailable',database:{type:'supabase'},error:e instanceof Error?e.message:'Database unavailable'});}});
 app.get(['/api/me','/me'],async(req,res)=>{try{const u=await auth(req);const allUsers=await listUsers();res.json({user:u,allUsers,appUrl:baseUrl(req),finanzasEmail:process.env.FINANZAS_EMAIL||'finanzas@dimer.com.mx',systemsEmail:'sistemas@dimer.com.mx'});}catch(e){err(res,e);}});
@@ -61,17 +137,37 @@ app.post('/api/requests',requireAuth,async(req,res)=>{try{
   const token=await createApprovalToken(r.id,bossEmail,boss?.id);
   await updateRequest(r.id,{approvalToken:token.token});
   await recordAuditLog({requestId:r.id,userId:u.id,action:'CREACION_SOLICITUD',details:{folio:r.folio,amountRequested:r.amountRequested,bossEmail}});
-  const approveUrl=`${baseUrl(req)}/api/approval/token-action?token=${encodeURIComponent(token.token)}&action=approve`;
-  const rejectUrl=`${baseUrl(req)}/api/approval/token-action?token=${encodeURIComponent(token.token)}&action=reject`;
-  const html=buildBossApprovalEmailHtml({request:r,user:u,approveUrl,rejectUrl,token:token.token});
+  
+  const approveUrl=`${baseUrl(req)}/api/approval/decision?token=${encodeURIComponent(token.token)}&action=approve`;
+  const rejectUrl=`${baseUrl(req)}/api/approval/decision?token=${encodeURIComponent(token.token)}&action=reject`;
+  const bossHtml=buildBossApprovalEmailHtml({request:r,user:u,approveUrl,rejectUrl,token:token.token});
   let mail:any={success:false,status:'FALLIDO'};
   try{
-    mail=await sendEmail({to:bossEmail,subject:`SOLICITUD POR AUTORIZAR - Folio ${folio}`,html,requestId:id,folio});
-    if(bossEmail!=='sistemas@dimer.com.mx')await sendEmail({to:'sistemas@dimer.com.mx',subject:`Nueva solicitud por autorizar - ${folio}`,html,requestId:id,folio});
+    mail=await sendEmail({to:bossEmail,subject:`SOLICITUD POR AUTORIZAR - Folio ${folio}`,html:bossHtml,requestId:id,folio});
   }catch(mErr:any){
-    console.error('[SMTP-CREATION-WARNING]',mErr);
+    console.error('[SMTP-CREATION-BOSS-ERROR]',mErr);
     mail={success:false,status:'FALLIDO',error:mErr?.message||'Fallo en envío de correo'};
   }
+
+  // Confirmación al solicitante
+  if(u.email){
+    try{
+      const requesterHtml=buildRequesterConfirmationEmailHtml({request:r,user:u,bossName:boss?.name||bossEmail,bossEmail});
+      await sendEmail({to:u.email,subject:`CONFIRMACIÓN: SOLICITUD REGISTRADA - Folio ${folio}`,html:requesterHtml,requestId:id,folio});
+    }catch(sErr){
+      console.error('[SMTP-CREATION-REQUESTER-ERROR]',sErr);
+    }
+  }
+
+  // Notificación a Sistemas
+  if(bossEmail!=='sistemas@dimer.com.mx'&&u.email.toLowerCase()!=='sistemas@dimer.com.mx'){
+    try{
+      await sendEmail({to:'sistemas@dimer.com.mx',subject:`Nueva solicitud por autorizar - ${folio}`,html:bossHtml,requestId:id,folio});
+    }catch(sysErr){
+      console.error('[SMTP-CREATION-SISTEMAS-ERROR]',sysErr);
+    }
+  }
+
   res.status(201).json({success:true,request:r,approvalToken:token.token,mailResult:mail});
 }catch(e){err(res,e);}});
 app.put('/api/requests/:id',requireAuth,async(req,res)=>{try{const u=(req as any).dimerUser as User;const r=await getRequest(String(req.params.id));if(!r)return res.status(404).json({error:'Solicitud no encontrada'});if(u.role!=='ADMIN'&&r.userId!==u.id)return res.status(403).json({error:'No tienes permisos'});if(u.role!=='ADMIN'&&!['PENDIENTE_APROBACION','CORRECCION_SOLICITADA','BORRADOR'].includes(r.status))return res.status(400).json({error:`No se puede modificar en ${r.status}`});const updated=await updateRequest(r.id,{...req.body,updatedAt:new Date().toISOString()});await recordAuditLog({requestId:r.id,userId:u.id,action:'MODIFICACION_SOLICITUD',details:{folio:r.folio}});res.json({success:true,request:updated});}catch(e){err(res,e);}});
@@ -79,11 +175,157 @@ app.patch('/api/requests/:id',requireAuth,async(req,res)=>{try{const r=await get
 app.delete('/api/requests/:id',requireAuth,async(req,res)=>{try{const u=(req as any).dimerUser as User;const r=await getRequest(String(req.params.id));if(!r)return res.status(404).json({error:'Solicitud no encontrada'});if(u.role!=='ADMIN'&&r.userId!==u.id)return res.status(403).json({error:'No autorizado'});await deleteRequest(r.id);await recordAuditLog({requestId:r.id,userId:u.id,action:'ELIMINACION_SOLICITUD',details:{folio:r.folio}});res.json({success:true,deletedId:r.id});}catch(e){err(res,e);}});
 app.post('/api/requests/:id/cancel',requireAuth,async(req,res)=>{try{const u=(req as any).dimerUser as User;const r=await getRequest(String(req.params.id));if(!r)return res.status(404).json({error:'Solicitud no encontrada'});if(r.userId!==u.id&&u.role!=='ADMIN')return res.status(403).json({error:'No autorizado'});if(['APROBADA','PAGADA','FINALIZADA'].includes(r.status))return res.status(400).json({error:`No se puede cancelar ${r.status}`});const updated=await updateRequest(r.id,{status:'CANCELADA',updatedAt:new Date().toISOString()});await recordAuditLog({requestId:r.id,userId:u.id,action:'CANCELACION_SOLICITUD',details:{folio:r.folio}});res.json({success:true,request:updated});}catch(e){err(res,e);}});
 
-async function tokenAction(req:express.Request,res:express.Response){try{const raw=String(req.query.token||'');const action=String(req.query.action||'').toLowerCase();const decision=action==='reject'||action==='rechazar'?'RECHAZADA':'APROBADA';if(!raw)return res.status(400).send(buildTokenApprovalResultPageHtml({status:'INVALIDA',errorMessage:'Token no proporcionado'}));if(decision==='RECHAZADA'&&!req.query.reason)return res.status(400).send(buildTokenApprovalResultPageHtml({status:'INVALIDA',errorMessage:'Para rechazar, indique el motivo mediante el formulario de aprobación.'}));const comments=typeof req.query.reason==='string'?req.query.reason:'Rechazado directamente desde el correo electrónico';const result=await processApprovalTokenAction(raw,decision,undefined,comments);const r=await getRequest(String(result.requestId));if(!r)return res.status(500).send(buildTokenApprovalResultPageHtml({status:'INVALIDA',errorMessage:'La solicitud procesada no fue encontrada'}));const requester=result.userId?await getUserById(String(result.userId)):null;const user=requester?sanitizeUser(requester):{id:r.userId,name:r.requesterName||'Colaborador',email:'',department:r.department||'General',role:'SOLICITANTE',status:'ACTIVO'} as User;if(decision==='APROBADA'){const html=buildSystemsApprovedEmailHtml({request:r,user,approverName:String(result.bossEmail||'Jefe Aprobador'),approverEmail:String(result.bossEmail||''),approvedAt:r.approvedAt});await sendEmail({to:user.email,subject:`SOLICITUD DE VIÁTICOS APROBADA - ${r.folio}`,html,requestId:r.id,folio:r.folio});await sendEmail({to:'sistemas@dimer.com.mx',subject:`SOLICITUD DE VIÁTICOS APROBADA - ${r.folio}`,html,requestId:r.id,folio:r.folio});const fin=process.env.FINANZAS_EMAIL||'finanzas@dimer.com.mx';if(fin.toLowerCase()!=='sistemas@dimer.com.mx')await sendEmail({to:fin,subject:`SOLICITUD DE VIÁTICOS APROBADA - ${r.folio}`,html,requestId:r.id,folio:r.folio});}else if(user.email){await sendEmail({to:user.email,subject:`SOLICITUD DE VIÁTICOS RECHAZADA - ${r.folio}`,html:`<p>Su solicitud <strong>${r.folio}</strong> fue rechazada.</p><p>${r.comments||comments}</p>`});}return res.send(buildTokenApprovalResultPageHtml({status:decision,request:r,actionTaken:decision,processedBy:String(result.bossEmail||''),processedAt:String(result.processedAt||new Date().toISOString())}));}catch(e){const msg=e instanceof Error?e.message:'Error procesando autorización';return res.status(/ya fue utilizado|expirado|inválido|procesada/i.test(msg)?400:500).send(buildTokenApprovalResultPageHtml({status:'INVALIDA',errorMessage:msg}));}}
-app.get('/api/approval/token-action',tokenAction);app.get('/approval-response/:token/:decision',async(req,res)=>{req.query.token=String(req.params.token);req.query.action=String(req.params.decision);return tokenAction(req,res);});app.get('/api/approval-response/:token/:decision',async(req,res)=>{req.query.token=String(req.params.token);req.query.action=String(req.params.decision);return tokenAction(req,res);});
+async function handleApprovalDecisionGet(req:express.Request,res:express.Response){try{
+  const raw=String(req.query.token||req.params.token||'').trim();
+  const actionParam=String(req.query.action||req.params.decision||'').toLowerCase();
+  const initialAction:'approve'|'reject'=(actionParam==='reject'||actionParam==='rechazar')?'reject':'approve';
+
+  if(!raw){
+    return res.status(400).send(buildTokenApprovalResultPageHtml({status:'INVALIDA',errorMessage:'Enlace incompleto: no se proporcionó el token de autorización.'}));
+  }
+
+  const validation=await validateApprovalToken(raw);
+  if(!validation.valid||!validation.request){
+    return res.status(400).send(buildTokenApprovalResultPageHtml({
+      status:'INVALIDA',
+      errorMessage:validation.error||'Este enlace ya no es válido o la solicitud ya fue dictaminada con anterioridad.'
+    }));
+  }
+
+  const requesterUser=await resolveRequesterUser(validation.request);
+  const approverEmail=String(validation.tokenRecord?.bossEmail||validation.request.bossEmail||'sistemas@dimer.com.mx');
+  const approverName=String(validation.request.bossName||approverEmail);
+
+  return res.send(buildTokenApprovalDecisionPageHtml({
+    request:validation.request,
+    user:requesterUser,
+    token:raw,
+    initialAction,
+    approverEmail,
+    approverName
+  }));
+}catch(e:any){
+  return res.status(500).send(buildTokenApprovalResultPageHtml({
+    status:'INVALIDA',
+    errorMessage:e?.message||'Error al cargar la página de dictamen.'
+  }));
+}}
+
+async function handleApprovalDecisionSubmit(req:express.Request,res:express.Response){try{
+  const raw=String(req.body?.token||req.query?.token||req.params.token||'').trim();
+  const rawDecision=String(req.body?.decision||req.body?.action||req.query?.action||'APROBADA').toUpperCase();
+  const decision:'APROBADA'|'RECHAZADA'=(rawDecision==='RECHAZADA'||rawDecision==='RECHAZAR'||rawDecision==='REJECT')?'RECHAZADA':'APROBADA';
+  
+  if(!raw){
+    return res.status(400).send(buildTokenApprovalResultPageHtml({status:'INVALIDA',errorMessage:'Token no proporcionado.'}));
+  }
+
+  const validation=await validateApprovalToken(raw);
+  if(!validation.valid||!validation.request){
+    return res.status(400).send(buildTokenApprovalResultPageHtml({
+      status:'INVALIDA',
+      errorMessage:validation.error||'Este enlace ya no es válido o la solicitud ya fue dictaminada con anterioridad.'
+    }));
+  }
+
+  const comments=String(req.body?.comments||req.body?.reason||req.query?.reason||'').trim();
+  if(decision==='RECHAZADA'&&!comments){
+    const requesterUser=await resolveRequesterUser(validation.request);
+    return res.status(400).send(buildTokenApprovalDecisionPageHtml({
+      request:validation.request,
+      user:requesterUser,
+      token:raw,
+      initialAction:'reject',
+      approverEmail:validation.tokenRecord?.bossEmail||validation.request.bossEmail,
+      errorMessage:'Debes indicar obligatoriamente el motivo por el cual se rechaza la solicitud.'
+    }));
+  }
+
+  const amountAuthorized=req.body?.amountAuthorized!==undefined&&req.body?.amountAuthorized!==''
+    ?Number(req.body.amountAuthorized)
+    :undefined;
+
+  const result=await processApprovalTokenAction(raw,decision,decision==='APROBADA'?amountAuthorized:undefined,comments||undefined);
+  const requestId=String(result?.requestId||result?.request_id||validation.request.id);
+  const r=await getRequest(requestId)||validation.request;
+
+  const approverName=String(result?.bossName||validation.tokenRecord?.bossEmail||r.bossName||r.bossEmail||'Jefe Aprobador');
+  const approverEmail=String(result?.bossEmail||validation.tokenRecord?.bossEmail||r.bossEmail||'sistemas@dimer.com.mx');
+
+  if(decision==='APROBADA'){
+    await notifyRequestApproval({
+      request:r,
+      approverName,
+      approverEmail,
+      approvedAt:r.approvedAt||new Date().toISOString()
+    });
+  }else{
+    await notifyRequestRejection({
+      request:r,
+      rejectorName:approverName,
+      rejectorEmail:approverEmail,
+      reason:r.comments||comments||'Solicitud no autorizada'
+    });
+  }
+
+  return res.send(buildTokenApprovalResultPageHtml({
+    status:decision,
+    request:r,
+    actionTaken:decision,
+    processedBy:approverEmail,
+    processedAt:String(result?.processedAt||new Date().toISOString())
+  }));
+}catch(e:any){
+  const msg=e instanceof Error?e.message:'Error procesando autorización';
+  return res.status(/ya fue utilizado|expirado|inválido|procesada/i.test(msg)?400:500).send(buildTokenApprovalResultPageHtml({
+    status:'INVALIDA',
+    errorMessage:msg
+  }));
+}}
+
+app.get(['/api/approval/decision','/api/approval/token-action','/approval-response/:token/:decision','/api/approval-response/:token/:decision'],handleApprovalDecisionGet);
+app.post(['/api/approval/submit-decision','/api/approval/token-action','/api/approval/decision'],handleApprovalDecisionSubmit);
 app.get('/api/approval-tokens/:token',async(req,res)=>{try{const v=await validateApprovalToken(String(req.params.token));if(!v.valid)return res.status(400).json({valid:false,error:v.error});const user=await getUserById(v.request.userId);res.json({valid:true,tokenRecord:v.tokenRecord,request:{...v.request,user:user?sanitizeUser(user):undefined}});}catch(e){err(res,e);}});
-app.post('/api/requests/:id/approve',requireAuth,async(req,res)=>{try{const u=(req as any).dimerUser as User;const r=await getRequest(String(req.params.id));if(!r)return res.status(404).json({error:'Solicitud no encontrada'});if(u.role!=='ADMIN'&&u.email.toLowerCase()!==r.bossEmail.toLowerCase())return res.status(403).json({error:'No autorizado'});if(!r.approvalToken)return res.status(400).json({error:'La solicitud no tiene token de aprobación'});const result=await processApprovalTokenAction(r.approvalToken,'APROBADA',Number(req.body?.amountAuthorized??r.amountRequested),req.body?.comments||null);const updated=await getRequest(r.id);if(!updated)throw new Error('Solicitud no encontrada después de aprobar');const requester=await getUserById(r.userId);if(requester){const html=buildSystemsApprovedEmailHtml({request:updated,user:sanitizeUser(requester),approverName:u.name,approverEmail:u.email,approvedAt:updated.approvedAt});await sendEmail({to:requester.email,subject:`SOLICITUD DE VIÁTICOS APROBADA - ${updated.folio}`,html,requestId:r.id,folio:r.folio});await sendEmail({to:'sistemas@dimer.com.mx',subject:`SOLICITUD DE VIÁTICOS APROBADA - ${updated.folio}`,html,requestId:r.id,folio:r.folio});}res.json({success:true,request:updated,result});}catch(e){err(res,e);}});
-app.post('/api/requests/:id/reject',requireAuth,async(req,res)=>{try{const u=(req as any).dimerUser as User;const r=await getRequest(String(req.params.id));if(!r)return res.status(404).json({error:'Solicitud no encontrada'});if(u.role!=='ADMIN'&&u.email.toLowerCase()!==r.bossEmail.toLowerCase())return res.status(403).json({error:'No autorizado'});if(!String(req.body?.comments||'').trim())return res.status(400).json({error:'El motivo del rechazo es obligatorio'});if(!r.approvalToken)return res.status(400).json({error:'La solicitud no tiene token de aprobación'});const result=await processApprovalTokenAction(r.approvalToken,'RECHAZADA',null,String(req.body.comments).trim());const updated=await getRequest(r.id);if(!updated)throw new Error('Solicitud no encontrada');const requester=await getUserById(r.userId);if(requester)await sendEmail({to:requester.email,subject:`SOLICITUD DE VIÁTICOS RECHAZADA - ${r.folio}`,html:`<p>Su solicitud <strong>${r.folio}</strong> fue rechazada.</p><p>${String(req.body.comments).trim()}</p>`});res.json({success:true,request:updated,result});}catch(e){err(res,e);}});
+app.post('/api/requests/:id/approve',requireAuth,async(req,res)=>{try{
+  const u=(req as any).dimerUser as User;
+  const r=await getRequest(String(req.params.id));
+  if(!r)return res.status(404).json({error:'Solicitud no encontrada'});
+  if(u.role!=='ADMIN'&&u.email.toLowerCase()!==r.bossEmail.toLowerCase())return res.status(403).json({error:'No autorizado'});
+  if(!r.approvalToken)return res.status(400).json({error:'La solicitud no tiene token de aprobación'});
+  const result=await processApprovalTokenAction(r.approvalToken,'APROBADA',Number(req.body?.amountAuthorized??r.amountRequested),req.body?.comments||null);
+  const updated=await getRequest(r.id);
+  if(!updated)throw new Error('Solicitud no encontrada después de aprobar');
+
+  await notifyRequestApproval({
+    request:updated,
+    approverName:u.name,
+    approverEmail:u.email,
+    approvedAt:updated.approvedAt||new Date().toISOString()
+  });
+
+  res.json({success:true,request:updated,result});
+}catch(e){err(res,e);}});
+app.post('/api/requests/:id/reject',requireAuth,async(req,res)=>{try{
+  const u=(req as any).dimerUser as User;
+  const r=await getRequest(String(req.params.id));
+  if(!r)return res.status(404).json({error:'Solicitud no encontrada'});
+  if(u.role!=='ADMIN'&&u.email.toLowerCase()!==r.bossEmail.toLowerCase())return res.status(403).json({error:'No autorizado'});
+  const reason=String(req.body?.comments||'').trim();
+  if(!reason)return res.status(400).json({error:'El motivo del rechazo es obligatorio'});
+  if(!r.approvalToken)return res.status(400).json({error:'La solicitud no tiene token de aprobación'});
+  const result=await processApprovalTokenAction(r.approvalToken,'RECHAZADA',null,reason);
+  const updated=await getRequest(r.id);
+  if(!updated)throw new Error('Solicitud no encontrada');
+
+  await notifyRequestRejection({
+    request:updated,
+    rejectorName:u.name,
+    rejectorEmail:u.email,
+    reason
+  });
+
+  res.json({success:true,request:updated,result});
+}catch(e){err(res,e);}});
 app.post('/api/requests/:id/request-correction',requireAuth,async(req,res)=>{try{const u=(req as any).dimerUser as User;const r=await getRequest(String(req.params.id));if(!r)return res.status(404).json({error:'Solicitud no encontrada'});if(u.role!=='ADMIN'&&u.email.toLowerCase()!==r.bossEmail.toLowerCase())return res.status(403).json({error:'No autorizado'});const updated=await updateRequest(r.id,{status:'CORRECCION_SOLICITADA',comments:req.body?.comments||r.comments,updatedAt:new Date().toISOString()});await recordAuditLog({requestId:r.id,userId:u.id,action:'SOLICITUD_CORRECCION',details:{notes:req.body?.comments||''}});res.json({success:true,request:updated});}catch(e){err(res,e);}});
 app.post('/api/requests/:id/pay',requireAuth,requirePermission('ver_reportes'),async(req,res)=>{try{const r=await getRequest(String(req.params.id));if(!r)return res.status(404).json({error:'Solicitud no encontrada'});const updated=await updateRequest(r.id,{status:'PAGADA',updatedAt:new Date().toISOString()});await recordAuditLog({requestId:r.id,userId:(req as any).dimerUser.id,action:'DISPERSION_PAGO',details:{reference:req.body?.reference||'SPEI-DIRECTO',notes:req.body?.notes||''}});res.json({success:true,request:updated});}catch(e){err(res,e);}});
 app.post('/api/requests/:id/finalize',requireAuth,requirePermission('ver_reportes'),async(req,res)=>{try{const r=await getRequest(String(req.params.id));if(!r)return res.status(404).json({error:'Solicitud no encontrada'});const updated=await updateRequest(r.id,{status:'FINALIZADA',updatedAt:new Date().toISOString()});await recordAuditLog({requestId:r.id,userId:(req as any).dimerUser.id,action:'FINALIZACION_COMPROBACION',details:{notes:req.body?.notes||''}});res.json({success:true,request:updated});}catch(e){err(res,e);}});

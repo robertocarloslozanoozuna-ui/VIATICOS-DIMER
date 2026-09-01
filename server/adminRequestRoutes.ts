@@ -1,6 +1,7 @@
 import type { Express, NextFunction, Request, Response } from 'express';
 import crypto from 'crypto';
-import { getUserById, getRequest, deleteRequest, updateRequest, recordAuditLog, listRoles, sanitizeUser } from './db.js';
+import { getUserById, getRequest, deleteRequest, updateRequest, recordAuditLog, listRoles, sanitizeUser, createApprovalToken } from './db.js';
+import { buildBossApprovalEmailHtml, buildRequesterConfirmationEmailHtml, sendEmail } from './mailService.js';
 import type { User } from '../src/types.js';
 
 function parseCookies(req: Request) {
@@ -56,6 +57,18 @@ function routeError(res: Response, error: unknown) {
   return res.status(500).json({ success: false, error: message });
 }
 
+function baseUrl(req: Request) {
+  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  const configured = (process.env.PUBLIC_APP_URL || process.env.APP_URL || '').trim().replace(/\/+$/, '');
+  if (configured && !configured.includes('ai.studio') && !configured.includes('aistudio.google.com')) {
+    if (!(process.env.VERCEL && configured.includes('localhost'))) return configured;
+  }
+  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
+  const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim();
+  return host ? `${proto}://${host}` : 'http://localhost:3000';
+}
+
 export function registerAdminRequestRoutes(app: Express) {
   app.delete('/api/requests/:id', requireAdmin, async (req, res) => {
     try {
@@ -72,8 +85,6 @@ export function registerAdminRequestRoutes(app: Express) {
         });
       }
 
-      // Registrar la auditoría antes de eliminar para evitar conflictos con
-      // instalaciones de Supabase que tengan una FK audit_logs.request_id.
       await recordAuditLog({
         requestId: request.id,
         userId: admin.id,
@@ -127,6 +138,116 @@ export function registerAdminRequestRoutes(app: Express) {
       });
 
       return res.json({ success: true, request: updated });
+    } catch (error) {
+      return routeError(res, error);
+    }
+  });
+
+  // El POST /api/requests histórico crea la solicitud, pero en la versión actual
+  // no genera el token ni dispara las notificaciones. Este endpoint completa ese
+  // paso después de que la solicitud ya quedó persistida, sin tocar SMTP ni el flujo
+  // de aprobación existente.
+  app.post('/api/requests/:id/notify', async (req, res) => {
+    try {
+      const user = await getAuthenticatedUser(req);
+      if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
+
+      const requestId = String(req.params.id || '').trim();
+      const request = await getRequest(requestId);
+      if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
+      if (user.role !== 'ADMIN' && request.userId !== user.id) {
+        return res.status(403).json({ success: false, error: 'No autorizado para notificar esta solicitud' });
+      }
+      if (request.status !== 'PENDIENTE_APROBACION') {
+        return res.status(400).json({ success: false, error: `La solicitud está en estado ${request.status} y no requiere notificación inicial.` });
+      }
+      if (!request.bossEmail) {
+        return res.status(400).json({ success: false, error: 'La solicitud no tiene correo de aprobador asignado.' });
+      }
+
+      let current = request;
+      let token = current.approvalToken || '';
+      if (!token) {
+        const tokenRecord = await createApprovalToken(current.id, current.bossEmail, current.bossId);
+        token = tokenRecord.token;
+        current = await updateRequest(current.id, {
+          approvalToken: token,
+          updatedAt: new Date().toISOString()
+        });
+      }
+
+      const approvalUrl = `${baseUrl(req)}/api/approval/token-action?token=${encodeURIComponent(token)}`;
+      const rejectUrl = approvalUrl;
+      const requester = await getUserById(current.userId);
+      const requesterUser = requester
+        ? sanitizeUser(requester)
+        : ({
+            id: current.userId,
+            name: current.requesterName || 'Colaborador',
+            email: '',
+            department: current.department || 'General',
+            role: 'SOLICITANTE',
+            status: 'ACTIVO'
+          } as User);
+
+      const bossHtml = buildBossApprovalEmailHtml({
+        request: current,
+        user: requesterUser,
+        approveUrl,
+        rejectUrl,
+        token
+      });
+      const bossMail = await sendEmail({
+        to: current.bossEmail,
+        subject: `AUTORIZACIÓN DE VIÁTICOS - Folio ${current.folio}`,
+        html: bossHtml,
+        requestId: current.id,
+        folio: current.folio
+      });
+
+      const confirmationHtml = buildRequesterConfirmationEmailHtml({
+        request: current,
+        user: requesterUser,
+        bossName: current.bossName || current.bossEmail,
+        bossEmail: current.bossEmail
+      });
+      const requesterMail = requesterUser.email
+        ? await sendEmail({
+            to: requesterUser.email,
+            subject: `SOLICITUD DE VIÁTICOS REGISTRADA - Folio ${current.folio}`,
+            html: confirmationHtml,
+            requestId: current.id,
+            folio: current.folio
+          })
+        : { status: 'FALLIDO', error: 'No se encontró correo del solicitante' } as const;
+
+      await recordAuditLog({
+        requestId: current.id,
+        userId: user.id,
+        action: 'NOTIFICACION_CREACION_SOLICITUD',
+        details: {
+          folio: current.folio,
+          approvalTokenCreated: !request.approvalToken,
+          bossEmail: current.bossEmail,
+          requesterEmail: requesterUser.email,
+          bossMailStatus: bossMail.status,
+          requesterMailStatus: requesterMail.status,
+          bossMailError: bossMail.error || null,
+          requesterMailError: requesterMail.error || null
+        }
+      });
+
+      const ok = bossMail.status === 'ENVIADO' && requesterMail.status === 'ENVIADO';
+      return res.status(ok ? 200 : 502).json({
+        success: ok,
+        request: current,
+        notifications: {
+          approver: bossMail.status,
+          requester: requesterMail.status,
+          approverError: bossMail.error,
+          requesterError: requesterMail.error
+        }
+      });
     } catch (error) {
       return routeError(res, error);
     }

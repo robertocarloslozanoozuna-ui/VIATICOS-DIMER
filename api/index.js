@@ -1479,10 +1479,14 @@ function jwtVerify(token) {
   if (!payload.exp || payload.exp < Math.floor(Date.now() / 1e3)) throw new Error("Sesi\xF3n expirada");
   return payload;
 }
+function setSessionCookie(res, req, token) {
+  const isHttps = req.secure || req.headers["x-forwarded-proto"] === "https" || process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL);
+  res.cookie("dimer_session", token, { httpOnly: true, secure: isHttps, sameSite: isHttps ? "none" : "lax", path: "/", maxAge: 8 * 60 * 60 * 1e3 });
+}
 async function auth(req) {
   const cookies = parseCookies(req);
   const bearer = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "").trim();
-  const token = cookies.dimer_session || bearer;
+  const token = bearer || cookies.dimer_session;
   if (!token) return null;
   try {
     const p = jwtVerify(token);
@@ -1558,9 +1562,9 @@ function createApp() {
       const roles = await listRoles();
       const user = sanitizeUser(u, roles.find((r) => r.id === u.roleId));
       const token = jwtSign({ sub: u.id, email: u.email });
-      res.cookie("dimer_session", token, { httpOnly: true, secure: process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL), sameSite: "lax", path: "/", maxAge: 8 * 60 * 60 * 1e3 });
+      setSessionCookie(res, req, token);
       await recordAuditLog({ userId: u.id, action: "INICIO_SESION", details: { email: u.email, role: u.role } });
-      res.json({ success: true, user });
+      res.json({ success: true, user, token });
     } catch (e) {
       err(res, e);
     }
@@ -1599,13 +1603,13 @@ function createApp() {
       const roles = await listRoles();
       const user = sanitizeUser(result.user, roles.find((r) => r.id === result.user?.roleId));
       const token = jwtSign({ sub: result.user.id, email: result.user.email });
-      res.cookie("dimer_session", token, { httpOnly: true, secure: process.env.NODE_ENV === "production" || Boolean(process.env.VERCEL), sameSite: "lax", path: "/", maxAge: 8 * 60 * 60 * 1e3 });
+      setSessionCookie(res, req, token);
       await recordAuditLog({ userId: result.user.id, action: "VERIFICACION_Y_ACTIVACION_CUENTA", details: { email: user.email } });
       try {
         await sendEmail({ to: "sistemas@dimer.com.mx", subject: `NUEVA CUENTA REGISTRADA - ${user.name}`, html: buildNewAccountAdminEmailHtml({ user, registeredAt: (/* @__PURE__ */ new Date()).toISOString() }) });
       } catch {
       }
-      res.json({ success: true, user, message: "Cuenta verificada y activada con \xE9xito." });
+      res.json({ success: true, user, token, message: "Cuenta verificada y activada con \xE9xito." });
     } catch (e) {
       err(res, e);
     }
@@ -1831,8 +1835,14 @@ function createApp() {
       const approveUrl = `${baseUrl(req)}/api/approval/token-action?token=${encodeURIComponent(token.token)}&action=approve`;
       const rejectUrl = `${baseUrl(req)}/api/approval/token-action?token=${encodeURIComponent(token.token)}&action=reject`;
       const html = buildBossApprovalEmailHtml({ request: r, user: u, approveUrl, rejectUrl, token: token.token });
-      const mail = await sendEmail({ to: bossEmail, subject: `SOLICITUD POR AUTORIZAR - Folio ${folio}`, html, requestId: id, folio });
-      if (bossEmail !== "sistemas@dimer.com.mx") await sendEmail({ to: "sistemas@dimer.com.mx", subject: `Nueva solicitud por autorizar - ${folio}`, html, requestId: id, folio });
+      let mail = { success: false, status: "FALLIDO" };
+      try {
+        mail = await sendEmail({ to: bossEmail, subject: `SOLICITUD POR AUTORIZAR - Folio ${folio}`, html, requestId: id, folio });
+        if (bossEmail !== "sistemas@dimer.com.mx") await sendEmail({ to: "sistemas@dimer.com.mx", subject: `Nueva solicitud por autorizar - ${folio}`, html, requestId: id, folio });
+      } catch (mErr) {
+        console.error("[SMTP-CREATION-WARNING]", mErr);
+        mail = { success: false, status: "FALLIDO", error: mErr?.message || "Fallo en env\xEDo de correo" };
+      }
       res.status(201).json({ success: true, request: r, approvalToken: token.token, mailResult: mail });
     } catch (e) {
       err(res, e);
@@ -2037,7 +2047,7 @@ function createApp() {
       err(res, e);
     }
   });
-  app2.get(["/api/smtp/status", "/smtp/status"], async (_req, res) => {
+  app2.get("/api/smtp/status", requireAuth, async (_req, res) => {
     const c = credentials();
     const configured = Boolean(c.user && c.pass);
     res.json({ configured, details: { host: c.host, port: String(c.port), user: c.user ? `${c.user.slice(0, 3)}***@${c.user.split("@")[1] || ""}` : "No configurado", hasPassword: Boolean(c.pass), passwordLength: c.pass.length, secure: c.secure, from: getFromAddress() }, instructions: configured ? `SMTP configurado y listo para salida de correos (${c.user}).` : "Faltan credenciales SMTP (SMTP_USER y SMTP_PASS / DIMER_SMTP_APP_PASSWORD) en el entorno del servidor." });

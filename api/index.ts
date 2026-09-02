@@ -1,5 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
+import crypto from 'crypto';
 import { createApp } from '../server/app.js';
+import { getUserById, listBosses } from '../server/db.js';
 import { registerApprovalRoutes } from '../server/approvalRoutes.js';
 import { registerAdminRequestRoutes } from '../server/adminRequestRoutes.js';
 import { registerRequestCreationRoutes } from '../server/requestCreationRoutes.js';
@@ -8,6 +10,34 @@ import { registerMultiRoleUserRoutes } from '../server/multiRoleUserRoutes.js';
 import { logSystemError, registerProcessErrorLogging } from '../server/errorLogger.js';
 
 const app = express();
+
+function parseSessionCookie(req: Request) {
+  const raw = String(req.headers.cookie || '');
+  const cookies = Object.fromEntries(raw.split(';').map(x => x.trim()).filter(Boolean).map(x => {
+    const i = x.indexOf('=');
+    return i < 0 ? [x, ''] : [x.slice(0, i), decodeURIComponent(x.slice(i + 1))];
+  }));
+  return String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim() || String(cookies.dimer_session || '');
+}
+
+async function isAuthenticated(req: Request) {
+  const token = parseSessionCookie(req);
+  if (!token) return false;
+  try {
+    const secret = process.env.JWT_SECRET;
+    if (!secret) return false;
+    const parts = token.split('.');
+    if (parts.length !== 3) return false;
+    const expected = crypto.createHmac('sha256', secret).update(`${parts[0]}.${parts[1]}`).digest('base64url');
+    if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(parts[2]))) return false;
+    const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as { sub?: string; exp?: number };
+    if (!payload.sub || !payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return false;
+    const user = await getUserById(payload.sub);
+    return Boolean(user && user.status === 'ACTIVO');
+  } catch {
+    return false;
+  }
+}
 
 // Global error telemetry. It does not alter successful requests and never
 // exposes credentials, cookies or authorization headers in the log.
@@ -50,6 +80,21 @@ app.use('/api/requests', (req: Request, _res: Response, next: NextFunction) => {
     }
   }
   next();
+});
+
+// A requester only needs read access to the active approver list in order to
+// create a travel request. Administrative create/update/delete operations
+// remain protected by the existing administrar_jefes permission inside createApp().
+app.get('/api/bosses', async (req: Request, res: Response) => {
+  try {
+    if (!(await isAuthenticated(req))) {
+      return res.status(401).json({ error: 'Autenticación requerida' });
+    }
+    return res.json((await listBosses()).filter(boss => boss.active));
+  } catch (error) {
+    logSystemError(error, req, { source: 'bosses-read', statusCode: 503 });
+    return res.status(503).json({ error: 'Base de datos no disponible' });
+  }
 });
 
 // Initial request notification endpoint.

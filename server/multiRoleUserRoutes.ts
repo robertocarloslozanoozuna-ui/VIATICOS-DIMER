@@ -63,6 +63,13 @@ function requireUserAdmin(req: Request, res: Response, next: NextFunction) {
   }).catch(() => res.status(503).json({ error: 'Base de datos no disponible' }));
 }
 
+function requireSameOriginMutation(req: Request, res: Response, next: NextFunction) {
+  if (req.method === 'GET' || req.method === 'HEAD' || req.method === 'OPTIONS') return next();
+  const site = String(req.headers['sec-fetch-site'] || '').trim().toLowerCase();
+  if (site === 'cross-site') return res.status(403).json({ error: 'Origen no permitido' });
+  next();
+}
+
 async function resolveRoleSelection(body: any, currentRoleIds?: string[]) {
   const hasRoleIds = Array.isArray(body?.roleIds);
   const hasRoleId = body?.roleId !== undefined && body?.roleId !== null && String(body.roleId).trim() !== '';
@@ -98,7 +105,7 @@ export function registerMultiRoleUserRoutes(app: Express) {
     }
   });
 
-  app.post('/api/users', requireUserAdmin, async (req, res) => {
+  app.post('/api/users', requireSameOriginMutation, requireUserAdmin, async (req, res) => {
     try {
       const { name, email, password, department, status } = req.body || {};
       if (!name || !email || !password) {
@@ -142,7 +149,7 @@ export function registerMultiRoleUserRoutes(app: Express) {
     }
   });
 
-  app.put('/api/users/:id', requireUserAdmin, async (req, res) => {
+  app.put('/api/users/:id', requireSameOriginMutation, requireUserAdmin, async (req, res) => {
     try {
       const id = String(req.params.id);
       const target = await getUserById(id);
@@ -184,7 +191,7 @@ export function registerMultiRoleUserRoutes(app: Express) {
     }
   });
 
-  app.delete('/api/users/:id', requireUserAdmin, async (req, res) => {
+  app.delete('/api/users/:id', requireSameOriginMutation, requireUserAdmin, async (req, res) => {
     try {
       const target = await getUserById(String(req.params.id));
       if (!target) return res.status(404).json({ error: 'Usuario no encontrado' });

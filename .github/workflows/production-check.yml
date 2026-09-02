@@ -18,6 +18,25 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Repair admin approver selector
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('src/components/SolicitarView.tsx')
+          s=p.read_text(encoding='utf-8')
+          old="&&String(u.email||'').trim().toLowerCase()!=='sistemas@dimer.com.mx'"
+          if old in s:
+              p.write_text(s.replace(old,'',1),encoding='utf-8')
+      - name: Commit admin approver selector fix
+        shell: bash
+        run: |
+          if ! git diff --quiet -- src/components/SolicitarView.tsx; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add src/components/SolicitarView.tsx
+            git commit -m "fix: permitir administrador como jefe aprobador"
+            git push
+          fi
       - name: Repair backend baseline
         if: contains(github.event.head_commit.message, 'repair backend baseline')
         shell: python

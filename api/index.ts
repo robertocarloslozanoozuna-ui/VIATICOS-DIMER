@@ -31,6 +31,27 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// When the request form is submitted without applying the Budget Calculator,
+// the frontend's calculator fields can still contain their UI defaults.
+// The existing "Desglose estimado:" marker is written only by the calculator's
+// Apply action, so it is the safest backwards-compatible indicator that the
+// user actually used the calculator. Normalize those default values before
+// the request reaches the persistence layer. This keeps the existing schema,
+// approval flow and email templates unchanged.
+app.use('/api/requests', (req: Request, _res: Response, next: NextFunction) => {
+  if (req.method === 'POST' && req.body && typeof req.body === 'object') {
+    const comments = String(req.body.comments || '');
+    const calculatorUsed = /Desglose estimado:/i.test(comments);
+    if (!calculatorUsed) {
+      req.body.transportCost = 0;
+      req.body.hotelCost = 0;
+      req.body.foodCost = 0;
+      req.body.miscCost = 0;
+    }
+  }
+  next();
+});
+
 // Initial request notification endpoint.
 app.post('/api/requests/:id/notify', requestNotificationHandler);
 

@@ -1,7 +1,7 @@
 import express, { type NextFunction, type Request, type Response } from 'express';
 import crypto from 'crypto';
 import { createApp } from '../server/app.js';
-import { getUserById, listBosses } from '../server/db.js';
+import { getUserById, getRequest, updateRequest, recordAuditLog, listBosses } from '../server/db.js';
 import { registerApprovalRoutes } from '../server/approvalRoutes.js';
 import { registerAdminRequestRoutes } from '../server/adminRequestRoutes.js';
 import { registerRequestCreationRoutes } from '../server/requestCreationRoutes.js';
@@ -20,23 +20,29 @@ function parseSessionCookie(req: Request) {
   return String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim() || String(cookies.dimer_session || '');
 }
 
-async function isAuthenticated(req: Request) {
+async function getAuthenticatedUser(req: Request) {
   const token = parseSessionCookie(req);
-  if (!token) return false;
+  if (!token) return null;
   try {
     const secret = process.env.JWT_SECRET;
-    if (!secret) return false;
+    if (!secret) return null;
     const parts = token.split('.');
-    if (parts.length !== 3) return false;
+    if (parts.length !== 3) return null;
     const expected = crypto.createHmac('sha256', secret).update(`${parts[0]}.${parts[1]}`).digest('base64url');
-    if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(parts[2]))) return false;
+    const actual = Buffer.from(parts[2]);
+    const expectedBuffer = Buffer.from(expected);
+    if (actual.length !== expectedBuffer.length || !crypto.timingSafeEqual(actual, expectedBuffer)) return null;
     const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as { sub?: string; exp?: number };
-    if (!payload.sub || !payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return false;
+    if (!payload.sub || !payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
     const user = await getUserById(payload.sub);
-    return Boolean(user && user.status === 'ACTIVO');
+    return user && user.status === 'ACTIVO' ? user : null;
   } catch {
-    return false;
+    return null;
   }
+}
+
+async function isAuthenticated(req: Request) {
+  return Boolean(await getAuthenticatedUser(req));
 }
 
 // Global error telemetry. It does not alter successful requests and never
@@ -55,19 +61,11 @@ app.use((req: Request, res: Response, next: NextFunction) => {
   next();
 });
 
-// IMPORTANT: createApp() contains the application's final fallback/404 handler.
-// Any routes that are registered after createApp() may never be reached.
-// Keep externally registered routes on this outer app, before app.use(mainApp).
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// When the request form is submitted without applying the Budget Calculator,
-// the frontend's calculator fields can still contain their UI defaults.
-// The existing "Desglose estimado:" marker is written only by the calculator's
-// Apply action, so it is the safest backwards-compatible indicator that the
-// user actually used the calculator. Normalize those default values before
-// the request reaches the persistence layer. This keeps the existing schema,
-// approval flow and email templates unchanged.
+// Cuando no se usa la calculadora, los costos auxiliares no deben conservar
+// los valores por defecto de la interfaz.
 app.use('/api/requests', (req: Request, _res: Response, next: NextFunction) => {
   if (req.method === 'POST' && req.body && typeof req.body === 'object') {
     const comments = String(req.body.comments || '');
@@ -82,14 +80,11 @@ app.use('/api/requests', (req: Request, _res: Response, next: NextFunction) => {
   next();
 });
 
-// A requester only needs read access to the active approver list in order to
-// create a travel request. Administrative create/update/delete operations
-// remain protected by the existing administrar_jefes permission inside createApp().
+// Lectura de supervisores/aprobadores para cualquier usuario autenticado.
+// Las operaciones administrativas del catálogo siguen protegidas dentro de createApp().
 app.get('/api/bosses', async (req: Request, res: Response) => {
   try {
-    if (!(await isAuthenticated(req))) {
-      return res.status(401).json({ error: 'Autenticación requerida' });
-    }
+    if (!(await isAuthenticated(req))) return res.status(401).json({ error: 'Autenticación requerida' });
     return res.json((await listBosses()).filter(boss => boss.active));
   } catch (error) {
     logSystemError(error, req, { source: 'bosses-read', statusCode: 503 });
@@ -97,28 +92,50 @@ app.get('/api/bosses', async (req: Request, res: Response) => {
   }
 });
 
-// Initial request notification endpoint.
+// El solicitante puede cancelar su propia solicitud únicamente mientras siga
+// pendiente de autorización. ADMIN conserva la posibilidad de intervenir sin
+// reutilizar el endpoint administrativo que cancela solicitudes ya aprobadas.
+app.post('/api/requests/:id/cancel', async (req: Request, res: Response) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
+    const requestId = String(req.params.id || '').trim();
+    const request = await getRequest(requestId);
+    if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
+    const isOwner = request.userId === user.id;
+    const isAdmin = String(user.role || '').toUpperCase() === 'ADMIN' || Boolean(user.roles?.some(r => String(r.name || '').toUpperCase() === 'ADMIN'));
+    if (!isOwner && !isAdmin) return res.status(403).json({ success: false, error: 'Solo el solicitante puede cancelar esta solicitud.' });
+    if (request.status !== 'PENDIENTE_APROBACION' && request.status !== 'PENDIENTE') {
+      return res.status(400).json({ success: false, error: `Solo se puede cancelar antes de la aprobación. Estado actual: ${request.status}.` });
+    }
+    const reason = String(req.body?.reason || 'Cancelada por el solicitante').trim() || 'Cancelada por el solicitante';
+    const updated = await updateRequest(request.id, {
+      status: 'CANCELADA',
+      comments: `${request.comments ? `${request.comments}\n` : ''}Cancelada: ${reason}`,
+      updatedAt: new Date().toISOString(),
+    });
+    await recordAuditLog({
+      requestId: request.id,
+      userId: user.id,
+      action: isAdmin ? 'CANCELACION_ADMIN_SOLICITUD_PENDIENTE' : 'CANCELACION_SOLICITUD_PENDIENTE',
+      details: { folio: request.folio, reason, previousStatus: request.status },
+    });
+    return res.json({ success: true, request: updated });
+  } catch (error) {
+    logSystemError(error, req, { source: 'request-cancel', statusCode: 500 });
+    return res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Error al cancelar la solicitud.' });
+  }
+});
+
 app.post('/api/requests/:id/notify', requestNotificationHandler);
-
-// Approval links are opened directly from email, so they must also be
-// registered before createApp()'s fallback. This covers both GET decision
-// pages and POST decision submissions.
 registerApprovalRoutes(app);
-
-// Multi-role user endpoints intentionally live on the outer app so they
-// take precedence over the legacy single-role handlers inside createApp().
-// The legacy handlers remain untouched for rollback safety.
 registerMultiRoleUserRoutes(app);
 
 const mainApp = createApp();
 registerAdminRequestRoutes(mainApp);
 registerRequestCreationRoutes(mainApp);
-
 app.use(mainApp);
 
-// Last-resort Express error handler for errors that reach the outer app.
-// Existing route behavior remains unchanged because normal responses are not
-// intercepted here.
 app.use((error: unknown, req: Request, res: Response, next: NextFunction) => {
   logSystemError(error, req, { source: 'express-error', statusCode: 500 });
   if (res.headersSent) return next(error);

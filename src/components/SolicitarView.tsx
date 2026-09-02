@@ -54,7 +54,12 @@ export default function SolicitarView({ currentUser, onRequestCreated, onNavigat
       const createdRequest: TravelRequest | null = data?.request ?? (data?.id && data?.folio ? data as TravelRequest : null);
       if (!createdRequest) throw new Error(data?.error || 'El servidor no devolvió la solicitud creada.');
       const automationPayload={estado:'pendiente_autorizacion',correo_autorizacion:'sistemas@dimer.com.mx',asunto:`Nueva solicitud por autorizar - ${requestType.trim()}`,cuerpo:`Se ha registrado una nueva solicitud en la plataforma Dimer.\n\n• Solicitante: ${requesterName.trim()}\n• Área/Departamento: ${department.trim()}\n• Tipo de Solicitud: ${requestType.trim()}\n• Fecha: ${requestDate.trim()}\n• Urgencia: ${urgency.toUpperCase()}\n• Detalle de lo solicitado:\n${detail.trim()}\n${numAmount>0?`• Monto Estimado: $${numAmount.toLocaleString('es-MX')} MXN\n`:''}• Supervisor que Autoriza: ${bossName} (${bossEmail.trim()})\n• Folio Oficial: ${createdRequest.folio}`,solicitud:{nombre:requesterName.trim(),area:department.trim(),tipo:requestType.trim(),detalle:detail.trim(),fecha:requestDate.trim(),urgency}};
-      setSuccessResult({request:createdRequest,approvalToken:createdRequest.approvalToken,automationJson:automationPayload});
+      const notification = data?.notification;
+      if (notification && notification.ok === false) {
+        const details = Array.isArray(notification.errors) ? notification.errors.join(' | ') : 'No fue posible enviar las notificaciones.';
+        throw new Error(`La solicitud ${createdRequest.folio} fue guardada, pero falló el envío de correo: ${details}`);
+      }
+      setSuccessResult({request:createdRequest,approvalToken:createdRequest.approvalToken,mailResult:notification,automationJson:automationPayload});
       onRequestCreated(createdRequest);
     }catch(err:any){setError(err.message||'Ocurrió un error inesperado.');}finally{setLoading(false);}};
   const handleCopyJson=()=>{if(successResult?.automationJson){navigator.clipboard.writeText(JSON.stringify(successResult.automationJson,null,2));setCopiedJson(true);setTimeout(()=>setCopiedJson(false),2500);}};

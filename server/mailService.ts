@@ -1,10 +1,10 @@
 import nodemailer from 'nodemailer';
 import type { TravelRequest, User, EmailLog } from '../src/types';
 import { recordAuditLog } from './db.js';
+import { buildEmailDeliveryKey, reserveEmailDelivery, markEmailDeliverySent, releaseEmailDelivery } from './emailIdempotency.js';
 
 export const outboxLogs: EmailLog[] = [];
 
-const recentEmailKeys=new Map<string,number>();
 
 /**
  * SMTP configuration is intentionally canonical and deterministic.
@@ -411,12 +411,6 @@ export function buildTokenApprovalResultPageHtml(p:{status:string;request?:Trave
 }
 
 export async function sendEmail(p:{to:string;subject:string;html:string;from?:string;replyTo?:string;requestId?:string;folio?:string}):Promise<{success:boolean;logId:string;status:'ENVIADO'|'SIMULADO'|'FALLIDO';error?:string}> {
-  const emailKey=`${String(p.requestId||p.folio||'')}|${String(p.to||'').trim().toLowerCase()}|${String(p.subject||'')}`;
-  const now=Date.now();
-  const previous=recentEmailKeys.get(emailKey);
-  if(previous && now-previous<120000){const logId=`MAIL-DEDUPE-${now}-${Math.floor(Math.random()*100000)}`;console.warn(`[SMTP-DEDUPE] Correo duplicado suprimido: ${p.to} | ${p.subject}`);return {success:true,logId,status:'ENVIADO'};}
-  recentEmailKeys.set(emailKey,now);
-  for(const [key,ts] of recentEmailKeys){if(now-ts>300000)recentEmailKeys.delete(key);}
   const logId=`MAIL-${Date.now()}-${Math.floor(Math.random()*100000)}`;
   const timestamp=new Date().toISOString();
   const transporter=getMailTransporter();
@@ -436,6 +430,22 @@ export async function sendEmail(p:{to:string;subject:string;html:string;from?:st
 
       console.log(`[SMTP-DEBUG] Enviando correo a ${p.to} usando variable_usuario=${rawUserVar} (${c.user}), pass_length=${c.pass.length}, pass_prefix="${c.pass.slice(0, 2)}***", pass_has_spaces_at_edges=${hasLeadingTrailingWhitespace}, from="${fromFormatted}"`);
 
+      const emailDeliveryKey=buildEmailDeliveryKey(p.requestId,p.to,p.subject);
+      let emailDeliveryReserved=false;
+      try{
+        emailDeliveryReserved=await reserveEmailDelivery({key:emailDeliveryKey,requestId:p.requestId,folio:p.folio,recipient:p.to,subject:p.subject});
+      }catch(idempotencyErr:any){
+        console.error('[EMAIL-IDEMPOTENCY] Error reservando correo:',idempotencyErr);
+        status='FALLIDO';
+        errorMsg=idempotencyErr?.message||'No se pudo reservar la entrega del correo';
+        emailDeliveryReserved=false;
+      }
+      if(!emailDeliveryReserved){
+        const duplicateLogId=`MAIL-DEDUPE-${Date.now()}-${Math.floor(Math.random()*100000)}`;
+        console.warn(`[EMAIL-IDEMPOTENCY] Correo duplicado suprimido: ${p.to} | ${p.subject}`);
+        return {success:true,logId:duplicateLogId,status:'ENVIADO'};
+      }
+
       const sendResult=await transporter.sendMail({
         from:fromFormatted,
         replyTo:p.replyTo,
@@ -445,10 +455,12 @@ export async function sendEmail(p:{to:string;subject:string;html:string;from?:st
       });
       status='ENVIADO';
       console.log(`[SMTP-DEBUG] Correo enviado exitosamente a ${p.to} (${logId}): ${sendResult.response||sendResult.messageId}`);
+      await markEmailDeliverySent(emailDeliveryKey);
     }catch(e:any){
       status='FALLIDO';
       errorMsg=e?.message||'Error SMTP';
       console.error(`[SMTP-DEBUG-ERROR] Falló envío a ${p.to}: message="${e?.message}", code="${e?.code}", response="${e?.response}", responseCode="${e?.responseCode}"`);
+      await releaseEmailDelivery(emailDeliveryKey);
     }
   }
 

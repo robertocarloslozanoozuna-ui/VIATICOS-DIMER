@@ -45,11 +45,12 @@ export function registerApprovalRoutes(app: Express) {
         const requesterEmail = user.email.trim().toLowerCase();
         const finanzasEmail = (process.env.FINANZAS_EMAIL || 'finanzas@dimer.com.mx').trim().toLowerCase();
 
-        // La aprobación del jefe se notifica únicamente al solicitante y a Finanzas.
-        // Sistemas no participa como destinatario de esta notificación.
+        // SOLICITANTE y FINANZAS son notificaciones independientes.
+        // Aunque ambas direcciones sean iguales, deben enviarse los 2 correos.
+        // SISTEMAS no recibe copia de una aprobación.
         const recipientCopies: Array<{ to: string; label: string; subjectSuffix: string }> = [];
         if (requesterEmail) recipientCopies.push({ to: requesterEmail, label: 'SOLICITANTE', subjectSuffix: 'SOLICITANTE' });
-        if (finanzasEmail && finanzasEmail !== requesterEmail) recipientCopies.push({ to: finanzasEmail, label: 'FINANZAS', subjectSuffix: 'FINANZAS' });
+        if (finanzasEmail) recipientCopies.push({ to: finanzasEmail, label: 'FINANZAS', subjectSuffix: 'FINANZAS' });
 
         for (const recipient of recipientCopies) {
           const html = `<div style="font-family:Arial,sans-serif;font-size:11px;color:#666;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:.4px;">Notificación para: <strong>${recipient.label}</strong></div>${baseHtml}`;

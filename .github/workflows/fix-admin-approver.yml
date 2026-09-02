@@ -13,6 +13,7 @@ jobs:
         shell: python
         run: |
           from pathlib import Path
+          import re
 
           p=Path('src/components/SolicitarView.tsx')
           s=p.read_text(encoding='utf-8')
@@ -26,7 +27,6 @@ jobs:
           old="if(approverEmail==='sistemas@dimer.com.mx'){notificationErrors.push('Sistemas no es un aprobador válido para solicitudes de viáticos. Seleccione al jefe o líder correspondiente.');}else if(!created.approvalToken){"
           if old in s:
               s=s.replace(old,"if(!created.approvalToken){",1)
-
           old="const sistemasEmail = 'sistemas@dimer.com.mx';\n  const html = buildRejectionEmailHtml"
           if old in s:
               s=s.replace(old,"const html = buildRejectionEmailHtml",1)
@@ -35,12 +35,50 @@ jobs:
               s=s.replace(old,'',1)
           p.write_text(s,encoding='utf-8')
 
-          # Remove accidental repeated depositDate declarations from all mail templates.
           p=Path('server/mailService.ts')
           s=p.read_text(encoding='utf-8')
-          import re
-          decl=r"  const depositDate=request\.depositDate\?new Date\(request\.depositDate\+'T00:00:00'\)\.toLocaleDateString\('es-MX'\):'';\n"
-          s=re.sub(r'(?:'+decl+r'){2,}', lambda m: m.group(0).splitlines(True)[0], s)
+
+          # Fix the sendEmail function if a previous automated patch left its opening brace outside the function.
+          sig="export async function sendEmail(p:{to:string;subject:string;html:string;from?:string;replyTo?:string;requestId?:string;folio?:string}):Promise<{success:boolean;logId:string;status:'ENVIADO'|'SIMULADO'|'FALLIDO';error?:string}>"
+          broken=sig+"\n  const emailKey="
+          fixed=sig+" {\n  const emailKey="
+          if broken in s and fixed not in s:
+              s=s.replace(broken,fixed,1)
+          # Remove the stray standalone block that followed the dedupe map.
+          stray="  for(const [key,ts] of recentEmailKeys){if(now-ts>300000)recentEmailKeys.delete(key);}\n{\n  const logId="
+          good="  for(const [key,ts] of recentEmailKeys){if(now-ts>300000)recentEmailKeys.delete(key);}\n  const logId="
+          if stray in s:
+              s=s.replace(stray,good,1)
+
+          # Collapse duplicate depositDate declarations/rows.
+          decl="const depositDate=request.depositDate?new Date(request.depositDate+'T00:00:00').toLocaleDateString('es-MX'):'';"
+          row='${depositDate?`<tr><td class="label">Fecha requerida de depósito</td><td class="value"><strong>${esc(depositDate)}</strong></td></tr>`:``}'
+          s=re.sub(r'(?:\s*'+re.escape(decl)+r'){2,}', '\n  '+decl, s)
+          s=re.sub(r'(?:'+re.escape(row)+r'){2,}', row, s)
+
+          # Ensure only one declaration and one row per template.
+          for fn in ['buildBossApprovalEmailHtml','buildSystemsApprovedEmailHtml','buildRequesterConfirmationEmailHtml','buildRejectionEmailHtml']:
+              start=s.find('export function '+fn)
+              if start<0: continue
+              nxt=s.find('\nexport function ',start+10)
+              end=len(s) if nxt<0 else nxt
+              seg=s[start:end]
+              if decl not in seg:
+                  marker="  const requestDate=request.requestDate||(request.createdAt?new Date(request.createdAt).toLocaleDateString('es-MX'):new Date().toLocaleDateString('es-MX'));\n"
+                  if marker in seg: seg=seg.replace(marker,marker+'  '+decl+'\n',1)
+              if row not in seg:
+                  marker='<tr><td class="label">Fecha</td><td class="value">${esc(requestDate)}</td></tr>'
+                  if marker in seg: seg=seg.replace(marker,marker+row,1)
+              s=s[:start]+seg+s[end:]
+
+          # Keep process-local dedupe for identical notifications.
+          guard="const recentEmailKeys=new Map<string,number>();\n"
+          if guard not in s:
+              s=s.replace("export const outboxLogs: EmailLog[] = [];\n", "export const outboxLogs: EmailLog[] = [];\n\n"+guard,1)
+          if "recentEmailKeys.get(emailKey)" not in s:
+              marker=sig+" {\n"
+              block="  const emailKey=`${String(p.requestId||p.folio||'')}|${String(p.to||'').trim().toLowerCase()}|${String(p.subject||'')}`;\n  const now=Date.now();\n  const previous=recentEmailKeys.get(emailKey);\n  if(previous && now-previous<120000){const logId=`MAIL-DEDUPE-${now}-${Math.floor(Math.random()*100000)}`;console.warn(`[SMTP-DEDUPE] Correo duplicado suprimido: ${p.to} | ${p.subject}`);return {success:true,logId,status:'ENVIADO'};}\n  recentEmailKeys.set(emailKey,now);\n  for(const [key,ts] of recentEmailKeys){if(now-ts>300000)recentEmailKeys.delete(key);}\n"
+              if marker in s: s=s.replace(marker,marker+block,1)
           p.write_text(s,encoding='utf-8')
       - name: Commit patch
         shell: bash
@@ -49,6 +87,6 @@ jobs:
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
             git add src/components/SolicitarView.tsx server/app.ts server/mailService.ts
-            git commit -m 'fix: corregir rutas de correo y declaraciones duplicadas'
+            git commit -m 'fix: corregir bloque sendEmail y deduplicacion'
             git push
           fi

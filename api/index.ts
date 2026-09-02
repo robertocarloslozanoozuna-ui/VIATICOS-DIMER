@@ -7,14 +7,23 @@ import { requestNotificationHandler } from '../server/requestNotificationRoute.j
 
 const app = express();
 
-// This route must be registered before createApp(), because createApp()
-// contains the application fallback. Express evaluates routes in registration order.
+// IMPORTANT: createApp() contains the application's final fallback/404 handler.
+// Any routes that are registered after createApp() may never be reached.
+// Keep externally registered routes on this outer app, before app.use(mainApp).
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
+// Initial request notification endpoint.
 app.post('/api/requests/:id/notify', requestNotificationHandler);
+
+// Approval links are opened directly from email, so they must also be
+// registered before createApp()'s fallback. This covers both GET decision
+// pages and POST decision submissions.
+registerApprovalRoutes(app);
 
 const mainApp = createApp();
 registerAdminRequestRoutes(mainApp);
 registerRequestCreationRoutes(mainApp);
-registerApprovalRoutes(mainApp);
 
 app.use(mainApp);
 

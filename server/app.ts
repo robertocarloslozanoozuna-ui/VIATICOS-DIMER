@@ -24,13 +24,11 @@ async function notifyRequestApproval(params: { request: TravelRequest; approverN
   const user = await resolveRequesterUser(r);
   const finanzasEmail = (process.env.FINANZAS_EMAIL || 'finanzas@dimer.com.mx').trim().toLowerCase();
   const requesterEmail = (user.email || '').trim().toLowerCase();
-  const sistemasEmail = 'sistemas@dimer.com.mx';
   const html = buildSystemsApprovedEmailHtml({ request: r, user, approverName, approverEmail, approvedAt });
   const targets: Array<{ to: string; subject: string; role: string }> = [];
   if (requesterEmail) targets.push({ to: requesterEmail, subject: `SOLICITUD DE VIÁTICOS APROBADA - Folio ${r.folio}`, role: 'Solicitante' });
   else console.warn(`[NOTIFY-APPROVAL-WARN] No se encontró correo para el solicitante de la solicitud ${r.folio} (userId: ${r.userId})`);
   if (finanzasEmail && finanzasEmail !== requesterEmail) targets.push({ to: finanzasEmail, subject: `SOLICITUD DE VIÁTICOS APROBADA - Folio ${r.folio} [FINANZAS]`, role: 'Finanzas' });
-  if (sistemasEmail !== requesterEmail && sistemasEmail !== finanzasEmail) targets.push({ to: sistemasEmail, subject: `SOLICITUD DE VIÁTICOS APROBADA - Folio ${r.folio} [SISTEMAS]`, role: 'Sistemas' });
   for (const t of targets) { try { const res = await sendEmail({ to: t.to, subject: t.subject, html, requestId: r.id, folio: r.folio }); console.log(`[APPROVAL-NOTIFICATION] Notificación enviada a ${t.role} (${t.to}) para folio ${r.folio}: ${res.status}`); } catch (mErr) { console.error(`[APPROVAL-NOTIFICATION-ERROR] Error enviando a ${t.role} (${t.to}):`, mErr); } }
 }
 

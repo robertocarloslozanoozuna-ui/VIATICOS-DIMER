@@ -1,0 +1,28 @@
+name: Fix admin approver selector
+on:
+  push:
+    branches: [main]
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Allow admin approver
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('src/components/SolicitarView.tsx')
+          s=p.read_text()
+          old="&&String(u.email||'').trim().toLowerCase()!=='sistemas@dimer.com.mx'"
+          if old not in s:
+              raise SystemExit('No se encontró el filtro que excluye al administrador')
+          s=s.replace(old,'')
+          p.write_text(s)
+          PY
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/components/SolicitarView.tsx
+          git commit -m 'fix: mostrar administrador con rol jefe aprobador' || exit 0
+          git push

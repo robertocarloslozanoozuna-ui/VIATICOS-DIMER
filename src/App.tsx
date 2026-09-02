@@ -14,7 +14,8 @@ import NextjsCodeView from './components/NextjsCodeView';
 import PrintVoucherModal from './components/PrintVoucherModal';
 import AuthModal from './components/AuthModal';
 import LoginView from './components/LoginView';
-import type { User, TravelRequest, Role } from './types';
+import type { User, TravelRequest } from './types';
+import { userHasAnyRole, userHasRole } from './types';
 import { safeFetchJson, setAuthToken } from './utils/apiHelper';
 
 export default function App() {
@@ -78,11 +79,11 @@ export default function App() {
     if (token) setAuthToken(token);
     setCurrentUser(user);
     setLastEventText(`AUTH_SWITCH: ${user.email} (${user.role})`);
-    if (user.role === 'SOLO_LECTURA_APROBADAS') setActiveTab('mis-solicitudes');
-    else if (user.role === 'SOLICITANTE' || user.role === 'EMPLEADO') setActiveTab('solicitar');
-    else if (user.role === 'JEFE') setActiveTab('aprobar');
-    else if (user.role === 'FINANZAS') setActiveTab('finanzas');
-    else if (user.role === 'ADMIN') setActiveTab('mis-solicitudes');
+    if (userHasRole(user, 'SOLO_LECTURA_APROBADAS') && !userHasAnyRole(user, ['SOLICITANTE', 'EMPLEADO', 'JEFE', 'FINANZAS', 'ADMIN'])) setActiveTab('mis-solicitudes');
+    else if (userHasRole(user, 'JEFE')) setActiveTab('aprobar');
+    else if (userHasRole(user, 'FINANZAS')) setActiveTab('finanzas');
+    else if (userHasAnyRole(user, ['SOLICITANTE', 'EMPLEADO'])) setActiveTab('solicitar');
+    else setActiveTab('mis-solicitudes');
     try {
       const data = await safeFetchJson<TravelRequest[]>('/api/requests');
       setRequests(Array.isArray(data) ? data : []);
@@ -103,14 +104,14 @@ export default function App() {
   const pendingApprovalsCount = safeRequests.filter((r) => r.status === 'PENDIENTE_APROBACION').length;
   const approvedForFinanceCount = safeRequests.filter((r) => r.status === 'APROBADA').length;
   const userRole = currentUser?.role || 'SOLICITANTE';
-  const isSoloLectura = userRole === 'SOLO_LECTURA_APROBADAS';
-  const isAdmin = userRole === 'ADMIN';
+  const isSoloLectura = currentUser ? userHasRole(currentUser, 'SOLO_LECTURA_APROBADAS') : false;
+  const isAdmin = currentUser ? userHasRole(currentUser, 'ADMIN') : false;
 
   const getTabTitle = () => {
     if (!currentUser) return 'Portal Corporativo - Iniciar Sesión';
     switch (activeTab) {
       case 'solicitar': return 'Registro Oficial de Nueva Solicitud de Viáticos';
-      case 'mis-solicitudes': return isSoloLectura ? 'Consulta Exclusiva de Solicitudes Aprobadas' : userRole === 'SOLICITANTE' ? 'Mis Solicitudes de Viáticos' : 'Monitor y Control General de Viáticos';
+      case 'mis-solicitudes': return isSoloLectura && !userHasAnyRole(currentUser, ['SOLICITANTE', 'EMPLEADO', 'JEFE', 'FINANZAS', 'ADMIN']) ? 'Consulta Exclusiva de Solicitudes Aprobadas' : userHasAnyRole(currentUser, ['SOLICITANTE', 'EMPLEADO']) ? 'Mis Solicitudes de Viáticos' : 'Monitor y Control General de Viáticos';
       case 'aprobar': return 'Panel de Aprobación Jerárquica Directa';
       case 'finanzas': return 'Módulo de Finanzas, Dispersión y Pólizas';
       case 'administracion-solicitudes': return 'Control Administrativo de Solicitudes';
@@ -122,15 +123,16 @@ export default function App() {
     }
   };
 
-  const isTabAllowed = (tab: string, role: Role): boolean => {
-    if (role === 'ADMIN') return true;
-    if (role === 'SOLO_LECTURA_APROBADAS') return tab === 'mis-solicitudes';
-    if (role === 'SOLICITANTE' || role === 'EMPLEADO') return tab === 'mis-solicitudes' || tab === 'solicitar';
-    if (role === 'JEFE') return tab === 'mis-solicitudes' || tab === 'solicitar' || tab === 'aprobar';
-    if (role === 'FINANZAS') return tab === 'mis-solicitudes' || tab === 'solicitar' || tab === 'finanzas';
-    return true;
+  const isTabAllowed = (tab: string, user: User | null): boolean => {
+    if (!user) return false;
+    if (userHasRole(user, 'ADMIN')) return true;
+    if (tab === 'mis-solicitudes') return true;
+    if (tab === 'solicitar') return userHasAnyRole(user, ['SOLICITANTE', 'EMPLEADO', 'JEFE', 'FINANZAS']);
+    if (tab === 'aprobar') return userHasAnyRole(user, ['JEFE']);
+    if (tab === 'finanzas') return userHasAnyRole(user, ['FINANZAS']);
+    return false;
   };
-  const allowed = isTabAllowed(activeTab, userRole);
+  const allowed = isTabAllowed(activeTab, currentUser);
 
   return (
     <div className="flex h-screen min-h-0 min-w-0 w-full bg-[#f8fafc] font-sans text-[#1e293b] overflow-hidden">
@@ -168,7 +170,7 @@ export default function App() {
                 <div className="hidden sm:flex items-center gap-1.5 bg-slate-100 border border-slate-200 px-2.5 py-1 rounded-md text-[10px] text-slate-600">
                   <ShieldCheck className="w-3.5 h-3.5 text-indigo-600" /><span>Usuario:</span>
                   <strong className="text-slate-800 font-mono truncate max-w-[140px]">{currentUser.email || currentUser.name}</strong>
-                  <span className={`font-bold px-1.5 py-0.5 rounded text-[9px] uppercase font-mono ${userRole === 'ADMIN' ? 'bg-purple-100 text-purple-800' : userRole === 'SOLO_LECTURA_APROBADAS' ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'}`}>{userRole === 'SOLO_LECTURA_APROBADAS' ? 'SOLO LECTURA' : userRole}</span>
+                  <span className={`font-bold px-1.5 py-0.5 rounded text-[9px] uppercase font-mono ${isAdmin ? 'bg-purple-100 text-purple-800' : isSoloLectura ? 'bg-emerald-100 text-emerald-800' : 'bg-blue-100 text-blue-800'}`}>{isSoloLectura && !userHasAnyRole(currentUser, ['SOLICITANTE', 'EMPLEADO', 'JEFE', 'FINANZAS', 'ADMIN']) ? 'SOLO LECTURA' : userRole}</span>
                 </div>
                 <button type="button" onClick={handleLogout} className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-md text-[11px] font-bold transition flex items-center gap-1.5 cursor-pointer shadow-xs" title="Cerrar sesión activa"><LogOut className="w-3.5 h-3.5 text-rose-600" /><span className="hidden sm:inline">Cerrar Sesión</span><span className="sm:hidden">Salir</span></button>
               </div>
@@ -179,7 +181,7 @@ export default function App() {
               </div>
             )}
 
-            {currentUser && activeTab !== 'solicitar' && !isSoloLectura && (
+            {currentUser && activeTab !== 'solicitar' && !userHasRole(currentUser, 'SOLO_LECTURA_APROBADAS') && (
               <button type="button" onClick={() => setActiveTab('solicitar')} className="bg-[#0f172a] hover:bg-indigo-600 text-white px-3 py-1.5 rounded-md text-[11px] font-bold tracking-wide transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer"><Plus className="w-3.5 h-3.5" /><span className="hidden sm:inline">NUEVA SOLICITUD</span><span className="sm:hidden">NUEVA</span></button>
             )}
           </div>
@@ -198,7 +200,7 @@ export default function App() {
             </div>
           ) : (
             <>
-              {isSoloLectura && <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-lg flex items-center justify-between text-xs text-emerald-900"><div className="flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" /><span><strong>Modo de Consulta Autorizada:</strong> Tienes acceso de solo lectura a las solicitudes aprobadas, pagadas y finalizadas por Dirección.</span></div><span className="bg-emerald-200/80 text-emerald-900 text-[10px] font-bold px-2 py-0.5 rounded font-mono">SOLO_LECTURA_APROBADAS</span></div>}
+              {isSoloLectura && !userHasAnyRole(currentUser, ['SOLICITANTE', 'EMPLEADO', 'JEFE', 'FINANZAS', 'ADMIN']) && <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-lg flex items-center justify-between text-xs text-emerald-900"><div className="flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" /><span><strong>Modo de Consulta Autorizada:</strong> Tienes acceso de solo lectura a las solicitudes aprobadas, pagadas y finalizadas por Dirección.</span></div><span className="bg-emerald-200/80 text-emerald-900 text-[10px] font-bold px-2 py-0.5 rounded font-mono">SOLO_LECTURA_APROBADAS</span></div>}
               {activeTab === 'solicitar' && <SolicitarView currentUser={currentUser} onRequestCreated={handleRequestCreated} onNavigateToApprovals={handleNavigateToApprovals} onLogout={handleLogout} />}
               {activeTab === 'mis-solicitudes' && <MisSolicitudesView currentUser={currentUser} requests={requests} onNavigateToCreate={() => setActiveTab('solicitar')} onNavigateToApprove={handleNavigateToApprovals} onOpenPrintVoucher={(req) => setPrintRequest(req)} />}
               {activeTab === 'aprobar' && <AprobarView currentUser={currentUser} selectedRequestId={selectedRequestIdForApproval} onClearSelectedRequest={() => setSelectedRequestIdForApproval(null)} onSwitchUser={handleSwitchUser} onRefreshData={fetchData} />}
@@ -214,9 +216,9 @@ export default function App() {
               {activeTab === 'administracion-rbac' && isAdmin && (
                 <AdminView currentUser={currentUser} onRefreshData={fetchData} />
               )}
-              {activeTab === 'auditoria' && <AuditoriaView />}
-              {activeTab === 'outbox' && <OutboxView />}
-              {activeTab === 'nextjs-code' && <NextjsCodeView />}
+              {activeTab === 'auditoria' && isAdmin && <AuditoriaView />}
+              {activeTab === 'outbox' && isAdmin && <OutboxView />}
+              {activeTab === 'nextjs-code' && isAdmin && <NextjsCodeView />}
             </>
           )}
 

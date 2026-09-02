@@ -4,6 +4,7 @@ import { registerApprovalRoutes } from '../server/approvalRoutes.js';
 import { registerAdminRequestRoutes } from '../server/adminRequestRoutes.js';
 import { registerRequestCreationRoutes } from '../server/requestCreationRoutes.js';
 import { requestNotificationHandler } from '../server/requestNotificationRoute.js';
+import { registerMultiRoleUserRoutes } from '../server/multiRoleUserRoutes.js';
 import { logSystemError, registerProcessErrorLogging } from '../server/errorLogger.js';
 
 const app = express();
@@ -37,6 +38,11 @@ app.post('/api/requests/:id/notify', requestNotificationHandler);
 // registered before createApp()'s fallback. This covers both GET decision
 // pages and POST decision submissions.
 registerApprovalRoutes(app);
+
+// Multi-role user endpoints intentionally live on the outer app so they
+// take precedence over the legacy single-role handlers inside createApp().
+// The legacy handlers remain untouched for rollback safety.
+registerMultiRoleUserRoutes(app);
 
 const mainApp = createApp();
 registerAdminRequestRoutes(mainApp);

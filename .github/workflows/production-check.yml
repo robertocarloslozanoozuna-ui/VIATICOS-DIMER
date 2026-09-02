@@ -18,7 +18,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - name: Repair admin approver selector
+
+      - name: Repair approver selector and mail routing
         shell: python
         run: |
           from pathlib import Path
@@ -26,99 +27,90 @@ jobs:
           s=p.read_text(encoding='utf-8')
           old="&&String(u.email||'').trim().toLowerCase()!=='sistemas@dimer.com.mx'"
           if old in s:
-              p.write_text(s.replace(old,'',1),encoding='utf-8')
-      - name: Repair deposit date in emails and detail placeholder
-        shell: python
-        run: |
-          from pathlib import Path
-          import re
-          p=Path('src/components/SolicitarView.tsx')
-          s=p.read_text(encoding='utf-8')
-          s=re.sub(r'placeholder="[^"]*"', lambda m: 'placeholder="Describe el motivo del viaje"' if 'describ' in m.group(0).lower() else m.group(0), s, count=1)
+              s=s.replace(old,'',1)
           p.write_text(s,encoding='utf-8')
-          p=Path('server/mailService.ts')
-          s=p.read_text(encoding='utf-8')
-          date_decl="  const depositDate=request.depositDate?new Date(request.depositDate+'T00:00:00').toLocaleDateString('es-MX'):'';"
-          s=s.replace("  const requestDate=request.requestDate||(request.createdAt?new Date(request.createdAt).toLocaleDateString('es-MX'):new Date().toLocaleDateString('es-MX'));\n", "  const requestDate=request.requestDate||(request.createdAt?new Date(request.createdAt).toLocaleDateString('es-MX'):new Date().toLocaleDateString('es-MX'));\n"+date_decl+"\n")
-          marker='<tr><td class="label">Fecha</td><td class="value">${esc(requestDate)}</td></tr>'
-          replacement=marker+'${depositDate?`<tr><td class="label">Fecha requerida de depósito</td><td class="value"><strong>${esc(depositDate)}</strong></td></tr>`:``}'
-          s=s.replace(marker,replacement)
-          p.write_text(s,encoding='utf-8')
-      - name: Repair travel email recipients and approver validation
-        shell: python
-        run: |
-          from pathlib import Path
+
           p=Path('server/app.ts')
           s=p.read_text(encoding='utf-8')
 
-          # The selected approver is already persisted in bossEmail and the
-          # approval token is created before the email is sent. Do not reject
-          # the administrator just because the approver is Sistemas.
-          old="if(approverEmail==='sistemas@dimer.com.mx'){notificationErrors.push('Sistemas no es un aprobador válido para solicitudes de viáticos. Seleccione al jefe o líder correspondiente.');}else if(!created.approvalToken){"
-          new="if(!created.approvalToken){"
-          if old in s:
-              s=s.replace(old,new,1)
+          # Create the approval token immediately after the request is persisted,
+          # then persist the token on the travel request before any email is sent.
+          marker="const created=await insertRequest(request);"
+          token_block="const created=await insertRequest(request);if(!created.approvalToken){const approvalToken=await createApprovalToken(created.id,String(created.bossEmail||''),created.bossId);await updateRequest(created.id,{approvalToken:approvalToken.token,updatedAt:new Date().toISOString()});created.approvalToken=approvalToken.token;}"
+          if marker in s and "const approvalToken=await createApprovalToken(created.id" not in s:
+              s=s.replace(marker,token_block,1)
 
-          # Rejection notifications must go only to the requester.
+          # The selected administrator is a valid approver; never reject only by email.
+          old="if(approverEmail==='sistemas@dimer.com.mx'){notificationErrors.push('Sistemas no es un aprobador válido para solicitudes de viáticos. Seleccione al jefe o líder correspondiente.');}else if(!created.approvalToken){"
+          if old in s:
+              s=s.replace(old,"if(!created.approvalToken){",1)
+
+          # Rejection notifications go only to the requester.
           old="const sistemasEmail = 'sistemas@dimer.com.mx';\n  const html = buildRejectionEmailHtml"
           if old in s:
               s=s.replace(old,"const html = buildRejectionEmailHtml",1)
           old="  if (sistemasEmail !== requesterEmail) targets.push({ to: sistemasEmail, subject: `SOLICITUD RECHAZADA - Folio ${r.folio} [SISTEMAS]`, role: 'Sistemas' });\n"
           if old in s:
               s=s.replace(old,'',1)
-
           p.write_text(s,encoding='utf-8')
 
-          # Keep the alternate request-creation route aligned: approval mail
-          # only to the selected approver and confirmation only to requester.
-          p=Path('server/requestCreationRoutes.ts')
-          s=p.read_text(encoding='utf-8')
-          p.write_text(s,encoding='utf-8')
-      - name: Commit email routing corrections
-        shell: bash
-        run: |
-          if ! git diff --quiet -- server/app.ts server/requestCreationRoutes.ts; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add server/app.ts server/requestCreationRoutes.ts
-            git commit -m "fix: corregir destinatarios de correos de viaticos"
-            git push
-          fi
-      - name: Commit UI and email improvements
-        shell: bash
-        run: |
-          if ! git diff --quiet -- src/components/SolicitarView.tsx server/mailService.ts; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add src/components/SolicitarView.tsx server/mailService.ts
-            git commit -m "fix: mostrar fecha de deposito en correos y mejorar detalle"
-            git push
-          fi
-      - name: Commit admin approver selector fix
-        shell: bash
-        run: |
-          if ! git diff --quiet -- src/components/SolicitarView.tsx; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add src/components/SolicitarView.tsx
-            git commit -m "fix: permitir administrador como jefe aprobador"
-            git push
-          fi
-      - name: Repair backend baseline
-        if: contains(github.event.head_commit.message, 'repair backend baseline')
+      - name: Repair email templates without duplicating content
         shell: python
         run: |
           from pathlib import Path
-          import subprocess
-          app=subprocess.check_output(['git','show','220b3408df37f2092670c96d36620209ed01094c:server/app.ts'], text=True)
-          app=app.replace("html:buildBossApprovalEmailHtml({request:created,approvalUrl})", "html:buildBossApprovalEmailHtml({request:created,user:u,approveUrl:approvalUrl,rejectUrl:approvalUrl,token:created.approvalToken||''})")
-          Path('server/app.ts').write_text(app,encoding='utf-8')
-          p=Path('server/adminRequestRoutes.ts'); s=p.read_text(encoding='utf-8'); p.write_text(s.replace('        approveUrl,\n        rejectUrl,','        approveUrl: approvalUrl,\n        rejectUrl,'),encoding='utf-8')
+          import re
+          p=Path('server/mailService.ts')
+          s=p.read_text(encoding='utf-8')
+          decl="const depositDate=request.depositDate?new Date(request.depositDate+'T00:00:00').toLocaleDateString('es-MX'):'';"
+          row='${depositDate?`<tr><td class="label">Fecha requerida de depósito</td><td class="value"><strong>${esc(depositDate)}</strong></td></tr>`:``}'
+          # Collapse accidental repeated declarations/rows, then add missing ones
+          # only when the function does not already contain them.
+          s=re.sub(r'(?:\s*'+re.escape(decl)+r'){2,}', '\n  '+decl, s)
+          s=re.sub(r'(?:'+re.escape(row)+r'){2,}', row, s)
+          for fn in ['buildBossApprovalEmailHtml','buildSystemsApprovedEmailHtml','buildRequesterConfirmationEmailHtml','buildRejectionEmailHtml']:
+              start=s.find('export function '+fn)
+              if start<0: continue
+              nxt=s.find('\nexport function ',start+10)
+              end=len(s) if nxt<0 else nxt
+              seg=s[start:end]
+              if decl not in seg:
+                  marker="  const requestDate=request.requestDate||(request.createdAt?new Date(request.createdAt).toLocaleDateString('es-MX'):new Date().toLocaleDateString('es-MX'));\n"
+                  if marker in seg:
+                      seg=seg.replace(marker,marker+'  '+decl+'\n',1)
+              if row not in seg:
+                  marker='<tr><td class="label">Fecha</td><td class="value">${esc(requestDate)}</td></tr>'
+                  if marker in seg:
+                      seg=seg.replace(marker,marker+row,1)
+              s=s[:start]+seg+s[end:]
+          # Add process-local idempotency for the exact same notification.
+          guard="const recentEmailKeys=new Map<string,number>();\n"
+          if guard not in s:
+              s=s.replace("export const outboxLogs: EmailLog[] = [];\n", "export const outboxLogs: EmailLog[] = [];\n\n"+guard,1)
+          needle="export async function sendEmail(p:{to:string;subject:string;html:string;from?:string;replyTo?:string;requestId?:string;folio?:string}):Promise<{success:boolean;logId:string;status:'ENVIADO'|'SIMULADO'|'FALLIDO';error?:string}> {"
+          if needle not in s:
+              needle="export async function sendEmail(p:{to:string;subject:string;html:string;from?:string;replyTo?:string;requestId?:string;folio?:string}):Promise<{success:boolean;logId:string;status:'ENVIADO'|'SIMULADO'|'FALLIDO';error?:string}>"
+          if needle in s and "recentEmailKeys.get(emailKey)" not in s:
+              replacement=needle+"\n  const emailKey=`${String(p.requestId||p.folio||'')}|${String(p.to||'').trim().toLowerCase()}|${String(p.subject||'')}`;\n  const now=Date.now();\n  const previous=recentEmailKeys.get(emailKey);\n  if(previous && now-previous<120000){const logId=`MAIL-DEDUPE-${now}-${Math.floor(Math.random()*100000)}`;console.warn(`[SMTP-DEDUPE] Correo duplicado suprimido: ${p.to} | ${p.subject}`);return {success:true,logId,status:'ENVIADO'};}\n  recentEmailKeys.set(emailKey,now);\n  for(const [key,ts] of recentEmailKeys){if(now-ts>300000)recentEmailKeys.delete(key);}\n"
+              s=s.replace(needle,replacement,1)
+          p.write_text(s,encoding='utf-8')
+
+      - name: Commit repairs
+        shell: bash
+        run: |
+          if ! git diff --quiet -- src/components/SolicitarView.tsx server/app.ts server/mailService.ts; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add src/components/SolicitarView.tsx server/app.ts server/mailService.ts
+            git commit -m 'fix: crear token antes de notificar y evitar correos duplicados'
+            git push
+          fi
+
       - name: Synchronize npm lockfile
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
       - run: npm ci
       - run: npm run lint
       - run: npm run build
+
       - name: Verify production architecture
         shell: bash
         run: |
@@ -134,11 +126,3 @@ jobs:
           test -s api/index.js
           node --check api/index.js
           test -e api/admin/schema.sql
-      - name: Commit backend repair
-        if: contains(github.event.head_commit.message, 'repair backend baseline')
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add server/app.ts server/adminRequestRoutes.ts
-          git commit -m "fix: restaurar backend completo y corregir builder de aprobacion"
-          git push

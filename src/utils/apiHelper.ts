@@ -63,8 +63,9 @@ export async function safeFetchJson<T = any>(url: string, options?: RequestInit)
   }
 
   // El POST histórico /api/requests persiste primero la solicitud. Después
-  // completamos token + correo mediante /notify. Si el correo falla, NO
-  // convertimos una solicitud ya guardada en un falso error de creación.
+  // completamos token + correo mediante /notify. Si el correo falla, la
+  // solicitud NO se revierte, pero el fallo se devuelve explícitamente para
+  // que la UI no pueda mostrar falsamente "Notificación Despachada".
   if (url === '/api/requests' && method === 'POST') {
     const createdRequest = parsedData?.request ?? (parsedData?.id && parsedData?.folio ? parsedData : null);
     const createdRequestId = createdRequest?.id;
@@ -97,13 +98,30 @@ export async function safeFetchJson<T = any>(url: string, options?: RequestInit)
         };
 
         console.info('[REQUEST-NOTIFICATION]', parsedData.__notification);
+
+        // La solicitud ya quedó guardada. No la tratamos como perdida, pero
+        // detenemos la pantalla de éxito cuando el despacho no fue completo.
+        // Esto expone el error SMTP/API real en el mensaje existente de la UI.
+        const approverStatus = parsedData.__notification.approver;
+        const requesterStatus = parsedData.__notification.requester;
+        if (approverStatus !== 'ENVIADO' || requesterStatus !== 'ENVIADO') {
+          const details = [
+            `Aprobador: ${approverStatus || 'SIN_RESULTADO'}${parsedData.__notification.approverError ? ` (${parsedData.__notification.approverError})` : ''}`,
+            `Solicitante: ${requesterStatus || 'SIN_RESULTADO'}${parsedData.__notification.requesterError ? ` (${parsedData.__notification.requesterError})` : ''}`,
+            `HTTP /notify: ${parsedData.__notification.httpStatus || 'SIN_RESPUESTA'}`,
+          ].join(' | ');
+          throw new Error(`La solicitud ${createdRequest.folio} fue guardada, pero el despacho de correo no se completó. ${details}`);
+        }
       } catch (notifyError: any) {
+        if (notifyError instanceof Error && notifyError.message.startsWith('La solicitud ')) throw notifyError;
         parsedData.__notification = {
-          httpStatus: 0,
+          ...(parsedData.__notification || {}),
+          httpStatus: parsedData.__notification?.httpStatus || 0,
           success: false,
           error: notifyError?.message || 'No fue posible contactar el servicio de notificaciones.',
         };
         console.error('[REQUEST-NOTIFICATION]', notifyError);
+        throw new Error(`La solicitud ${createdRequest.folio} fue guardada, pero no se pudo completar la notificación. ${parsedData.__notification.error}`);
       }
     }
   }

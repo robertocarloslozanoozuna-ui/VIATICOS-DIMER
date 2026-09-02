@@ -44,17 +44,12 @@ export function registerApprovalRoutes(app: Express) {
         const baseHtml = buildSystemsApprovedEmailHtml({ request, user, approverName, approverEmail, approvedAt: request.approvedAt || new Date().toISOString() });
         const requesterEmail = user.email.trim().toLowerCase();
         const finanzasEmail = (process.env.FINANZAS_EMAIL || 'finanzas@dimer.com.mx').trim().toLowerCase();
-        const systemsEmail = 'sistemas@dimer.com.mx';
 
-        // En una misma bandeja pueden coincidir Solicitante y Finanzas. En ese caso
-        // se envían DOS correos separados, cada uno identificado con una leyenda
-        // pequeña para que quede claro el destinatario funcional.
+        // La aprobación del jefe se notifica únicamente al solicitante y a Finanzas.
+        // Sistemas no participa como destinatario de esta notificación.
         const recipientCopies: Array<{ to: string; label: string; subjectSuffix: string }> = [];
         if (requesterEmail) recipientCopies.push({ to: requesterEmail, label: 'SOLICITANTE', subjectSuffix: 'SOLICITANTE' });
-        if (finanzasEmail) recipientCopies.push({ to: finanzasEmail, label: 'FINANZAS', subjectSuffix: 'FINANZAS' });
-        if (systemsEmail && systemsEmail !== requesterEmail && systemsEmail !== finanzasEmail) {
-          recipientCopies.push({ to: systemsEmail, label: 'SISTEMAS', subjectSuffix: 'SISTEMAS' });
-        }
+        if (finanzasEmail && finanzasEmail !== requesterEmail) recipientCopies.push({ to: finanzasEmail, label: 'FINANZAS', subjectSuffix: 'FINANZAS' });
 
         for (const recipient of recipientCopies) {
           const html = `<div style="font-family:Arial,sans-serif;font-size:11px;color:#666;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:.4px;">Notificación para: <strong>${recipient.label}</strong></div>${baseHtml}`;
@@ -78,6 +73,6 @@ export function registerApprovalRoutes(app: Express) {
     } catch (e) { return res.status(500).send(buildTokenApprovalResultPageHtml({ status: 'INVALIDA', errorMessage: e instanceof Error ? e.message : 'Error procesando autorización.' })); }
   };
 
-  app.get(['/api/approval/decision','/api/approval/token-action','/approval-response/:token/:decision','/api/approval-response/:token/:decision'], getDecision);
+  app.get(['/api/approval/decision','/api/approval/token-action','/approval-response/:token/:decision'], getDecision);
   app.post(['/api/approval/submit-decision','/api/approval/token-action','/api/approval/decision'], submitDecision);
 }

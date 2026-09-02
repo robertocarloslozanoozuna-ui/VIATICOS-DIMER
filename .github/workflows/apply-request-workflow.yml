@@ -1,0 +1,143 @@
+name: Apply request workflow changes
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: contains(github.event.head_commit.message, 'chore: aplicar cambios de flujo de solicitudes') || contains(github.event.head_commit.message, 'feat: agregar fecha requerida de deposito')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Patch application
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+
+          def edit(path, fn):
+              p = Path(path)
+              s = p.read_text(encoding='utf-8')
+              out = fn(s)
+              if out == s:
+                  raise SystemExit(f'No change made to {path}; expected pattern was not found')
+              p.write_text(out, encoding='utf-8')
+
+          # Persistence mapping: keep legacy boss_* database fields, add deposit_date.
+          def db_patch(s):
+              s2 = s.replace('bossName:r.boss_name,startDate:r.start_date', 'bossName:r.boss_name,depositDate:r.deposit_date,startDate:r.start_date')
+              s2 = s2.replace('boss_name:r.bossName||null,start_date:r.startDate||null', 'boss_name:r.bossName||null,deposit_date:r.depositDate||null,start_date:r.startDate||null')
+              s2 = s2.replace("bossName:'boss_name',startDate:'start_date'", "bossName:'boss_name',depositDate:'deposit_date',startDate:'start_date'")
+              return s2
+          edit('server/db.ts', db_patch)
+
+          # Request creation endpoint already contains the full transactional creation flow.
+          def create_patch(s):
+              s2 = s.replace("requestDate: String(b.requestDate || now.slice(0, 10)).slice(0, 10),\n        urgency:", "requestDate: String(b.requestDate || now.slice(0, 10)).slice(0, 10),\n        depositDate: String(b.depositDate || '').slice(0, 10) || undefined,\n        urgency:")
+              return s2
+          edit('server/requestCreationRoutes.ts', create_patch)
+
+          # Canonical schema documentation.
+          def schema_patch(s):
+              s2 = s.replace('request_date DATE,urgency TEXT,', 'request_date DATE,deposit_date DATE,urgency TEXT,')
+              s2 = s2.replace('ALTER TABLE travel_requests ADD COLUMN IF NOT EXISTS approval_token TEXT;', 'ALTER TABLE travel_requests ADD COLUMN IF NOT EXISTS deposit_date DATE; ALTER TABLE travel_requests ADD COLUMN IF NOT EXISTS approval_token TEXT;')
+              return s2
+          edit('api/admin/schema.sql', schema_patch)
+
+          # New-request form: use the transactional /create endpoint and collect required deposit date.
+          def solicitar_patch(s):
+              s2 = s.replace("const [requestDate, setRequestDate] = useState(todayStr);", "const [requestDate, setRequestDate] = useState(todayStr);\n  const [depositDate, setDepositDate] = useState(todayStr);")
+              s2 = s2.replace("if(!requestDate.trim()){setError('Por favor indique la Fecha de la solicitud.');return;}", "if(!requestDate.trim()){setError('Por favor indique la Fecha de la solicitud.');return;}if(!depositDate.trim()){setError('Por favor indique la Fecha requerida de depósito.');return;}")
+              s2 = s2.replace("safeFetchJson<any>('/api/requests'", "safeFetchJson<any>('/api/requests/create'")
+              s2 = s2.replace("requestDate:requestDate.trim(),urgency", "requestDate:requestDate.trim(),depositDate:depositDate.trim(),urgency")
+              s2 = s2.replace('Jefe que autoriza', 'Supervisor que autoriza').replace('Jefe que Autoriza', 'Supervisor que Autoriza')
+              # Insert a compact deposit-date field immediately after the request-date input.
+              pattern = r'(\<input[^>]*value=\{requestDate\}[^>]*onChange=\{\(e\)=>setRequestDate\(e\.target\.value\)\}[^>]*/\>)'
+              m = re.search(pattern, s2)
+              if not m:
+                  # tolerate different attribute order by matching the input until its closing tag
+                  pattern = r'(\<input[^>]*value=\{requestDate\}[^>]*/\>)'
+                  m = re.search(pattern, s2)
+              if not m:
+                  raise SystemExit('SolicitarView: requestDate input not found')
+              field = '''\n              <div className="space-y-1">\n                <label className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Fecha requerida de depósito</label>\n                <input type="date" value={depositDate} onChange={(e)=>setDepositDate(e.target.value)} min={requestDate} className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500" required />\n                <p className="text-[10px] text-slate-400">Finanzas utilizará esta fecha para programar el depósito.</p>\n              </div>'''
+              s2 = s2[:m.end()] + field + s2[m.end():]
+              return s2
+          edit('src/components/SolicitarView.tsx', solicitar_patch)
+
+          # Requester list: cancellation is allowed only for the owner's pending request.
+          def mis_patch(s):
+              s2 = s.replace("import type { TravelRequest, User } from '../types';", "import type { TravelRequest, User } from '../types';\nimport { safeFetchJson } from '../utils/apiHelper';")
+              s2 = s2.replace("const [selectedDetailRequest, setSelectedDetailRequest] = useState<TravelRequest | null>(null);", "const [selectedDetailRequest, setSelectedDetailRequest] = useState<TravelRequest | null>(null);\n  const [cancellingRequestId, setCancellingRequestId] = useState<string | null>(null);")
+              marker = "  const getStatusBadge = (status: string) => {"
+              handler = '''  const handleCancelRequest = async (request: TravelRequest) => {\n    if (!currentUser || request.userId !== currentUser.id || request.status !== 'PENDIENTE_APROBACION') return;\n    const reason = window.prompt(`Motivo de cancelación para ${request.folio}:`, 'Ya no se requiere el viático.')?.trim();\n    if (!reason) return;\n    if (!window.confirm(`¿Confirmas cancelar la solicitud ${request.folio}? Esta acción no puede deshacerse.`)) return;\n    setCancellingRequestId(request.id);\n    try {\n      await safeFetchJson(`/api/requests/${request.id}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) });\n      window.location.reload();\n    } catch (err: any) {\n      alert(err.message || 'No fue posible cancelar la solicitud.');\n    } finally {\n      setCancellingRequestId(null);\n    }\n  };\n\n'''
+              if marker not in s2: raise SystemExit('MisSolicitudesView: getStatusBadge marker not found')
+              s2 = s2.replace(marker, handler + marker, 1)
+              s2 = s2.replace("label: 'Pendiente Jefe'", "label: 'Pendiente Supervisor'")
+              s2 = s2.replace('<span>Pendientes Jefe</span>', '<span>Pendientes Supervisor</span>')
+              s2 = s2.replace('<th className="py-2.5 px-3">Jefe Directo</th>', '<th className="py-2.5 px-3">Supervisor</th>')
+              old = '''{r.status === 'PENDIENTE_APROBACION' && (\n                            <button\n                              onClick={() => onNavigateToApprove(r.id)}\n                              title="Gestionar en Aprobaciones"\n                              className="p-1 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded transition"\n                            >\n                              <ExternalLink className="w-3.5 h-3.5" />\n                            </button>\n                          )}'''
+              new = '''{r.status === 'PENDIENTE_APROBACION' && r.userId === currentUser?.id && (\n                            <button\n                              onClick={() => handleCancelRequest(r)}\n                              disabled={cancellingRequestId === r.id}\n                              title="Cancelar solicitud antes de la aprobación"\n                              className="p-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded transition disabled:opacity-50"\n                            >\n                              <XCircle className="w-3.5 h-3.5" />\n                            </button>\n                          )}\n\n                          {r.status === 'PENDIENTE_APROBACION' && (\n                            <button\n                              onClick={() => onNavigateToApprove(r.id)}\n                              title="Gestionar en Aprobaciones"\n                              className="p-1 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded transition"\n                            >\n                              <ExternalLink className="w-3.5 h-3.5" />\n                            </button>\n                          )}'''
+              if old not in s2: raise SystemExit('MisSolicitudesView: pending action block not found')
+              s2 = s2.replace(old, new, 1)
+              # Add explicit CANCELADA badge before RECHAZADA.
+              case = '''      case 'CANCELADA':\n        return {\n          label: 'Cancelada',\n          classes: 'bg-slate-100 text-slate-700 border-slate-300',\n          icon: XCircle,\n        };\n'''
+              anchor = "      case 'RECHAZADA':"
+              if case not in s2: s2 = s2.replace(anchor, case + anchor, 1)
+              return s2
+          edit('src/components/MisSolicitudesView.tsx', mis_patch)
+
+          # Finance: surface the requested deposit date prominently in the payment queue.
+          def fin_patch(s):
+              target = '''                  <p className="text-[11px] text-slate-600">\n                    <strong>Destino:</strong> {req.destination} &bull; <strong>Fechas:</strong>{' '}\n                    {new Date(req.startDate).toLocaleDateString('es-MX')} al {new Date(req.endDate).toLocaleDateString('es-MX')}\n                  </p>'''
+              addition = target + '''\n                  <p className="text-[11px] text-indigo-700 font-semibold">\n                    <strong>Fecha requerida de depósito:</strong>{' '}\n                    {req.depositDate ? new Date(`${req.depositDate}T00:00:00`).toLocaleDateString('es-MX') : 'No especificada'}\n                  </p>'''
+              if target not in s: raise SystemExit('FinanzasView: payment queue destination block not found')
+              s2 = s.replace(target, addition, 1)
+              s2 = s2.replace('Solicitudes Autorizadas por Jefatura (Listas para Pago)', 'Solicitudes Autorizadas por Supervisor (Listas para Pago)')
+              s2 = s2.replace('dictamen favorable del jefe inmediato', 'dictamen favorable del supervisor')
+              return s2
+          edit('src/components/FinanzasView.tsx', fin_patch)
+
+          # Email wording: preserve all technical boss_* fields but present the business role as Supervisor.
+          def mail_patch(s):
+              replacements = {
+                'Revisión y Dictamen de Jefatura':'Revisión y Dictamen del Supervisor',
+                'Jefe que Aprobó':'Supervisor que Aprobó',
+                'tu jefe/a':'tu supervisor/a',
+                'Jefe Directo':'Supervisor',
+              }
+              out=s
+              for a,b in replacements.items(): out=out.replace(a,b)
+              return out
+          edit('server/mailService.ts', mail_patch)
+
+          # Main title terminology only; keep role IDs and database compatibility unchanged.
+          def app_patch(s):
+              out=s.replace('Panel de Aprobación Jerárquica Directa', 'Panel de Aprobación del Supervisor')
+              return out
+          edit('src/App.tsx', app_patch)
+
+      - name: Verify and commit
+        run: |
+          npm ci
+          npm run lint
+          npm run build
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/db.ts server/requestCreationRoutes.ts api/admin/schema.sql src/types.ts src/components/SolicitarView.tsx src/components/MisSolicitudesView.tsx src/components/FinanzasView.tsx server/mailService.ts src/App.tsx
+          git commit -m "feat: fecha de deposito, supervisor y cancelacion previa"
+          git push
+
+      - name: Remove patch workflow
+        if: success()
+        run: |
+          git rm .github/workflows/apply-request-workflow.yml
+          git commit -m "chore: retirar workflow temporal de parche"
+          git push

@@ -22,23 +22,11 @@ import {
   FolderLock
 } from 'lucide-react';
 import type { User, RoleDefinition, Department, Boss, Permission, SystemStats } from '../types';
+import { safeFetchJson } from '../utils/apiHelper';
 
 interface AdminViewProps {
   currentUser: User | null;
   onRefreshData: () => void;
-}
-
-// Helper to safely parse JSON responses or extract server error message
-async function safeParseJson(res: Response) {
-  const text = await res.text();
-  try {
-    return JSON.parse(text);
-  } catch {
-    if (!res.ok) {
-      throw new Error(`Error ${res.status}: ${res.statusText || 'Error en el servidor'}`);
-    }
-    return { success: true };
-  }
 }
 
 export default function AdminView({ currentUser, onRefreshData }: AdminViewProps) {
@@ -92,39 +80,21 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
   const loadAllAdminData = async () => {
     setLoading(true);
     try {
-      const [usersRes, rolesRes, permRes, deptRes, bossRes, statsRes] = await Promise.all([
-        fetch('/api/users'),
-        fetch('/api/roles'),
-        fetch('/api/permissions'),
-        fetch('/api/departments'),
-        fetch('/api/bosses'),
-        fetch('/api/stats'),
+      const [u, r, p, d, b, s] = await Promise.all([
+        safeFetchJson('/api/users').catch(() => []),
+        safeFetchJson('/api/roles').catch(() => []),
+        safeFetchJson('/api/permissions').catch(() => []),
+        safeFetchJson('/api/departments').catch(() => []),
+        safeFetchJson('/api/bosses').catch(() => []),
+        safeFetchJson('/api/stats').catch(() => null),
       ]);
 
-      if (usersRes.ok) {
-        const u = await usersRes.json();
-        if (Array.isArray(u)) setUsersList(u);
-      }
-      if (rolesRes.ok) {
-        const r = await rolesRes.json();
-        if (Array.isArray(r)) setRolesList(r);
-      }
-      if (permRes.ok) {
-        const p = await permRes.json();
-        if (Array.isArray(p)) setAllPermissions(p);
-      }
-      if (deptRes.ok) {
-        const d = await deptRes.json();
-        if (Array.isArray(d)) setDeptList(d);
-      }
-      if (bossRes.ok) {
-        const b = await bossRes.json();
-        if (Array.isArray(b)) setBossList(b);
-      }
-      if (statsRes.ok) {
-        const s = await statsRes.json();
-        if (s && typeof s === 'object') setStats(s);
-      }
+      if (Array.isArray(u)) setUsersList(u);
+      if (Array.isArray(r)) setRolesList(r);
+      if (Array.isArray(p)) setAllPermissions(p);
+      if (Array.isArray(d)) setDeptList(d);
+      if (Array.isArray(b)) setBossList(b);
+      if (s && typeof s === 'object') setStats(s);
     } catch (err: any) {
       console.error('Error cargando catálogos de administración:', err);
     } finally {
@@ -188,7 +158,7 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
     try {
       if (editingUser) {
         // Update user
-        const res = await fetch(`/api/users/${editingUser.id}`, {
+        const data = await safeFetchJson(`/api/users/${editingUser.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -200,12 +170,10 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
             password: userPassword.trim() ? userPassword.trim() : undefined,
           }),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Error al actualizar usuario');
-        showNotification('success', `Usuario ${data.user.name} actualizado con éxito.`);
+        showNotification('success', `Usuario ${data.user?.name || userName} actualizado con éxito.`);
       } else {
         // Create user
-        const res = await fetch('/api/users', {
+        const data = await safeFetchJson('/api/users', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -217,9 +185,7 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
             status: userStatus,
           }),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Error al registrar usuario');
-        showNotification('success', `Usuario ${data.user.name} registrado con contraseña encriptada.`);
+        showNotification('success', `Usuario ${data.user?.name || userName} registrado con contraseña encriptada.`);
       }
 
       setShowUserModal(false);
@@ -233,15 +199,11 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
   const handleToggleUserStatus = async (user: User) => {
     const newStatus = user.status === 'ACTIVO' ? 'INACTIVO' : 'ACTIVO';
     try {
-      const res = await fetch(`/api/users/${user.id}`, {
+      await safeFetchJson(`/api/users/${user.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus }),
       });
-      if (!res.ok) {
-        const d = await res.json();
-        throw new Error(d.error || 'Error al cambiar estado');
-      }
       showNotification('success', `Estado de ${user.name} cambiado a ${newStatus}`);
       loadAllAdminData();
     } catch (err: any) {
@@ -259,12 +221,9 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
     if (!window.confirm(confirmMsg)) return;
 
     try {
-      const res = await fetch(`/api/users/${user.id}`, {
+      await safeFetchJson(`/api/users/${user.id}`, {
         method: 'DELETE',
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error al eliminar usuario');
-
       showNotification('success', `Cuenta de ${user.name} eliminada permanentemente del sistema.`);
       loadAllAdminData();
       onRefreshData();
@@ -305,7 +264,7 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
 
     try {
       if (editingRole) {
-        const res = await fetch(`/api/roles/${editingRole.id}`, {
+        const data = await safeFetchJson(`/api/roles/${editingRole.id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -314,11 +273,9 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
             permissions: rolePermissions,
           }),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Error al actualizar rol');
-        showNotification('success', `Rol ${data.role.name} actualizado exitosamente.`);
+        showNotification('success', `Rol ${data.role?.name || roleName} actualizado exitosamente.`);
       } else {
-        const res = await fetch('/api/roles', {
+        const data = await safeFetchJson('/api/roles', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -327,9 +284,7 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
             permissions: rolePermissions,
           }),
         });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || 'Error al crear rol');
-        showNotification('success', `Nuevo rol ${data.role.name} creado exitosamente.`);
+        showNotification('success', `Nuevo rol ${data.role?.name || roleName} creado exitosamente.`);
       }
 
       setShowRoleModal(false);
@@ -341,12 +296,11 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
 
   const handleToggleRoleActive = async (role: RoleDefinition) => {
     try {
-      const res = await fetch(`/api/roles/${role.id}`, {
+      await safeFetchJson(`/api/roles/${role.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: !role.active }),
       });
-      if (!res.ok) throw new Error('Error al actualizar estado del rol');
       showNotification('success', `Rol ${role.name} ${!role.active ? 'activado' : 'desactivado'}.`);
       loadAllAdminData();
     } catch (err: any) {
@@ -363,7 +317,7 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
     }
 
     try {
-      const res = await fetch('/api/departments', {
+      const data = await safeFetchJson('/api/departments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -371,9 +325,7 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
           description: deptDescription.trim(),
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error al registrar departamento');
-      showNotification('success', `Departamento ${data.department.name} registrado con éxito.`);
+      showNotification('success', `Departamento ${data.department?.name || deptName} registrado con éxito.`);
       setDeptName('');
       setDeptDescription('');
       setShowDeptModal(false);
@@ -409,7 +361,7 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
 
     try {
       if (editingBoss) {
-        const res = await fetch(`/api/bosses/${encodeURIComponent(editingBoss.id)}`, {
+        const data = await safeFetchJson(`/api/bosses/${encodeURIComponent(editingBoss.id)}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -418,11 +370,9 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
             department: bossDept,
           }),
         });
-        const data = await safeParseJson(res);
-        if (!res.ok) throw new Error(data.error || 'Error al actualizar jefe');
         showNotification('success', `Jefe ${data.boss?.name || bossName} actualizado con éxito.`);
       } else {
-        const res = await fetch('/api/bosses', {
+        const data = await safeFetchJson('/api/bosses', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -431,8 +381,6 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
             department: bossDept,
           }),
         });
-        const data = await safeParseJson(res);
-        if (!res.ok) throw new Error(data.error || 'Error al registrar jefe');
         showNotification('success', `Jefe ${data.boss?.name || bossName} añadido al catálogo de aprobadores.`);
       }
 
@@ -445,13 +393,11 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
 
   const handleToggleBossActive = async (boss: Boss) => {
     try {
-      const res = await fetch(`/api/bosses/${encodeURIComponent(boss.id)}`, {
+      await safeFetchJson(`/api/bosses/${encodeURIComponent(boss.id)}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: !boss.active }),
       });
-      const data = await safeParseJson(res);
-      if (!res.ok) throw new Error(data.error || 'Error al actualizar estado del jefe');
       showNotification('success', `Jefe ${boss.name} ${!boss.active ? 'activado' : 'inactivado'}.`);
       loadAllAdminData();
     } catch (err: any) {
@@ -464,11 +410,9 @@ export default function AdminView({ currentUser, onRefreshData }: AdminViewProps
       return;
     }
     try {
-      const res = await fetch(`/api/bosses/${encodeURIComponent(boss.id)}`, {
+      await safeFetchJson(`/api/bosses/${encodeURIComponent(boss.id)}`, {
         method: 'DELETE',
       });
-      const data = await safeParseJson(res);
-      if (!res.ok) throw new Error(data.error || 'Error al eliminar jefe');
       showNotification('success', `Jefe ${boss.name} eliminado del catálogo.`);
       loadAllAdminData();
     } catch (err: any) {

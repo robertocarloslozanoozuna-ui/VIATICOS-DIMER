@@ -24,6 +24,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import type { TravelRequest, User as UserType } from '../types';
+import { safeFetchJson } from '../utils/apiHelper';
 
 interface AprobarViewProps {
   currentUser: UserType | null;
@@ -109,9 +110,8 @@ export default function AprobarView({
 
     // Fetch audit history for this request
     try {
-      const res = await fetch(`/api/requests/${req.id}`);
-      const detail = await res.json();
-      if (detail.auditLogs) {
+      const detail = await safeFetchJson(`/api/requests/${req.id}`);
+      if (detail?.auditLogs) {
         setAuditLogs(detail.auditLogs);
       }
     } catch (e) {
@@ -125,10 +125,9 @@ export default function AprobarView({
     setTokenLoading(true);
     setErrorMessage(null);
     try {
-      const res = await fetch(`/api/approval-tokens/${tokenStr.trim()}`);
-      const data = await res.json();
-      if (!res.ok || !data.valid) {
-        setTokenResult({ valid: false, error: data.error || 'Token inválido o expirado' });
+      const data = await safeFetchJson(`/api/approval-tokens/${tokenStr.trim()}`);
+      if (!data || !data.valid) {
+        setTokenResult({ valid: false, error: data?.error || 'Token inválido o expirado' });
       } else {
         setTokenResult(data);
         if (data.request) {
@@ -153,7 +152,7 @@ export default function AprobarView({
     setActionLoading(true);
     setErrorMessage(null);
     try {
-      const res = await fetch(`/api/approval-tokens/${tokenInput.trim()}/action`, {
+      const data = await safeFetchJson(`/api/approval-tokens/${tokenInput.trim()}/action`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -162,9 +161,6 @@ export default function AprobarView({
           comments: comments.trim(),
         }),
       });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error al ejecutar acción');
 
       setActionSuccess(data.message || `Solicitud ${action.toLowerCase()} con éxito.`);
       onRefreshData();
@@ -191,7 +187,7 @@ export default function AprobarView({
     setErrorMessage(null);
 
     try {
-      const res = await fetch(`/api/requests/${activeRequest.id}/approve`, {
+      await safeFetchJson(`/api/requests/${activeRequest.id}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -199,9 +195,6 @@ export default function AprobarView({
           comments: comments.trim(),
         }),
       });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error al autorizar la solicitud.');
 
       setActionSuccess(
         `¡Solicitud ${activeRequest.folio} APROBADA! Se envió correo de notificación automática a sistemas@dimer.com.mx y Finanzas.`
@@ -226,14 +219,11 @@ export default function AprobarView({
     setErrorMessage(null);
 
     try {
-      const res = await fetch(`/api/requests/${activeRequest.id}/reject`, {
+      await safeFetchJson(`/api/requests/${activeRequest.id}/reject`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ comments: comments.trim() }),
       });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error al rechazar la solicitud.');
 
       setActionSuccess(`Solicitud ${activeRequest.folio} RECHAZADA. Se ha registrado en la bitácora.`);
       onRefreshData();
@@ -256,14 +246,11 @@ export default function AprobarView({
     setErrorMessage(null);
 
     try {
-      const res = await fetch(`/api/requests/${activeRequest.id}/request-correction`, {
+      await safeFetchJson(`/api/requests/${activeRequest.id}/request-correction`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ comments: comments.trim() }),
       });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error al solicitar corrección.');
 
       setActionSuccess(`Se ha marcado la solicitud ${activeRequest.folio} en estado CORRECCIÓN SOLICITADA.`);
       onRefreshData();

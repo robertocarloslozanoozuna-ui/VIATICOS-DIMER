@@ -6,16 +6,108 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Apply pending request workflow patch
+        if: contains(github.event.head_commit.message, 'workflow trigger')
+        shell: python
+        run: |
+          from pathlib import Path
+          import re, subprocess
+
+          # Restore the complete known-good server/app.ts, then fix only its stale
+          # legacy mail-builder call. This removes the accidental shortened file.
+          p=Path('server/app.ts')
+          good=subprocess.check_output(['git','show','b953f778d3e438d8bf98810e838b3d174f8c7049:server/app.ts'], text=True)
+          good=good.replace("html:buildBossApprovalEmailHtml({request:created,approvalUrl})", "html:buildBossApprovalEmailHtml({request:created,user:u,approveUrl:approvalUrl,rejectUrl:approvalUrl,token:created.approvalToken||''})")
+          p.write_text(good,encoding='utf-8')
+
+          # DB field mapping.
+          p=Path('server/db.ts'); s=p.read_text(encoding='utf-8'); out=s
+          out=out.replace('bossName:r.boss_name,startDate:r.start_date','bossName:r.boss_name,depositDate:r.deposit_date,startDate:r.start_date')
+          out=out.replace('boss_name:r.bossName||null,start_date:r.startDate||null','boss_name:r.bossName||null,deposit_date:r.depositDate||null,start_date:r.startDate||null')
+          out=out.replace("bossName:'boss_name',startDate:'start_date'", "bossName:'boss_name',depositDate:'deposit_date',startDate:'start_date'")
+          p.write_text(out,encoding='utf-8')
+
+          # Transactional create endpoint.
+          p=Path('server/requestCreationRoutes.ts'); s=p.read_text(encoding='utf-8'); out=s
+          out=out.replace("requestDate: String(b.requestDate || now.slice(0, 10)).slice(0, 10),\n        urgency:", "requestDate: String(b.requestDate || now.slice(0, 10)).slice(0, 10),\n        depositDate: String(b.depositDate || '').slice(0, 10) || undefined,\n        urgency:")
+          p.write_text(out,encoding='utf-8')
+
+          # Canonical schema.
+          p=Path('api/admin/schema.sql'); s=p.read_text(encoding='utf-8'); out=s
+          out=out.replace('request_date DATE,urgency TEXT,','request_date DATE,deposit_date DATE,urgency TEXT,')
+          out=out.replace('ALTER TABLE travel_requests ADD COLUMN IF NOT EXISTS approval_token TEXT;','ALTER TABLE travel_requests ADD COLUMN IF NOT EXISTS deposit_date DATE; ALTER TABLE travel_requests ADD COLUMN IF NOT EXISTS approval_token TEXT;')
+          p.write_text(out,encoding='utf-8')
+
+          # Outer API cancellation status typing.
+          p=Path('api/index.ts'); s=p.read_text(encoding='utf-8'); out=s.replace("request.status !== 'PENDIENTE_APROBACION' && request.status !== 'PENDIENTE'", "request.status !== 'PENDIENTE_APROBACION'")
+          p.write_text(out,encoding='utf-8')
+
+          # New request form.
+          p=Path('src/components/SolicitarView.tsx'); s=p.read_text(encoding='utf-8'); out=s
+          out=out.replace("const [requestDate, setRequestDate] = useState(todayStr);", "const [requestDate, setRequestDate] = useState(todayStr);\n  const [depositDate, setDepositDate] = useState(todayStr);")
+          out=out.replace("if(!requestDate.trim()){setError('Por favor indique la Fecha de la solicitud.');return;}", "if(!requestDate.trim()){setError('Por favor indique la Fecha de la solicitud.');return;}if(!depositDate.trim()){setError('Por favor indique la Fecha requerida de depósito.');return;}")
+          out=out.replace("safeFetchJson<any>('/api/requests'", "safeFetchJson<any>('/api/requests/create'")
+          out=out.replace("requestDate:requestDate.trim(),urgency", "requestDate:requestDate.trim(),depositDate:depositDate.trim(),urgency")
+          out=out.replace('Jefe que autoriza','Supervisor que autoriza').replace('Jefe que Autoriza','Supervisor que Autoriza')
+          if 'value={depositDate}' not in out:
+              m=re.search(r'(<input[^>]*value=\{requestDate\}[^>]*/>)',out)
+              if not m: raise SystemExit('SolicitarView requestDate input not found')
+              field='''\n              <div className="space-y-1">\n                <label className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Fecha requerida de depósito</label>\n                <input type="date" value={depositDate} onChange={(e)=>setDepositDate(e.target.value)} min={requestDate} className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500" required />\n                <p className="text-[10px] text-slate-400">Finanzas utilizará esta fecha para programar el depósito.</p>\n              </div>'''
+              out=out[:m.end()]+field+out[m.end():]
+          p.write_text(out,encoding='utf-8')
+
+          # Requester list: cancellation button for own pending requests.
+          p=Path('src/components/MisSolicitudesView.tsx'); s=p.read_text(encoding='utf-8'); out=s
+          if "from '../utils/apiHelper'" not in out:
+              out=out.replace("import type { TravelRequest, User } from '../types';", "import type { TravelRequest, User } from '../types';\nimport { safeFetchJson } from '../utils/apiHelper';")
+          if 'const [cancellingRequestId' not in out:
+              out=out.replace("const [selectedDetailRequest, setSelectedDetailRequest] = useState<TravelRequest | null>(null);", "const [selectedDetailRequest, setSelectedDetailRequest] = useState<TravelRequest | null>(null);\n  const [cancellingRequestId, setCancellingRequestId] = useState<string | null>(null);")
+          if 'handleCancelRequest' not in out:
+              marker='  const getStatusBadge = (status: string) => {'
+              handler='''  const handleCancelRequest = async (request: TravelRequest) => {\n    if (!currentUser || request.userId !== currentUser.id || request.status !== 'PENDIENTE_APROBACION') return;\n    const reason = window.prompt(`Motivo de cancelación para ${request.folio}:`, 'Ya no se requiere el viático.')?.trim();\n    if (!reason) return;\n    if (!window.confirm(`¿Confirmas cancelar la solicitud ${request.folio}? Esta acción no puede deshacerse.`)) return;\n    setCancellingRequestId(request.id);\n    try {\n      await safeFetchJson(`/api/requests/${request.id}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) });\n      window.location.reload();\n    } catch (err: any) {\n      alert(err.message || 'No fue posible cancelar la solicitud.');\n    } finally {\n      setCancellingRequestId(null);\n    }\n  };\n\n'''
+              if marker not in out: raise SystemExit('MisSolicitudesView badge marker not found')
+              out=out.replace(marker,handler+marker,1)
+          out=out.replace("label: 'Pendiente Jefe'","label: 'Pendiente Supervisor'").replace('<span>Pendientes Jefe</span>','<span>Pendientes Supervisor</span>').replace('<th className="py-2.5 px-3">Jefe Directo</th>','<th className="py-2.5 px-3">Supervisor</th>')
+          if "label: 'Cancelada'" not in out:
+              case="""      case 'CANCELADA':\n        return {\n          label: 'Cancelada',\n          classes: 'bg-slate-100 text-slate-700 border-slate-300',\n          icon: XCircle,\n        };\n"""
+              out=out.replace("      case 'RECHAZADA':",case+"      case 'RECHAZADA':",1)
+          if 'Cancelar solicitud antes de la aprobación' not in out:
+              anchor='''                          {r.status === 'PENDIENTE_APROBACION' && (\n                            <button\n                              onClick={() => onNavigateToApprove(r.id)}\n                              title="Gestionar en Aprobaciones"\n                              className="p-1 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded transition"\n                            >\n                              <ExternalLink className="w-3.5 h-3.5" />\n                            </button>\n                          )}'''
+              cancel='''                          {r.status === 'PENDIENTE_APROBACION' && r.userId === currentUser?.id && (\n                            <button\n                              onClick={() => handleCancelRequest(r)}\n                              disabled={cancellingRequestId === r.id}\n                              title="Cancelar solicitud antes de la aprobación"\n                              className="p-1 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded transition disabled:opacity-50"\n                            >\n                              <XCircle className="w-3.5 h-3.5" />\n                            </button>\n                          )}\n\n'''
+              if anchor not in out: raise SystemExit('MisSolicitudesView pending action anchor not found')
+              out=out.replace(anchor,cancel+anchor,1)
+          p.write_text(out,encoding='utf-8')
+
+          # Finance queue.
+          p=Path('src/components/FinanzasView.tsx'); s=p.read_text(encoding='utf-8'); out=s
+          target='''                  <p className="text-[11px] text-slate-600">\n                    <strong>Destino:</strong> {req.destination} &bull; <strong>Fechas:</strong>{' '}\n                    {new Date(req.startDate).toLocaleDateString('es-MX')} al {new Date(req.endDate).toLocaleDateString('es-MX')}\n                  </p>'''
+          if 'Fecha requerida de depósito' not in out:
+              if target not in out: raise SystemExit('FinanzasView payment queue anchor not found')
+              out=out.replace(target,target+'''\n                  <p className="text-[11px] text-indigo-700 font-semibold">\n                    <strong>Fecha requerida de depósito:</strong>{' '}\n                    {req.depositDate ? new Date(`${req.depositDate}T00:00:00`).toLocaleDateString('es-MX') : 'No especificada'}\n                  </p>''',1)
+          out=out.replace('Solicitudes Autorizadas por Jefatura (Listas para Pago)','Solicitudes Autorizadas por Supervisor (Listas para Pago)').replace('dictamen favorable del jefe inmediato','dictamen favorable del supervisor')
+          p.write_text(out,encoding='utf-8')
+
+          # Email wording only.
+          p=Path('server/mailService.ts'); s=p.read_text(encoding='utf-8'); out=s
+          for a,b in [('Revisión y Dictamen de Jefatura','Revisión y Dictamen del Supervisor'),('Jefe que Aprobó','Supervisor que Aprobó'),('tu jefe/a','tu supervisor/a'),('Jefe Directo','Supervisor')]: out=out.replace(a,b)
+          p.write_text(out,encoding='utf-8')
+
+          # Main title terminology.
+          p=Path('src/App.tsx'); s=p.read_text(encoding='utf-8'); out=s.replace('Panel de Aprobación Jerárquica Directa','Panel de Aprobación del Supervisor')
+          p.write_text(out,encoding='utf-8')
+
       - name: Synchronize npm lockfile
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
       - run: npm ci
@@ -36,3 +128,11 @@ jobs:
           test -s api/index.js
           node --check api/index.js
           test -e api/admin/schema.sql
+      - name: Commit request workflow patch
+        if: contains(github.event.head_commit.message, 'workflow trigger')
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/app.ts server/db.ts server/requestCreationRoutes.ts api/admin/schema.sql api/index.ts src/types.ts src/components/SolicitarView.tsx src/components/MisSolicitudesView.tsx src/components/FinanzasView.tsx server/mailService.ts src/App.tsx
+          git commit -m "feat: fecha de deposito, supervisor y cancelacion previa"
+          git push

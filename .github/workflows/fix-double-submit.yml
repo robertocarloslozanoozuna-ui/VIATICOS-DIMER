@@ -1,0 +1,53 @@
+name: Fix duplicate request submissions
+on:
+  push:
+    branches: [main]
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add submit guard
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('src/components/SolicitarView.tsx')
+          s=p.read_text(encoding='utf-8')
+          changed=False
+
+          if "useRef" not in s.split('\n',1)[0]:
+              s=s.replace("import React, { useState, useEffect } from 'react';", "import React, { useState, useEffect, useRef } from 'react';", 1)
+              changed=True
+
+          marker="  const [successResult, setSuccessResult] = useState<{request: TravelRequest; approvalToken?: string; mailResult?: any; automationJson?: any;} | null>(null);"
+          refline="  const submitInFlightRef = useRef(false);"
+          if marker in s and refline not in s:
+              s=s.replace(marker, marker+"\n"+refline, 1)
+              changed=True
+
+          old="const handleSubmit=async(e:React.FormEvent)=>{e.preventDefault();setError(null);"
+          new="const handleSubmit=async(e:React.FormEvent)=>{e.preventDefault();if(submitInFlightRef.current)return;submitInFlightRef.current=true;setError(null);"
+          if old in s and new not in s:
+              s=s.replace(old,new,1)
+              changed=True
+
+          old_final="}finally{setLoading(false);}};"
+          new_final="}finally{setLoading(false);submitInFlightRef.current=false;}};"
+          if old_final in s and new_final not in s:
+              s=s.replace(old_final,new_final,1)
+              changed=True
+
+          if changed:
+              p.write_text(s,encoding='utf-8')
+      - name: Commit patch
+        shell: bash
+        run: |
+          if ! git diff --quiet -- src/components/SolicitarView.tsx; then
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add src/components/SolicitarView.tsx
+            git commit -m 'fix: bloquear doble envio de solicitud'
+            git push
+          fi

@@ -66,6 +66,10 @@ export interface User {
   department: string;
   role: Role;
   roleId?: string;
+  /** IDs de todos los roles asignados al usuario. roleId se conserva por compatibilidad. */
+  roleIds?: string[];
+  /** Definiciones de roles asignados, cuando están disponibles. */
+  roles?: RoleDefinition[];
   permissions?: Permission[];
   status: UserStatus;
   isVerified?: boolean;
@@ -176,4 +180,3 @@ export interface SystemStats {
   totalBosses?: number;
   totalRoles?: number;
 }
-

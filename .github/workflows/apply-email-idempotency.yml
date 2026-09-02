@@ -1,0 +1,59 @@
+name: Apply durable email idempotency
+
+on:
+  workflow_dispatch:
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch mail service
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p=Path('server/mailService.ts')
+          s=p.read_text()
+          old="import { recordAuditLog } from './db.js';"
+          new="import { recordAuditLog } from './db.js';\nimport { reserveEmailDelivery, markEmailDeliverySent, releaseEmailDelivery, buildEmailDeliveryKey } from './emailIdempotency.js';"
+          if old in s and "./emailIdempotency.js" not in s:
+              s=s.replace(old,new,1)
+          marker="  const emailKey="
+          start=s.find(marker)
+          if start < 0:
+              raise SystemExit('No se encontró el bloque de sendEmail esperado')
+          # Insert durable reservation immediately after the existing local key is computed.
+          line_end=s.find('\n', start)
+          insert="\n  const durableEmailKey=buildEmailDeliveryKey(p.requestId,p.to,p.subject);\n  const reserved=await reserveEmailDelivery({key:durableEmailKey,requestId:p.requestId,folio:p.folio,recipient:p.to,subject:p.subject});\n  if(!reserved){\n    console.warn(`[SMTP-IDEMPOTENCY] Envío duplicado omitido: ${p.to} | ${p.subject} | ${p.requestId||''}`);\n    return {status:'duplicate-skipped',logId:'duplicate-skipped'} as any;\n  }"
+          if 'const durableEmailKey=buildEmailDeliveryKey' not in s:
+              s=s[:line_end]+insert+s[line_end:]
+          # Mark successful send and release on failure. Insert success marker after transporter.sendMail call.
+          send_end=s.find('});', s.find('const sendResult=await transporter.sendMail'))
+          if send_end < 0:
+              raise SystemExit('No se encontró transporter.sendMail')
+          send_end += 3
+          if 'markEmailDeliverySent(durableEmailKey)' not in s:
+              s=s[:send_end]+"\n  await markEmailDeliverySent(durableEmailKey);"+s[send_end:]
+          # Release reservation in the main catch block that handles SMTP failures.
+          # Target the first catch following sendResult if it exists.
+          send_pos=s.find('const sendResult=await transporter.sendMail')
+          catch_pos=s.find('catch',send_pos)
+          if catch_pos < 0:
+              raise SystemExit('No se encontró catch de SMTP')
+          brace=s.find('{',catch_pos)
+          if 'releaseEmailDelivery(durableEmailKey)' not in s[brace:brace+500]:
+              s=s[:brace+1]+"\n    await releaseEmailDelivery(durableEmailKey);"+s[brace+1:]
+          p.write_text(s)
+          PY
+      - name: Validate TypeScript
+        run: npm ci && npx tsc --noEmit
+      - name: Commit patch
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add server/mailService.ts server/emailIdempotency.ts
+          git diff --cached --quiet || git commit -m 'Fix durable email idempotency for serverless delivery'
+          git push

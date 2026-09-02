@@ -63,7 +63,6 @@ export async function safeFetchJson<T = any>(
   try {
     parsedData = rawText ? JSON.parse(rawText) : {};
   } catch (jsonErr) {
-    // If response was not valid JSON (e.g. Vercel 404 HTML page or gateway timeout)
     if (!res.ok) {
       if (res.status === 404) {
         throw new Error(
@@ -90,6 +89,41 @@ export async function safeFetchJson<T = any>(
       parsedData?.message ||
       `Error en la solicitud (${res.status})`;
     throw new Error(errorMsg);
+  }
+
+  // El backend actual registra la solicitud primero y la notificación inicial
+  // se despacha en un segundo paso. Mantenerlo aquí evita tocar el flujo SMTP
+  // y el endpoint histórico de creación de solicitudes.
+  const method = String(options?.method || 'GET').toUpperCase();
+  const isRequestCreation = url === '/api/requests' && method === 'POST';
+  const createdRequestId = parsedData?.request?.id || parsedData?.id;
+  if (isRequestCreation && createdRequestId) {
+    try {
+      const notifyHeaders = new Headers();
+      if (token) notifyHeaders.set('Authorization', `Bearer ${token}`);
+      const notifyResponse = await fetch(
+        `/api/requests/${encodeURIComponent(String(createdRequestId))}/notify`,
+        {
+          method: 'POST',
+          credentials: 'include',
+          headers: notifyHeaders,
+        }
+      );
+      const notifyText = await notifyResponse.text();
+      let notifyData: any = {};
+      try {
+        notifyData = notifyText ? JSON.parse(notifyText) : {};
+      } catch {
+        notifyData = {};
+      }
+      if (!notifyResponse.ok || notifyData?.success === false) {
+        console.error('[REQUEST-NOTIFICATION] No se pudieron enviar todas las notificaciones:', notifyData?.error || notifyText);
+      } else {
+        console.log('[REQUEST-NOTIFICATION] Notificaciones iniciales enviadas:', notifyData?.notifications || {});
+      }
+    } catch (notifyError) {
+      console.error('[REQUEST-NOTIFICATION] Error al despachar notificaciones:', notifyError);
+    }
   }
 
   return parsedData as T;

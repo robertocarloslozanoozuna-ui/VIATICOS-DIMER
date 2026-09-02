@@ -41,11 +41,33 @@ export function registerApprovalRoutes(app: Express) {
       const approverName = String(result?.bossName || validation.tokenRecord?.bossEmail || request.bossName || request.bossEmail || 'Jefe Aprobador');
       const user = await resolveUser(request);
       if (decision === 'APROBADA') {
-        const html = buildSystemsApprovedEmailHtml({ request, user, approverName, approverEmail, approvedAt: request.approvedAt || new Date().toISOString() });
+        const baseHtml = buildSystemsApprovedEmailHtml({ request, user, approverName, approverEmail, approvedAt: request.approvedAt || new Date().toISOString() });
         const requesterEmail = user.email.trim().toLowerCase();
         const finanzasEmail = (process.env.FINANZAS_EMAIL || 'finanzas@dimer.com.mx').trim().toLowerCase();
-        const targets = [requesterEmail, finanzasEmail, 'sistemas@dimer.com.mx'].filter((v, i, a) => Boolean(v) && a.indexOf(v) === i);
-        for (const to of targets) { try { await sendEmail({ to, subject: `SOLICITUD DE VIÁTICOS APROBADA - Folio ${request.folio}`, html, requestId: request.id, folio: request.folio }); } catch {} }
+        const systemsEmail = 'sistemas@dimer.com.mx';
+
+        // En una misma bandeja pueden coincidir Solicitante y Finanzas. En ese caso
+        // se envían DOS correos separados, cada uno identificado con una leyenda
+        // pequeña para que quede claro el destinatario funcional.
+        const recipientCopies: Array<{ to: string; label: string; subjectSuffix: string }> = [];
+        if (requesterEmail) recipientCopies.push({ to: requesterEmail, label: 'SOLICITANTE', subjectSuffix: 'SOLICITANTE' });
+        if (finanzasEmail) recipientCopies.push({ to: finanzasEmail, label: 'FINANZAS', subjectSuffix: 'FINANZAS' });
+        if (systemsEmail && systemsEmail !== requesterEmail && systemsEmail !== finanzasEmail) {
+          recipientCopies.push({ to: systemsEmail, label: 'SISTEMAS', subjectSuffix: 'SISTEMAS' });
+        }
+
+        for (const recipient of recipientCopies) {
+          const html = `<div style="font-family:Arial,sans-serif;font-size:11px;color:#666;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:.4px;">Notificación para: <strong>${recipient.label}</strong></div>${baseHtml}`;
+          try {
+            await sendEmail({
+              to: recipient.to,
+              subject: `SOLICITUD DE VIÁTICOS APROBADA - Folio ${request.folio} - ${recipient.subjectSuffix}`,
+              html,
+              requestId: request.id,
+              folio: request.folio
+            });
+          } catch {}
+        }
       } else {
         const html = buildRejectionEmailHtml({ request, user, rejectorName: approverName, rejectorEmail: approverEmail, reason: request.comments || comments || 'Solicitud no autorizada' });
         const targets = [user.email.trim().toLowerCase(), 'sistemas@dimer.com.mx'].filter((v, i, a) => Boolean(v) && a.indexOf(v) === i);

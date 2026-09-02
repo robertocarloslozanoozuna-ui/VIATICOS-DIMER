@@ -73,6 +73,6 @@ export function registerApprovalRoutes(app: Express) {
     } catch (e) { return res.status(500).send(buildTokenApprovalResultPageHtml({ status: 'INVALIDA', errorMessage: e instanceof Error ? e.message : 'Error procesando autorización.' })); }
   };
 
-  app.get(['/api/approval/decision','/api/approval/token-action','/approval-response/:token/:decision'], getDecision);
+  app.get(['/api/approval/decision','/api/approval/token-action','/approval-response/:token/:decision','/api/approval-response/:token/:decision'], getDecision);
   app.post(['/api/approval/submit-decision','/api/approval/token-action','/api/approval/decision'], submitDecision);
 }

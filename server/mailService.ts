@@ -410,14 +410,13 @@ export function buildTokenApprovalResultPageHtml(p:{status:string;request?:Trave
 </html>`;
 }
 
-export async function sendEmail(p:{to:string;subject:string;html:string;from?:string;replyTo?:string;requestId?:string;folio?:string}):Promise<{success:boolean;logId:string;status:'ENVIADO'|'SIMULADO'|'FALLIDO';error?:string}>
+export async function sendEmail(p:{to:string;subject:string;html:string;from?:string;replyTo?:string;requestId?:string;folio?:string}):Promise<{success:boolean;logId:string;status:'ENVIADO'|'SIMULADO'|'FALLIDO';error?:string}> {
   const emailKey=`${String(p.requestId||p.folio||'')}|${String(p.to||'').trim().toLowerCase()}|${String(p.subject||'')}`;
   const now=Date.now();
   const previous=recentEmailKeys.get(emailKey);
   if(previous && now-previous<120000){const logId=`MAIL-DEDUPE-${now}-${Math.floor(Math.random()*100000)}`;console.warn(`[SMTP-DEDUPE] Correo duplicado suprimido: ${p.to} | ${p.subject}`);return {success:true,logId,status:'ENVIADO'};}
   recentEmailKeys.set(emailKey,now);
   for(const [key,ts] of recentEmailKeys){if(now-ts>300000)recentEmailKeys.delete(key);}
-{
   const logId=`MAIL-${Date.now()}-${Math.floor(Math.random()*100000)}`;
   const timestamp=new Date().toISOString();
   const transporter=getMailTransporter();

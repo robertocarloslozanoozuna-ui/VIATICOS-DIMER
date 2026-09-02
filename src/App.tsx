@@ -112,7 +112,7 @@ export default function App() {
     switch (activeTab) {
       case 'solicitar': return 'Registro Oficial de Nueva Solicitud de Viáticos';
       case 'mis-solicitudes': return isSoloLectura && !userHasAnyRole(currentUser, ['SOLICITANTE', 'EMPLEADO', 'JEFE', 'FINANZAS', 'ADMIN']) ? 'Consulta Exclusiva de Solicitudes Aprobadas' : userHasAnyRole(currentUser, ['SOLICITANTE', 'EMPLEADO']) ? 'Mis Solicitudes de Viáticos' : 'Monitor y Control General de Viáticos';
-      case 'aprobar': return 'Panel de Aprobación Jerárquica Directa';
+      case 'aprobar': return 'Panel de Aprobación del Supervisor';
       case 'finanzas': return 'Módulo de Finanzas, Dispersión y Pólizas';
       case 'administracion-solicitudes': return 'Control Administrativo de Solicitudes';
       case 'administracion-rbac': return 'Gestión de Usuarios, Roles, Departamentos y Jefes';

@@ -85,6 +85,7 @@ export function registerRequestCreationRoutes(app: Express) {
         requestType: String(b.requestType || '').trim(),
         detail: String(b.detail || '').trim(),
         requestDate: String(b.requestDate || now.slice(0, 10)).slice(0, 10),
+        depositDate: String(b.depositDate || '').slice(0, 10) || undefined,
         urgency: String(b.urgency || 'media').trim().toLowerCase() as any,
         bossId: boss.id,
         bossEmail: boss.email,

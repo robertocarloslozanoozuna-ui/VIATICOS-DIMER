@@ -194,7 +194,7 @@ export function registerAdminRequestRoutes(app: Express) {
       const bossHtml = buildBossApprovalEmailHtml({
         request: current,
         user: requesterUser,
-        approveUrl,
+        approveUrl: approvalUrl,
         rejectUrl,
         token
       });

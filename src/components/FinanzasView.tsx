@@ -113,7 +113,7 @@ export default function FinanzasView({
             </span>
             <h1 className="text-base font-bold text-white mt-1">Dispersión y Liquidación de Viáticos</h1>
             <p className="text-xs text-slate-400">
-              Bandeja receptora de órdenes de pago tras el dictamen favorable del jefe inmediato.
+              Bandeja receptora de órdenes de pago tras el dictamen favorable del supervisor.
             </p>
           </div>
           <div className="bg-slate-900/80 px-3 py-1.5 rounded-lg border border-slate-800 text-[11px]">
@@ -163,7 +163,7 @@ export default function FinanzasView({
           <div>
             <h3 className="font-bold text-slate-900 text-xs flex items-center gap-1.5">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-              Solicitudes Autorizadas por Jefatura (Listas para Pago)
+              Solicitudes Autorizadas por Supervisor (Listas para Pago)
             </h3>
             <p className="text-[11px] text-slate-500">
               Requieren registro de transferencia bancaria SPEI para dispersión.
@@ -195,6 +195,10 @@ export default function FinanzasView({
                   <p className="text-[11px] text-slate-600">
                     <strong>Destino:</strong> {req.destination} &bull; <strong>Fechas:</strong>{' '}
                     {new Date(req.startDate).toLocaleDateString('es-MX')} al {new Date(req.endDate).toLocaleDateString('es-MX')}
+                  </p>
+                  <p className="text-[11px] text-indigo-700 font-semibold">
+                    <strong>Fecha requerida de depósito:</strong>{' '}
+                    {req.depositDate ? new Date(`${req.depositDate}T00:00:00`).toLocaleDateString('es-MX') : 'No especificada'}
                   </p>
 
                   <p className="text-[11px] text-slate-500">

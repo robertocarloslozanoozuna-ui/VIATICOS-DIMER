@@ -105,7 +105,7 @@ app.post('/api/requests/:id/cancel', async (req: Request, res: Response) => {
     const isOwner = request.userId === user.id;
     const isAdmin = String(user.role || '').toUpperCase() === 'ADMIN' || Boolean(user.roles?.some(r => String(r.name || '').toUpperCase() === 'ADMIN'));
     if (!isOwner && !isAdmin) return res.status(403).json({ success: false, error: 'Solo el solicitante puede cancelar esta solicitud.' });
-    if (request.status !== 'PENDIENTE_APROBACION' && request.status !== 'PENDIENTE') {
+    if (request.status !== 'PENDIENTE_APROBACION') {
       return res.status(400).json({ success: false, error: `Solo se puede cancelar antes de la aprobación. Estado actual: ${request.status}.` });
     }
     const reason = String(req.body?.reason || 'Cancelada por el solicitante').trim() || 'Cancelada por el solicitante';

@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { getUserById, getRequest, deleteRequest, updateRequest, recordAuditLog, listRoles, sanitizeUser, createApprovalToken } from './db.js';
 import { buildBossApprovalEmailHtml, buildRequesterConfirmationEmailHtml, sendEmail } from './mailService.js';
 import type { User } from '../src/types.js';
+import { userHasRole } from '../src/types.js';
 
 function parseCookies(req: Request) {
   const raw = String(req.headers.cookie || '');
@@ -45,7 +46,7 @@ async function getAuthenticatedUser(req: Request): Promise<User | null> {
 function requireAdmin(req: Request, res: Response, next: NextFunction) {
   void getAuthenticatedUser(req).then(user => {
     if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
-    if (user.role !== 'ADMIN') return res.status(403).json({ success: false, error: 'Solo el administrador puede realizar esta operación.' });
+    if (!userHasRole(user, 'ADMIN')) return res.status(403).json({ success: false, error: 'Solo el administrador puede realizar esta operación.' });
     (req as any).dimerUser = user;
     next();
   }).catch(() => res.status(503).json({ success: false, error: 'Base de datos no disponible' }));
@@ -155,7 +156,7 @@ export function registerAdminRequestRoutes(app: Express) {
       const requestId = String(req.params.id || '').trim();
       const request = await getRequest(requestId);
       if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
-      if (user.role !== 'ADMIN' && request.userId !== user.id) {
+      if (!userHasRole(user, 'ADMIN') && request.userId !== user.id) {
         return res.status(403).json({ success: false, error: 'No autorizado para notificar esta solicitud' });
       }
       if (request.status !== 'PENDIENTE_APROBACION') {

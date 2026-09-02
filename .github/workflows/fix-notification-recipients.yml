@@ -12,44 +12,44 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - name: Patch recipients
+      - name: Patch notification recipients
         shell: bash
         run: |
           python3 - <<'PY'
           from pathlib import Path
-          p = Path('server/app.ts')
-          s = p.read_text()
-          old = "  const sistemasEmail = 'sistemas@dimer.com.mx';\n  const html = buildSystemsApprovedEmailHtml({ request: r, user, approverName, approverEmail, approvedAt });"
-          new = "  const html = buildSystemsApprovedEmailHtml({ request: r, user, approverName, approverEmail, approvedAt });"
-          if old not in s: raise SystemExit('approval systems declaration not found')
-          s = s.replace(old, new, 1)
-          old = "  if (sistemasEmail !== requesterEmail && sistemasEmail !== finanzasEmail) targets.push({ to: sistemasEmail, subject: `SOLICITUD DE VIÁTICOS APROBADA - Folio ${r.folio} [SISTEMAS]`, role: 'Sistemas' });\n"
-          if old not in s: raise SystemExit('approval systems recipient not found')
-          s = s.replace(old, '', 1)
-          p.write_text(s)
+
           p = Path('src/components/SolicitarView.tsx')
           s = p.read_text()
-          reps = [
-            ("const [selectedBossId, setSelectedBossId] = useState<string>('boss_003');", "const [selectedBossId, setSelectedBossId] = useState<string>('');"),
-            ("const [bossEmail, setBossEmail] = useState('sistemas@dimer.com.mx');", "const [bossEmail, setBossEmail] = useState('');"),
-            ("const [bossName, setBossName] = useState('Ing. Roberto Flores / Autorizaciones TI');", "const [bossName, setBossName] = useState('');"),
-            ("correo_autorizacion:'sistemas@dimer.com.mx'", "correo_autorizacion:bossEmail.trim()"),
-            ("Se envió la solicitud a <strong>{successResult.request.bossEmail}</strong> y se notificó a <strong>sistemas@dimer.com.mx</strong>.", "Se envió la solicitud a <strong>{successResult.request.bossEmail}</strong> para autorización. El resultado de la autorización se notificará únicamente al solicitante y a Finanzas.")
-          ]
-          for old, new in reps:
-            if old not in s: raise SystemExit('frontend text not found: '+old[:60])
-            s = s.replace(old, new, 1)
+          old = "const active=data.filter(b=>b.active);setBosses(active);if(active.length){"
+          new = "const active=data.filter(b=>b.active&&String(b.email||'').trim().toLowerCase()!=='sistemas@dimer.com.mx');setBosses(active);if(active.length){"
+          if old not in s:
+              raise SystemExit('SolicitarView: boss list initialization not found')
+          s = s.replace(old, new, 1)
+          p.write_text(s)
+
+          p = Path('server/app.ts')
+          s = p.read_text()
+          old = "const notifications:{approval:any;requester:any}={approval:null,requester:null};const notificationErrors:string[]=[];if(!created.approvalToken){"
+          new = "const notifications:{approval:any;requester:any}={approval:null,requester:null};const notificationErrors:string[]=[];const approverEmail=String(created.bossEmail||'').trim().toLowerCase();if(approverEmail==='sistemas@dimer.com.mx'){notificationErrors.push('Sistemas no es un aprobador válido para solicitudes de viáticos. Seleccione al jefe o líder correspondiente.');}else if(!created.approvalToken){"
+          if old not in s:
+              raise SystemExit('server/app: request notification guard not found')
+          s = s.replace(old, new, 1)
           p.write_text(s)
           PY
+      - name: Verify notification rules
+        run: |
+          grep -n "finanzasEmail" server/app.ts | head -5
+          grep -n "sistemas@dimer.com.mx" src/components/SolicitarView.tsx | head -5
       - name: Commit changes
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add server/app.ts src/components/SolicitarView.tsx
-          git commit -m 'fix: correct viatics email recipients' || exit 0
+          git commit -m 'fix: prevent systems from request notification recipients' || exit 0
           git push
-      - name: Remove workflow
+      - name: Remove temporary workflow
         if: always()
+        shell: bash
         run: |
           git rm -f .github/workflows/fix-notification-recipients.yml || true
           git commit -m 'chore: remove temporary notification repair workflow' || true

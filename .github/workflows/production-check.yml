@@ -27,6 +27,37 @@ jobs:
           old="&&String(u.email||'').trim().toLowerCase()!=='sistemas@dimer.com.mx'"
           if old in s:
               p.write_text(s.replace(old,'',1),encoding='utf-8')
+      - name: Repair deposit date in emails and detail placeholder
+        shell: python
+        run: |
+          from pathlib import Path
+          import re
+          # Frontend: make the description placeholder explicit and useful.
+          p=Path('src/components/SolicitarView.tsx')
+          s=p.read_text(encoding='utf-8')
+          s=re.sub(r'placeholder="[^"]*"', lambda m: 'placeholder="Describe el motivo del viaje"' if 'describ' in m.group(0).lower() else m.group(0), s, count=1)
+          p.write_text(s,encoding='utf-8')
+
+          # Email templates: expose the required deposit date to the approver,
+          # requester, and the post-approval notification sent to Finance.
+          p=Path('server/mailService.ts')
+          s=p.read_text(encoding='utf-8')
+          date_decl="  const depositDate=request.depositDate?new Date(request.depositDate+'T00:00:00').toLocaleDateString('es-MX'):'';"
+          s=s.replace("  const requestDate=request.requestDate||(request.createdAt?new Date(request.createdAt).toLocaleDateString('es-MX'):new Date().toLocaleDateString('es-MX'));\n", "  const requestDate=request.requestDate||(request.createdAt?new Date(request.createdAt).toLocaleDateString('es-MX'):new Date().toLocaleDateString('es-MX'));\n"+date_decl+"\n")
+          marker='<tr><td class="label">Fecha</td><td class="value">${esc(requestDate)}</td></tr>'
+          replacement=marker+'${depositDate?`<tr><td class="label">Fecha requerida de depósito</td><td class="value"><strong>${esc(depositDate)}</strong></td></tr>`:``}'
+          s=s.replace(marker,replacement)
+          p.write_text(s,encoding='utf-8')
+      - name: Commit UI and email improvements
+        shell: bash
+        run: |
+          if ! git diff --quiet -- src/components/SolicitarView.tsx server/mailService.ts; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add src/components/SolicitarView.tsx server/mailService.ts
+            git commit -m "fix: mostrar fecha de deposito en correos y mejorar detalle"
+            git push
+          fi
       - name: Commit admin approver selector fix
         shell: bash
         run: |

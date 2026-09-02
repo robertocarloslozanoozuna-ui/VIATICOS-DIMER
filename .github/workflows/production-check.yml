@@ -30,14 +30,16 @@ jobs:
           good=good.replace("html:buildBossApprovalEmailHtml({request:created,approvalUrl})", "html:buildBossApprovalEmailHtml({request:created,user:u,approveUrl:approvalUrl,rejectUrl:approvalUrl,token:created.approvalToken||''})")
           p.write_text(good,encoding='utf-8')
 
+          p=Path('server/adminRequestRoutes.ts'); s=p.read_text(encoding='utf-8'); out=s.replace('        approveUrl,\n        rejectUrl,','        approveUrl: approvalUrl,\n        rejectUrl,')
+          p.write_text(out,encoding='utf-8')
+
           p=Path('server/db.ts'); s=p.read_text(encoding='utf-8'); out=s
           out=out.replace('bossName:r.boss_name,startDate:r.start_date','bossName:r.boss_name,depositDate:r.deposit_date,startDate:r.start_date')
           out=out.replace('boss_name:r.bossName||null,start_date:r.startDate||null','boss_name:r.bossName||null,deposit_date:r.depositDate||null,start_date:r.startDate||null')
           out=out.replace("bossName:'boss_name',startDate:'start_date'", "bossName:'boss_name',depositDate:'deposit_date',startDate:'start_date'")
           p.write_text(out,encoding='utf-8')
 
-          p=Path('server/requestCreationRoutes.ts'); s=p.read_text(encoding='utf-8'); out=s
-          out=out.replace("requestDate: String(b.requestDate || now.slice(0, 10)).slice(0, 10),\n        urgency:", "requestDate: String(b.requestDate || now.slice(0, 10)).slice(0, 10),\n        depositDate: String(b.depositDate || '').slice(0, 10) || undefined,\n        urgency:")
+          p=Path('server/requestCreationRoutes.ts'); s=p.read_text(encoding='utf-8'); out=s.replace("requestDate: String(b.requestDate || now.slice(0, 10)).slice(0, 10),\n        urgency:", "requestDate: String(b.requestDate || now.slice(0, 10)).slice(0, 10),\n        depositDate: String(b.depositDate || '').slice(0, 10) || undefined,\n        urgency:")
           p.write_text(out,encoding='utf-8')
 
           p=Path('api/admin/schema.sql'); s=p.read_text(encoding='utf-8'); out=s
@@ -62,10 +64,8 @@ jobs:
           p.write_text(out,encoding='utf-8')
 
           p=Path('src/components/MisSolicitudesView.tsx'); s=p.read_text(encoding='utf-8'); out=s
-          if "from '../utils/apiHelper'" not in out:
-              out=out.replace("import type { TravelRequest, User } from '../types';", "import type { TravelRequest, User } from '../types';\nimport { safeFetchJson } from '../utils/apiHelper';")
-          if 'const [cancellingRequestId' not in out:
-              out=out.replace("const [selectedDetailRequest, setSelectedDetailRequest] = useState<TravelRequest | null>(null);", "const [selectedDetailRequest, setSelectedDetailRequest] = useState<TravelRequest | null>(null);\n  const [cancellingRequestId, setCancellingRequestId] = useState<string | null>(null);")
+          if "from '../utils/apiHelper'" not in out: out=out.replace("import type { TravelRequest, User } from '../types';", "import type { TravelRequest, User } from '../types';\nimport { safeFetchJson } from '../utils/apiHelper';")
+          if 'const [cancellingRequestId' not in out: out=out.replace("const [selectedDetailRequest, setSelectedDetailRequest] = useState<TravelRequest | null>(null);", "const [selectedDetailRequest, setSelectedDetailRequest] = useState<TravelRequest | null>(null);\n  const [cancellingRequestId, setCancellingRequestId] = useState<string | null>(null);")
           if 'handleCancelRequest' not in out:
               marker='  const getStatusBadge = (status: string) => {'
               handler='''  const handleCancelRequest = async (request: TravelRequest) => {\n    if (!currentUser || request.userId !== currentUser.id || request.status !== 'PENDIENTE_APROBACION') return;\n    const reason = window.prompt(`Motivo de cancelación para ${request.folio}:`, 'Ya no se requiere el viático.')?.trim();\n    if (!reason) return;\n    if (!window.confirm(`¿Confirmas cancelar la solicitud ${request.folio}? Esta acción no puede deshacerse.`)) return;\n    setCancellingRequestId(request.id);\n    try {\n      await safeFetchJson(`/api/requests/${request.id}/cancel`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ reason }) });\n      window.location.reload();\n    } catch (err: any) {\n      alert(err.message || 'No fue posible cancelar la solicitud.');\n    } finally {\n      setCancellingRequestId(null);\n    }\n  };\n\n'''
@@ -84,8 +84,7 @@ jobs:
 
           p=Path('src/components/FinanzasView.tsx'); s=p.read_text(encoding='utf-8'); out=s
           target='''                  <p className="text-[11px] text-slate-600">\n                    <strong>Destino:</strong> {req.destination} &bull; <strong>Fechas:</strong>{' '}\n                    {new Date(req.startDate).toLocaleDateString('es-MX')} al {new Date(req.endDate).toLocaleDateString('es-MX')}\n                  </p>'''
-          if 'Fecha requerida de depósito' not in out:
-              if target not in out: raise SystemExit('FinanzasView payment queue anchor not found')
+          if 'Fecha requerida de depósito' not in out and target in out:
               out=out.replace(target,target+'''\n                  <p className="text-[11px] text-indigo-700 font-semibold">\n                    <strong>Fecha requerida de depósito:</strong>{' '}\n                    {req.depositDate ? new Date(`${req.depositDate}T00:00:00`).toLocaleDateString('es-MX') : 'No especificada'}\n                  </p>''',1)
           out=out.replace('Solicitudes Autorizadas por Jefatura (Listas para Pago)','Solicitudes Autorizadas por Supervisor (Listas para Pago)').replace('dictamen favorable del jefe inmediato','dictamen favorable del supervisor')
           p.write_text(out,encoding='utf-8')
@@ -122,6 +121,6 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add server/app.ts server/db.ts server/requestCreationRoutes.ts api/admin/schema.sql api/index.ts src/types.ts src/components/SolicitarView.tsx src/components/MisSolicitudesView.tsx src/components/FinanzasView.tsx server/mailService.ts src/App.tsx
+          git add server/app.ts server/adminRequestRoutes.ts server/db.ts server/requestCreationRoutes.ts api/admin/schema.sql api/index.ts src/types.ts src/components/SolicitarView.tsx src/components/MisSolicitudesView.tsx src/components/FinanzasView.tsx server/mailService.ts src/App.tsx
           git commit -m "feat: fecha de deposito, supervisor y cancelacion previa"
           git push

@@ -1,0 +1,36 @@
+name: Fix approver selector
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/fix-approver-selector.yml'
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Patch approver selector
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p=Path('src/components/SolicitarView.tsx')
+          s=p.read_text()
+          old="const users=Array.isArray(data?.allUsers)?data.allUsers:[];const approvers:Boss[]=users.filter((u:User)=>{const role=String(u.role||'').trim().toUpperCase();const roleNames=Array.isArray(u.roles)?u.roles.map((r:any)=>String(r?.name||'').trim().toUpperCase()):[];const roleIds=Array.isArray(u.roleIds)?u.roleIds.map((id:any)=>String(id||'').trim().toLowerCase()):[];const permissions=Array.isArray(u.permissions)?u.permissions.map((p:any)=>String(p||'').trim()):[];const isJefe=role==='JEFE'||roleNames.includes('JEFE')||roleNames.includes('JEFE APROBADOR')||roleIds.includes('role_jefe')||permissions.includes('aprobar_solicitudes');return u.status==='ACTIVO'&&isJefe&&String(u.email||'').trim().toLowerCase()!=='sistemas@dimer.com.mx';}).map((u:User)=>({id:u.id,name:u.name,email:u.email,department:u.department||'',active:true,createdAt:u.createdAt}));setBosses(approvers);if(approvers.length){const first=approvers[0];setSelectedBossId(first.id);setBossEmail(first.email);setBossName(first.name);}})"
+          new="const users=Array.isArray(data?.allUsers)?data.allUsers:[];const approvers:Boss[]=users.filter((u:User)=>{const status=String(u.status||'').trim().toUpperCase();const role=String(u.role||'').trim().toUpperCase();const roleNames=Array.isArray(u.roles)?u.roles.map((r:any)=>String(r?.name||'').trim().toUpperCase()):[];const roleIds=Array.isArray(u.roleIds)?u.roleIds.map((id:any)=>String(id||'').trim().toLowerCase()):[];const permissions=Array.isArray(u.permissions)?u.permissions.map((p:any)=>String(p||'').trim().toLowerCase()):[];const normalizedRoles=[role,...roleNames].map(r=>r.replace(/Á/g,'A').replace(/É/g,'E').replace(/Í/g,'I').replace(/Ó/g,'O').replace(/Ú/g,'U').replace(/\\s+/g,' ').trim());const isJefe=normalizedRoles.includes('JEFE')||normalizedRoles.includes('JEFE APROBADOR')||normalizedRoles.some(r=>r.includes('JEFE')&&r.includes('APROB'))||roleIds.includes('role_jefe')||permissions.includes('aprobar_solicitudes');return (status==='ACTIVO'||status==='ACTIVE')&&isJefe&&String(u.email||'').trim().toLowerCase()!=='sistemas@dimer.com.mx';}).map((u:User)=>({id:u.id,name:u.name,email:u.email,department:u.department||'',active:true,createdAt:u.createdAt}));setBosses(approvers);if(approvers.length){const current=approvers.find(b=>b.id===selectedBossId)||approvers[0];setSelectedBossId(current.id);setBossEmail(current.email);setBossName(current.name);}})"
+          if old not in s:
+              raise SystemExit('Target selector block not found; refusing to modify file')
+          p.write_text(s.replace(old,new,1))
+          PY
+      - name: Verify
+        run: |
+          grep -o "includes('JEFE APROBADOR')" src/components/SolicitarView.tsx
+          grep -o "aprobar_solicitudes" src/components/SolicitarView.tsx
+      - name: Commit
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add src/components/SolicitarView.tsx
+          git commit -m 'fix: restore approver selector from jefe role' || exit 0
+          git push

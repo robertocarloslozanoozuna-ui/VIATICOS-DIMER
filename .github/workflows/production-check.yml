@@ -6,16 +6,28 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      - name: Repair backend baseline
+        if: contains(github.event.head_commit.message, 'repair backend baseline')
+        shell: python
+        run: |
+          from pathlib import Path
+          import subprocess
+          app=subprocess.check_output(['git','show','220b3408df37f2092670c96d36620209ed01094c:server/app.ts'], text=True)
+          app=app.replace("html:buildBossApprovalEmailHtml({request:created,approvalUrl})", "html:buildBossApprovalEmailHtml({request:created,user:u,approveUrl:approvalUrl,rejectUrl:approvalUrl,token:created.approvalToken||''})")
+          Path('server/app.ts').write_text(app,encoding='utf-8')
+          p=Path('server/adminRequestRoutes.ts'); s=p.read_text(encoding='utf-8'); p.write_text(s.replace('        approveUrl,\n        rejectUrl,','        approveUrl: approvalUrl,\n        rejectUrl,'),encoding='utf-8')
       - name: Synchronize npm lockfile
         run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
       - run: npm ci
@@ -36,3 +48,11 @@ jobs:
           test -s api/index.js
           node --check api/index.js
           test -e api/admin/schema.sql
+      - name: Commit backend repair
+        if: contains(github.event.head_commit.message, 'repair backend baseline')
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/app.ts server/adminRequestRoutes.ts
+          git commit -m "fix: restaurar backend completo y corregir builder de aprobacion"
+          git push

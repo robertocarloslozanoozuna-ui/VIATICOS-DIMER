@@ -47,7 +47,7 @@ export interface Department {
   name: string;
   description?: string;
   active: boolean;
-  createdAt: string;
+  createdAt?: string;
 }
 
 export interface Boss {
@@ -56,7 +56,7 @@ export interface Boss {
   email: string;
   department: string;
   active: boolean;
-  createdAt: string;
+  createdAt?: string;
 }
 
 export interface User {

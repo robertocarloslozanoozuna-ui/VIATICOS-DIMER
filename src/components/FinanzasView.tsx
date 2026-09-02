@@ -13,6 +13,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import type { TravelRequest, User } from '../types';
+import { safeFetchJson } from '../utils/apiHelper';
 
 interface FinanzasViewProps {
   currentUser: User | null;
@@ -59,7 +60,7 @@ export default function FinanzasView({
     setStatusMessage(null);
 
     try {
-      const res = await fetch(`/api/requests/${selectedRequestForPayment.id}/pay`, {
+      await safeFetchJson(`/api/requests/${selectedRequestForPayment.id}/pay`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -67,9 +68,6 @@ export default function FinanzasView({
           notes: paymentNotes.trim() || 'Dispersión bancaria autorizada por Finanzas',
         }),
       });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Error al procesar el pago.');
 
       setStatusMessage(`¡Dispersión registrada con éxito para el folio ${selectedRequestForPayment.folio}!`);
       setSelectedRequestForPayment(null);
@@ -89,7 +87,7 @@ export default function FinanzasView({
     }
 
     try {
-      const res = await fetch(`/api/requests/${requestId}/finalize`, {
+      await safeFetchJson(`/api/requests/${requestId}/finalize`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -97,7 +95,6 @@ export default function FinanzasView({
         }),
       });
 
-      if (!res.ok) throw new Error('Error al finalizar.');
       setStatusMessage(`Solicitud ${folio} FINALIZADA con comprobación completa.`);
       onRefreshData();
     } catch (e: any) {

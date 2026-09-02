@@ -77,6 +77,42 @@ export interface User {
   createdAt?: string;
 }
 
+const LEGACY_ROLE_IDS: Record<string, string> = {
+  ADMIN: 'role_admin',
+  JEFE: 'role_jefe',
+  FINANZAS: 'role_finanzas',
+  SOLO_LECTURA_APROBADAS: 'role_solo_lectura',
+  SOLICITANTE: 'role_solicitante',
+  EMPLEADO: 'role_empleado',
+};
+
+/** Devuelve todos los identificadores de rol conocidos del usuario, con compatibilidad legacy. */
+export function getUserRoleIds(user?: User | null): string[] {
+  if (!user) return [];
+  const ids = [
+    ...(Array.isArray(user.roleIds) ? user.roleIds : []),
+    ...(Array.isArray(user.roles) ? user.roles.map(role => role.id) : []),
+    user.roleId,
+    LEGACY_ROLE_IDS[String(user.role || '').toUpperCase()],
+  ];
+  return Array.from(new Set(ids.map(id => String(id || '').trim()).filter(Boolean)));
+}
+
+/** Comprueba un rol por nombre o por su ID, sin depender del role primario legacy. */
+export function userHasRole(user: User | null | undefined, role: Role): boolean {
+  if (!user) return false;
+  const wantedName = String(role || '').trim().toUpperCase();
+  const wantedId = LEGACY_ROLE_IDS[wantedName] || String(role || '').trim();
+  if (String(user.role || '').toUpperCase() === wantedName) return true;
+  if (getUserRoleIds(user).includes(wantedId)) return true;
+  return Boolean(user.roles?.some(r => String(r.name || '').trim().toUpperCase() === wantedName));
+}
+
+/** Comprueba si el usuario tiene al menos uno de los roles indicados. */
+export function userHasAnyRole(user: User | null | undefined, roles: Role[]): boolean {
+  return roles.some(role => userHasRole(user, role));
+}
+
 export interface StoredUserRecord extends User {
   passwordHash?: string;
   salt?: string;

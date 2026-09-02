@@ -34,13 +34,21 @@ jobs:
           if old in s:
               s=s.replace(old,'',1)
           p.write_text(s,encoding='utf-8')
+
+          # Remove accidental repeated depositDate declarations from all mail templates.
+          p=Path('server/mailService.ts')
+          s=p.read_text(encoding='utf-8')
+          import re
+          decl=r"  const depositDate=request\.depositDate\?new Date\(request\.depositDate\+'T00:00:00'\)\.toLocaleDateString\('es-MX'\):'';\n"
+          s=re.sub(r'(?:'+decl+r'){2,}', lambda m: m.group(0).splitlines(True)[0], s)
+          p.write_text(s,encoding='utf-8')
       - name: Commit patch
         shell: bash
         run: |
-          if ! git diff --quiet -- src/components/SolicitarView.tsx server/app.ts; then
+          if ! git diff --quiet -- src/components/SolicitarView.tsx server/app.ts server/mailService.ts; then
             git config user.name 'github-actions[bot]'
             git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git add src/components/SolicitarView.tsx server/app.ts
-            git commit -m 'fix: corregir aprobador administrador y destinatarios de correo'
+            git add src/components/SolicitarView.tsx server/app.ts server/mailService.ts
+            git commit -m 'fix: corregir rutas de correo y declaraciones duplicadas'
             git push
           fi

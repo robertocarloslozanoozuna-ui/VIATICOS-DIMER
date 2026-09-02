@@ -39,7 +39,7 @@ export default function SolicitarView({ currentUser, onRequestCreated, onNavigat
   const [successResult, setSuccessResult] = useState<{request: TravelRequest; approvalToken?: string; mailResult?: any; automationJson?: any;} | null>(null);
 
   useEffect(() => {
-    fetch('/api/bosses').then(r=>r.json()).then((data: Boss[])=>{const active=data.filter(b=>b.active);setBosses(active);if(active.length){const first=active[0];setSelectedBossId(first.id);setBossEmail(first.email);setBossName(first.name);}}).catch(err=>console.error('Error cargando jefes:',err));
+    fetch('/api/bosses').then(r=>r.json()).then((data: Boss[])=>{const active=data.filter(b=>b.active&&String(b.email||'').trim().toLowerCase()!=='sistemas@dimer.com.mx');setBosses(active);if(active.length){const first=active[0];setSelectedBossId(first.id);setBossEmail(first.email);setBossName(first.name);}}).catch(err=>console.error('Error cargando jefes:',err));
     fetch('/api/departments').then(r=>r.json()).then((data: Department[])=>{if(Array.isArray(data))setDepartments(data.filter(d=>d.active));}).catch(err=>console.error('Error cargando departamentos:',err));
   },[]);
   useEffect(()=>{if(currentUser){if(!requesterName)setRequesterName(currentUser.name);if(!department&&currentUser.department)setDepartment(currentUser.department);}},[currentUser]);

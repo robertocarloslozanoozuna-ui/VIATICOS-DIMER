@@ -50,15 +50,12 @@ textarea {
   min-width: 0;
 }
 
-/* Long emails, folios and other identifiers must not force horizontal scroll. */
 .breakable-content,
 .breakable-content * {
   overflow-wrap: anywhere;
   word-break: break-word;
 }
 
-/* Tables remain readable on narrow screens while allowing horizontal scrolling
-   when their data genuinely requires more width. */
 .table-responsive {
   width: 100%;
   max-width: 100%;
@@ -71,13 +68,11 @@ textarea {
   min-width: 100%;
 }
 
-/* Prevent flex/grid children from expanding their parent beyond the viewport. */
 .min-w-0-safe {
   min-width: 0;
 }
 
 @media (max-width: 1023px) {
-  /* Give touch controls a comfortable hit area without changing desktop sizing. */
   button,
   [role="button"] {
     touch-action: manipulation;
@@ -85,7 +80,6 @@ textarea {
 }
 
 @media (max-width: 640px) {
-  /* Avoid accidental viewport overflow from long form content. */
   main,
   section,
   article,
@@ -94,10 +88,153 @@ textarea {
     max-width: 100%;
   }
 
-  /* Native controls are easier to use on phones. */
   input,
   select,
   textarea {
     max-width: 100%;
+  }
+}
+
+/* ================================================================
+   DIMER VIÁTICOS — REDISEÑO VISUAL DE SOLICITUD
+   Scoped to the SolicitarView form through its existing directory-search id.
+   No business logic, API, state or event behavior is changed here.
+   ================================================================ */
+
+form:has(#requester-directory-search) {
+  position: relative;
+  padding: 1.25rem !important;
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 34%, #f8fafc 100%);
+}
+
+form:has(#requester-directory-search) > div {
+  border-radius: 1rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+form:has(#requester-directory-search) label > span {
+  letter-spacing: 0.01em;
+}
+
+form:has(#requester-directory-search) input:not([type="checkbox"]),
+form:has(#requester-directory-search) select,
+form:has(#requester-directory-search) textarea {
+  min-height: 44px;
+  border-color: #cbd5e1;
+  border-radius: 0.75rem;
+  color: #0f172a;
+  background-color: #ffffff;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease, background-color 160ms ease;
+}
+
+form:has(#requester-directory-search) textarea {
+  min-height: 88px;
+  resize: vertical;
+}
+
+form:has(#requester-directory-search) input:not([type="checkbox"]):hover,
+form:has(#requester-directory-search) select:hover,
+form:has(#requester-directory-search) textarea:hover {
+  border-color: #94a3b8;
+}
+
+form:has(#requester-directory-search) input:not([type="checkbox"]):focus,
+form:has(#requester-directory-search) select:focus,
+form:has(#requester-directory-search) textarea:focus {
+  outline: none;
+  border-color: #6366f1;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.13);
+  background-color: #ffffff;
+}
+
+/* First information card */
+form:has(#requester-directory-search) > div:first-child {
+  border-color: #dbeafe;
+  background: linear-gradient(135deg, #f8fafc 0%, #eef2ff 100%);
+}
+
+form:has(#requester-directory-search) > div:first-child > div:first-child {
+  padding-bottom: 0.85rem;
+}
+
+/* Employee directory search becomes a clear starting point. */
+form:has(#requester-directory-search) #requester-directory-search {
+  min-height: 46px;
+  border-color: #a5b4fc;
+  box-shadow: 0 4px 14px rgba(79, 70, 229, 0.08);
+}
+
+/* Urgency controls: unmistakable traffic-light states. */
+form:has(#requester-directory-search) button[type="button"]:has(+ *) {
+  transition: transform 150ms ease, box-shadow 150ms ease, border-color 150ms ease, background-color 150ms ease;
+}
+
+/* Keep calculator and ordinary action buttons crisp on hover. */
+form:has(#requester-directory-search) button[type="button"]:hover,
+form:has(#requester-directory-search) button[type="submit"]:hover {
+  transform: translateY(-1px);
+}
+
+form:has(#requester-directory-search) button[type="submit"] {
+  min-height: 46px;
+  padding-inline: 1.35rem;
+  border-radius: 0.8rem;
+  box-shadow: 0 8px 18px rgba(79, 70, 229, 0.22);
+  letter-spacing: 0.01em;
+}
+
+form:has(#requester-directory-search) button[type="submit"]:disabled {
+  transform: none;
+  box-shadow: none;
+}
+
+/* Visually separate the approval section. */
+form:has(#requester-directory-search) > div:nth-of-type(2) {
+  border-color: #c7d2fe;
+  background: linear-gradient(135deg, #ffffff 0%, #f5f7ff 100%);
+  box-shadow: 0 8px 24px rgba(30, 41, 59, 0.06);
+}
+
+/* Travel/budget block gets a stronger information-panel treatment. */
+form:has(#requester-directory-search) > div:nth-of-type(3) {
+  border-color: #bfdbfe;
+  background: linear-gradient(135deg, #eff6ff 0%, #eef2ff 100%);
+}
+
+/* Calculator panel */
+form:has(#requester-directory-search) > div:nth-of-type(4) {
+  border-radius: 1rem;
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.16);
+}
+
+form:has(#requester-directory-search) > div:nth-of-type(4) input {
+  min-height: 40px;
+  border-radius: 0.6rem;
+}
+
+/* Comments block */
+form:has(#requester-directory-search) > div:nth-of-type(5) {
+  background: #ffffff;
+  border-color: #e2e8f0;
+}
+
+/* Better visual separation for the bottom security note. */
+form:has(#requester-directory-search) > div:last-child {
+  margin-top: 0.25rem;
+  padding-top: 1rem;
+  border-top: 1px solid #e2e8f0;
+}
+
+@media (max-width: 640px) {
+  form:has(#requester-directory-search) {
+    padding: 0.9rem !important;
+  }
+
+  form:has(#requester-directory-search) > div {
+    padding: 0.95rem !important;
+  }
+
+  form:has(#requester-directory-search) button[type="submit"] {
+    width: 100%;
   }
 }

@@ -14,7 +14,7 @@ function parseSessionCookie(req: Request) {
   const raw = String(req.headers.cookie || '');
   const cookies = Object.fromEntries(raw.split(';').map(x => x.trim()).filter(Boolean).map(x => {
     const i = x.indexOf('=');
-    return i < 0 ? [x, ''] : [x.slice(0, i), decodeURIComponent(x.slice(i + 1)];
+    return i < 0 ? [x, ''] : [x.slice(0, i), decodeURIComponent(x.slice(i + 1))];
   }));
   return String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim() || String(cookies.dimer_session || '');
 }

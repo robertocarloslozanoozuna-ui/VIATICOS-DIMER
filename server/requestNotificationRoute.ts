@@ -1,176 +1,19 @@
 import type { Request, Response } from 'express';
-import crypto from 'crypto';
-import {
-  getUserById,
-  getRequest,
-  updateRequest,
-  listRoles,
-  sanitizeUser,
-  createApprovalToken,
-  recordAuditLog,
-} from './db.js';
-import {
-  buildBossApprovalEmailHtml,
-  buildRequesterConfirmationEmailHtml,
-  sendEmail,
-} from './mailService.js';
-import type { User } from '../src/types.js';
 
-function parseCookies(req: Request) {
-  const raw = String(req.headers.cookie || '');
-  return Object.fromEntries(
-    raw.split(';').map(x => x.trim()).filter(Boolean).map(x => {
-      const i = x.indexOf('=');
-      return i < 0 ? [x, ''] : [x.slice(0, i), decodeURIComponent(x.slice(i + 1))];
-    })
-  );
-}
-
-function verifyJwt(token: string): { sub: string } {
-  const secret = process.env.JWT_SECRET;
-  if (!secret) throw new Error('Falta JWT_SECRET');
-  const parts = token.split('.');
-  if (parts.length !== 3) throw new Error('JWT inválido');
-  const expected = crypto.createHmac('sha256', secret).update(`${parts[0]}.${parts[1]}`).digest('base64url');
-  if (!crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(parts[2]))) throw new Error('JWT inválido');
-  const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString('utf8')) as { sub: string; exp?: number };
-  if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) throw new Error('Sesión expirada');
-  return payload;
-}
-
-async function getAuthenticatedUser(req: Request): Promise<User | null> {
-  const cookies = parseCookies(req);
-  const bearer = String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim();
-  const token = bearer || String(cookies.dimer_session || '');
-  if (!token) return null;
-  try {
-    const payload = verifyJwt(token);
-    const stored = await getUserById(payload.sub);
-    if (!stored || stored.status !== 'ACTIVO') return null;
-    const roles = await listRoles();
-    return sanitizeUser(stored, roles.find(r => r.id === stored.roleId));
-  } catch {
-    return null;
-  }
-}
-
-function baseUrl(req: Request) {
-  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
-  const configured = (process.env.PUBLIC_APP_URL || process.env.APP_URL || '').trim().replace(/\/+$/, '');
-  if (configured && !configured.includes('ai.studio') && !configured.includes('aistudio.google.com')) {
-    if (!(process.env.VERCEL && configured.includes('localhost'))) return configured;
-  }
-  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
-  const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim();
-  return host ? `${proto}://${host}` : 'http://localhost:3000';
-}
-
-export async function requestNotificationHandler(req: Request, res: Response) {
-  try {
-    const user = await getAuthenticatedUser(req);
-    if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
-
-    const requestId = String(req.params.id || '').trim();
-    const request = await getRequest(requestId);
-    if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
-    if (user.role !== 'ADMIN' && request.userId !== user.id) {
-      return res.status(403).json({ success: false, error: 'No autorizado para notificar esta solicitud' });
-    }
-    if (request.status !== 'PENDIENTE_APROBACION') {
-      return res.status(400).json({ success: false, error: `La solicitud está en estado ${request.status} y no requiere notificación inicial.` });
-    }
-    if (!request.bossEmail) {
-      return res.status(400).json({ success: false, error: 'La solicitud no tiene correo de aprobador asignado.' });
-    }
-
-    let current = request;
-    let token = current.approvalToken || '';
-    if (!token) {
-      const tokenRecord = await createApprovalToken(current.id, current.bossEmail, current.bossId);
-      token = tokenRecord.token;
-      current = await updateRequest(current.id, {
-        approvalToken: token,
-        updatedAt: new Date().toISOString(),
-      });
-    }
-
-    const approvalUrl = `${baseUrl(req)}/api/approval/token-action?token=${encodeURIComponent(token)}`;
-    const requester = await getUserById(current.userId);
-    const requesterUser = requester
-      ? sanitizeUser(requester)
-      : ({
-          id: current.userId,
-          name: current.requesterName || 'Colaborador',
-          email: '',
-          department: current.department || 'General',
-          role: 'SOLICITANTE',
-          status: 'ACTIVO',
-        } as User);
-
-    const bossHtml = buildBossApprovalEmailHtml({
-      request: current,
-      user: requesterUser,
-      approveUrl: approvalUrl,
-      rejectUrl: approvalUrl,
-      token,
-    });
-
-    const bossMail = await sendEmail({
-      to: current.bossEmail,
-      subject: `AUTORIZACIÓN DE VIÁTICOS - Folio ${current.folio}`,
-      html: bossHtml,
-      requestId: current.id,
-      folio: current.folio,
-    });
-
-    const confirmationHtml = buildRequesterConfirmationEmailHtml({
-      request: current,
-      user: requesterUser,
-      bossName: current.bossName || current.bossEmail,
-      bossEmail: current.bossEmail,
-    });
-
-    const requesterMail = requesterUser.email
-      ? await sendEmail({
-          to: requesterUser.email,
-          subject: `SOLICITUD DE VIÁTICOS REGISTRADA - Folio ${current.folio}`,
-          html: confirmationHtml,
-          requestId: current.id,
-          folio: current.folio,
-        })
-      : { status: 'FALLIDO', error: 'No se encontró correo del solicitante' } as const;
-
-    await recordAuditLog({
-      requestId: current.id,
-      userId: user.id,
-      action: 'NOTIFICACION_CREACION_SOLICITUD',
-      details: {
-        folio: current.folio,
-        approvalTokenCreated: !request.approvalToken,
-        bossEmail: current.bossEmail,
-        requesterEmail: requesterUser.email,
-        bossMailStatus: bossMail.status,
-        requesterMailStatus: requesterMail.status,
-        bossMailError: bossMail.error || null,
-        requesterMailError: requesterMail.error || null,
-      },
-    });
-
-    const ok = bossMail.status === 'ENVIADO' && requesterMail.status === 'ENVIADO';
-    return res.status(ok ? 200 : 502).json({
-      success: ok,
-      request: current,
-      notifications: {
-        approver: bossMail.status,
-        requester: requesterMail.status,
-        approverError: bossMail.error,
-        requesterError: requesterMail.error,
-      },
-    });
-  } catch (error) {
-    console.error('[REQUEST-NOTIFICATION-ERROR]', error);
-    const message = error instanceof Error ? error.message : 'Error interno al procesar la notificación';
-    return res.status(500).json({ success: false, error: message });
-  }
+/**
+ * Deprecated endpoint.
+ *
+ * Initial notifications are sent exactly once by POST /api/requests.
+ * This endpoint used to resend both the approver and requester emails and
+ * could therefore create duplicate notifications when an old frontend or
+ * integration called /notify after request creation.
+ *
+ * Keep the route for backwards compatibility, but never send email here.
+ */
+export async function requestNotificationHandler(_req: Request, res: Response) {
+  return res.status(410).json({
+    success: false,
+    deprecated: true,
+    error: 'La notificación inicial se envía automáticamente al crear la solicitud. El endpoint /notify ya no reenvía correos.',
+  });
 }

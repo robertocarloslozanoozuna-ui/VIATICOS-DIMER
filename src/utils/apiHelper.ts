@@ -86,7 +86,12 @@ export async function safeFetchJson<T = any>(url: string, options?: RequestInit)
   }
 
   if (!res.ok) {
-    const errorMsg = parsedData?.error || parsedData?.message || `Error en la solicitud (${res.status})`;
+    const rawError = parsedData?.error ?? parsedData?.message;
+    const errorMsg = typeof rawError === 'string'
+      ? rawError
+      : rawError && typeof rawError === 'object'
+        ? String(rawError.message || rawError.error_description || rawError.error || rawError.details || rawError.hint || `Error en la solicitud (${res.status})`)
+        : `Error en la solicitud (${res.status})`;
     throw new Error(errorMsg);
   }
 

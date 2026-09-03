@@ -5,7 +5,6 @@ import { getUserById, getRequest, updateRequest, recordAuditLog, listBosses } fr
 import { registerApprovalRoutes } from '../server/approvalRoutes.js';
 import { registerAdminRequestRoutes } from '../server/adminRequestRoutes.js';
 import { registerRequestCreationRoutes } from '../server/requestCreationRoutes.js';
-import { requestNotificationHandler } from '../server/requestNotificationRoute.js';
 import { registerMultiRoleUserRoutes } from '../server/multiRoleUserRoutes.js';
 import { logSystemError, registerProcessErrorLogging } from '../server/errorLogger.js';
 
@@ -15,7 +14,7 @@ function parseSessionCookie(req: Request) {
   const raw = String(req.headers.cookie || '');
   const cookies = Object.fromEntries(raw.split(';').map(x => x.trim()).filter(Boolean).map(x => {
     const i = x.indexOf('=');
-    return i < 0 ? [x, ''] : [x.slice(0, i), decodeURIComponent(x.slice(i + 1))];
+    return i < 0 ? [x, ''] : [x.slice(0, i), decodeURIComponent(x.slice(i + 1)];
   }));
   return String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim() || String(cookies.dimer_session || '');
 }
@@ -45,17 +44,12 @@ async function isAuthenticated(req: Request) {
   return Boolean(await getAuthenticatedUser(req));
 }
 
-// Global error telemetry. It does not alter successful requests and never
-// exposes credentials, cookies or authorization headers in the log.
 registerProcessErrorLogging();
 
 app.use((req: Request, res: Response, next: NextFunction) => {
   res.on('finish', () => {
     if (res.statusCode >= 500) {
-      logSystemError(new Error(`HTTP ${res.statusCode}`), req, {
-        source: 'http-response',
-        statusCode: res.statusCode,
-      });
+      logSystemError(new Error(`HTTP ${res.statusCode}`), req, { source: 'http-response', statusCode: res.statusCode });
     }
   });
   next();
@@ -64,8 +58,6 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Cuando no se usa la calculadora, los costos auxiliares no deben conservar
-// los valores por defecto de la interfaz.
 app.use('/api/requests', (req: Request, _res: Response, next: NextFunction) => {
   if (req.method === 'POST' && req.body && typeof req.body === 'object') {
     const comments = String(req.body.comments || '');
@@ -80,8 +72,6 @@ app.use('/api/requests', (req: Request, _res: Response, next: NextFunction) => {
   next();
 });
 
-// Lectura de supervisores/aprobadores para cualquier usuario autenticado.
-// Las operaciones administrativas del catálogo siguen protegidas dentro de createApp().
 app.get('/api/bosses', async (req: Request, res: Response) => {
   try {
     if (!(await isAuthenticated(req))) return res.status(401).json({ error: 'Autenticación requerida' });
@@ -92,9 +82,6 @@ app.get('/api/bosses', async (req: Request, res: Response) => {
   }
 });
 
-// El solicitante puede cancelar su propia solicitud únicamente mientras siga
-// pendiente de autorización. ADMIN conserva la posibilidad de intervenir sin
-// reutilizar el endpoint administrativo que cancela solicitudes ya aprobadas.
 app.post('/api/requests/:id/cancel', async (req: Request, res: Response) => {
   try {
     const user = await getAuthenticatedUser(req);
@@ -105,21 +92,10 @@ app.post('/api/requests/:id/cancel', async (req: Request, res: Response) => {
     const isOwner = request.userId === user.id;
     const isAdmin = String(user.role || '').toUpperCase() === 'ADMIN' || Boolean(user.roles?.some(r => String(r.name || '').toUpperCase() === 'ADMIN'));
     if (!isOwner && !isAdmin) return res.status(403).json({ success: false, error: 'Solo el solicitante puede cancelar esta solicitud.' });
-    if (request.status !== 'PENDIENTE_APROBACION') {
-      return res.status(400).json({ success: false, error: `Solo se puede cancelar antes de la aprobación. Estado actual: ${request.status}.` });
-    }
+    if (request.status !== 'PENDIENTE_APROBACION') return res.status(400).json({ success: false, error: `Solo se puede cancelar antes de la aprobación. Estado actual: ${request.status}.` });
     const reason = String(req.body?.reason || 'Cancelada por el solicitante').trim() || 'Cancelada por el solicitante';
-    const updated = await updateRequest(request.id, {
-      status: 'CANCELADA',
-      comments: `${request.comments ? `${request.comments}\n` : ''}Cancelada: ${reason}`,
-      updatedAt: new Date().toISOString(),
-    });
-    await recordAuditLog({
-      requestId: request.id,
-      userId: user.id,
-      action: isAdmin ? 'CANCELACION_ADMIN_SOLICITUD_PENDIENTE' : 'CANCELACION_SOLICITUD_PENDIENTE',
-      details: { folio: request.folio, reason, previousStatus: request.status },
-    });
+    const updated = await updateRequest(request.id, { status: 'CANCELADA', comments: `${request.comments ? `${request.comments}\n` : ''}Cancelada: ${reason}`, updatedAt: new Date().toISOString() });
+    await recordAuditLog({ requestId: request.id, userId: user.id, action: isAdmin ? 'CANCELACION_ADMIN_SOLICITUD_PENDIENTE' : 'CANCELACION_SOLICITUD_PENDIENTE', details: { folio: request.folio, reason, previousStatus: request.status } });
     return res.json({ success: true, request: updated });
   } catch (error) {
     logSystemError(error, req, { source: 'request-cancel', statusCode: 500 });
@@ -127,7 +103,6 @@ app.post('/api/requests/:id/cancel', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/requests/:id/notify', requestNotificationHandler);
 registerApprovalRoutes(app);
 registerMultiRoleUserRoutes(app);
 

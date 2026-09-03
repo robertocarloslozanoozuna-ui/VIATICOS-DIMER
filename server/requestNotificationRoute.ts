@@ -9,11 +9,13 @@ import type { Request, Response } from 'express';
  * integration called /notify after request creation.
  *
  * Keep the route for backwards compatibility, but never send email here.
+ * Return 200 so older clients do not report a false delivery failure.
  */
 export async function requestNotificationHandler(_req: Request, res: Response) {
-  return res.status(410).json({
-    success: false,
+  return res.status(200).json({
+    success: true,
     deprecated: true,
-    error: 'La notificación inicial se envía automáticamente al crear la solicitud. El endpoint /notify ya no reenvía correos.',
+    skipped: true,
+    message: 'La notificación inicial ya fue procesada al crear la solicitud. No se reenvió ningún correo.',
   });
 }

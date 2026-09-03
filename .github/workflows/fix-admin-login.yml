@@ -1,0 +1,69 @@
+name: Repair admin login
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply targeted fixes
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('server/db.ts')
+          s = p.read_text(encoding='utf-8')
+
+          old = """export async function resolveUserRoles(u:StoredUserRecord){\n  const primaryRoleId=roleFallbackId(u.role,u.roleId);\n  const roleIds=await getUserRoleIds(u.id,primaryRoleId);\n  const roles=await getRolesByIds(roleIds);\n  const activeRoles=roles.filter(r=>r.active);\n  const hasAdmin=u.role==='ADMIN'||activeRoles.some(r=>r.id==='role_admin'||r.name==='ADMIN');\n  const permissions=hasAdmin\n    ? ALL_SYSTEM_PERMISSIONS.map(p=>p.id)\n    : Array.from(new Set(activeRoles.flatMap(r=>r.permissions)));\n  return {roleIds,roles,permissions,primaryRoleId,hasAdmin};\n}"""
+          new = """export async function resolveUserRoles(u:StoredUserRecord){\n  const primaryRoleId=roleFallbackId(u.role,u.roleId);\n  let roleIds:string[]=[];\n  try{ roleIds=await getUserRoleIds(u.id,primaryRoleId); }catch(error){ console.error('[RBAC] No se pudieron resolver los roles del usuario:',error); roleIds=primaryRoleId?[primaryRoleId]:[]; }\n  let roles:RoleDefinition[]=[];\n  try{ roles=await getRolesByIds(roleIds); }catch(error){ console.error('[RBAC] No se pudieron cargar las definiciones de roles:',error); }\n  const activeRoles=roles.filter(r=>r.active);\n  const hasAdmin=String(u.role||'').trim().toUpperCase()==='ADMIN'||String(u.role||'').trim().toUpperCase()==='ADMINISTRADOR'||String(u.roleId||'').trim().toLowerCase()==='role_admin'||roleIds.some(id=>String(id).trim().toLowerCase()==='role_admin')||activeRoles.some(r=>String(r.id).trim().toLowerCase()==='role_admin'||String(r.name).trim().toUpperCase()==='ADMIN'||String(r.name).trim().toUpperCase()==='ADMINISTRADOR');\n  const permissions=hasAdmin\n    ? ALL_SYSTEM_PERMISSIONS.map(p=>p.id)\n    : Array.from(new Set(activeRoles.flatMap(r=>r.permissions)));\n  return {roleIds,roles,permissions,primaryRoleId,hasAdmin};\n}"""
+          if old not in s:
+              raise SystemExit('resolveUserRoles block not found')
+          s = s.replace(old,new,1)
+
+          old = "export function hasPermission(u:User|undefined,p:Permission){return !!u&&u.status==='ACTIVO'&&(u.role==='ADMIN'||u.permissions?.includes(p));}"
+          new = "export function hasPermission(u:User|undefined,p:Permission){const isAdmin=!!u&&(String(u.role||'').trim().toUpperCase()==='ADMIN'||String(u.role||'').trim().toUpperCase()==='ADMINISTRADOR'||String(u.roleId||'').trim().toLowerCase()==='role_admin'||(Array.isArray(u.roleIds)&&u.roleIds.some(id=>String(id).trim().toLowerCase()==='role_admin')));return !!u&&u.status==='ACTIVO'&&(isAdmin||u.permissions?.includes(p));}"
+          if old not in s:
+              raise SystemExit('hasPermission block not found')
+          s = s.replace(old,new,1)
+          p.write_text(s,encoding='utf-8')
+
+          p = Path('server/app.ts')
+          s = p.read_text(encoding='utf-8')
+          old = "function err(res:express.Response,e:unknown){const msg=e instanceof Error?e.message:'Error interno';const status=/JWT|autentic|token inválido|no se encontró/i.test(msg)?400:503;return res.status(status).json({success:false,error:msg});}"
+          new = "function err(res:express.Response,e:unknown){const msg=e instanceof Error?e.message:(typeof e==='string'?e:(e&&typeof e==='object'?String((e as any).message|| (e as any).error_description || (e as any).error || 'Error interno'):'Error interno'));const status=/JWT|autentic|token inválido|no se encontró/i.test(msg)?400:503;console.error('[API-ERROR]',e);return res.status(status).json({success:false,error:msg});}"
+          if old not in s:
+              raise SystemExit('app err block not found')
+          s = s.replace(old,new,1)
+          p.write_text(s,encoding='utf-8')
+
+          for fn in ['src/components/LoginView.tsx','src/components/AuthModal.tsx']:
+              p = Path(fn)
+              s = p.read_text(encoding='utf-8')
+              old = "setError(err.message || 'Error de conexión con el servidor');"
+              if old in s:
+                  new = "setError(err instanceof Error ? err.message : (typeof err === 'string' ? err : String(err?.message || err?.error || 'Error de conexión con el servidor')));"
+                  s=s.replace(old,new,1)
+              old2 = "setError(err.message || 'Error al iniciar sesión');"
+              if old2 in s:
+                  new2 = "setError(err instanceof Error ? err.message : (typeof err === 'string' ? err : String(err?.message || err?.error || 'Error al iniciar sesión')));"
+                  s=s.replace(old2,new2,1)
+              p.write_text(s,encoding='utf-8')
+
+          # Keep this workflow temporary; source changes are the durable fix.
+          Path('.github/workflows/fix-admin-login.yml').unlink()
+      - name: Commit source fixes
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add server/db.ts server/app.ts src/components/LoginView.tsx src/components/AuthModal.tsx .github/workflows/fix-admin-login.yml
+          git diff --cached --quiet && exit 0
+          git commit -m "fix: restore admin login and normalize API errors"
+          git push

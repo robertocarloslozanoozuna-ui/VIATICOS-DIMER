@@ -60,7 +60,7 @@ export default function LoginView({
       if (data.token) setAuthToken(data.token);
       onLoginSuccess(data.user);
     } catch (err: any) {
-      setError(err.message || 'Error de conexión con el servidor');
+      setError(err instanceof Error ? err.message : (typeof err === 'string' ? err : String(err?.message || err?.error || 'Error de conexión con el servidor')));
     } finally {
       setLoading(false);
     }

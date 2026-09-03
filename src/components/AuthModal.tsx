@@ -84,7 +84,7 @@ export default function AuthModal({
       onSuccess(data.user);
       onClose();
     } catch (err: any) {
-      setError(err.message || 'Error al iniciar sesión');
+      setError(err instanceof Error ? err.message : (typeof err === 'string' ? err : String(err?.message || err?.error || 'Error al iniciar sesión')));
     } finally {
       setLoading(false);
     }

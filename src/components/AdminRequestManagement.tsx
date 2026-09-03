@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AlertTriangle, Ban, CheckCircle2, Trash2, X } from 'lucide-react';
 import type { TravelRequest } from '../types';
+import { safeFetchJson } from '../utils/apiHelper';
 
 interface Props {
   requests: TravelRequest[];
@@ -27,9 +28,7 @@ export default function AdminRequestManagement({ requests, onRefreshData }: Prop
     if (!window.confirm(`¿Eliminar definitivamente la solicitud ${request.folio}?\n\nEstado actual: ${request.status}. Esta acción no se puede deshacer.`)) return;
     setProcessingId(request.id);
     try {
-      const res = await fetch(`/api/requests/${request.id}`, { method: 'DELETE' });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'No fue posible eliminar la solicitud.');
+      await safeFetchJson(`/api/requests/${request.id}`, { method: 'DELETE' });
       notify('success', `La solicitud ${request.folio} fue eliminada correctamente.`);
       onRefreshData();
     } catch (error: any) {
@@ -43,13 +42,11 @@ export default function AdminRequestManagement({ requests, onRefreshData }: Prop
     if (!cancelTarget) return;
     setProcessingId(cancelTarget.id);
     try {
-      const res = await fetch(`/api/requests/${cancelTarget.id}/cancel`, {
+      await safeFetchJson(`/api/requests/${cancelTarget.id}/cancel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ reason: cancelReason.trim() || 'El viaje no se realizará' }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'No fue posible cancelar la solicitud.');
       notify('success', `La solicitud ${cancelTarget.folio} quedó CANCELADA.`);
       setCancelTarget(null);
       setCancelReason('El viaje no se realizará');

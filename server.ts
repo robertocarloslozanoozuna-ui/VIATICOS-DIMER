@@ -1,12 +1,18 @@
 import express from 'express';
 import path from 'path';
-import { createApp } from './server/app';
+import handler, { createApp } from './server/apiEntry.js';
 
-export { createApp };
+export { createApp, handler };
 
 export async function startServer() {
-  const app = createApp();
+  const app = handler;
   const PORT = 3000;
+
+  // Unhandled /api/* routes MUST return JSON 404 and never fall through to Vite SPA HTML fallback
+  app.all('/api/*', (_req, res) => {
+    res.status(404).json({ error: 'Ruta API no encontrada' });
+  });
+
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({ server: { middlewareMode: true }, appType: 'spa' });

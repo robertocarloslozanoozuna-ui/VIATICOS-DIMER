@@ -416,6 +416,7 @@ export async function sendEmail(p:{to:string;subject:string;html:string;from?:st
   const transporter=getMailTransporter();
   let status:'ENVIADO'|'SIMULADO'|'FALLIDO'='ENVIADO';
   let errorMsg:string|undefined;
+  let emailDeliveryKey = "";
 
   if(!transporter){
     errorMsg='Faltan credenciales SMTP: se requieren SMTP_USER y SMTP_PASS';
@@ -430,7 +431,7 @@ export async function sendEmail(p:{to:string;subject:string;html:string;from?:st
 
       console.log(`[SMTP-DEBUG] Enviando correo a ${p.to} usando variable_usuario=${rawUserVar} (${c.user}), pass_length=${c.pass.length}, pass_prefix="${c.pass.slice(0, 2)}***", pass_has_spaces_at_edges=${hasLeadingTrailingWhitespace}, from="${fromFormatted}"`);
 
-      const emailDeliveryKey=buildEmailDeliveryKey(p.requestId,p.to,p.subject);
+      emailDeliveryKey=buildEmailDeliveryKey(p.requestId,p.to,p.subject);
       let emailDeliveryReserved=false;
       try{
         emailDeliveryReserved=await reserveEmailDelivery({key:emailDeliveryKey,requestId:p.requestId,folio:p.folio,recipient:p.to,subject:p.subject});

@@ -72,8 +72,7 @@ export default function AprobarView({
   const fetchRequests = async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/requests');
-      const data = await res.json().catch(() => []);
+      const data = await safeFetchJson<TravelRequest[]>('/api/requests').catch(() => []);
       if (Array.isArray(data)) {
         setRequests(data);
 

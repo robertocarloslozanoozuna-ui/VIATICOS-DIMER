@@ -11,6 +11,7 @@ import {
   Sparkles
 } from 'lucide-react';
 import type { CodeFile } from '../../server/nextjsArtifacts';
+import { safeFetchJson } from '../utils/apiHelper';
 
 export default function NextjsCodeView() {
   const [artifacts, setArtifacts] = useState<CodeFile[]>([]);
@@ -19,13 +20,15 @@ export default function NextjsCodeView() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    fetch('/api/code-artifacts')
-      .then((res) => res.json())
+    safeFetchJson<CodeFile[]>('/api/code-artifacts')
       .then((data) => {
-        setArtifacts(data);
+        if (Array.isArray(data)) setArtifacts(data);
         setLoading(false);
       })
-      .catch((e) => console.error(e));
+      .catch((e) => {
+        console.error(e);
+        setLoading(false);
+      });
   }, []);
 
   const currentFile = artifacts[selectedFileIndex];

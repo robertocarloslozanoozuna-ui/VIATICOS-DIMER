@@ -1,5 +1,5 @@
 import express from 'express';
-import { createApp } from './app';
+import { createApp } from './app.js';
 import { securityGate } from './securityGate.js';
 
 const app = createApp();
@@ -10,4 +10,4 @@ handler.use(securityGate);
 handler.use(app);
 
 export default handler;
-export { app, handler };
+export { app, handler, createApp };

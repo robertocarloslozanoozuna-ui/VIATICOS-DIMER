@@ -43,14 +43,23 @@ export function registerApprovalRoutes(app: Express) {
       if (decision === 'APROBADA') {
         const baseHtml = buildSystemsApprovedEmailHtml({ request, user, approverName, approverEmail, approvedAt: request.approvedAt || new Date().toISOString() });
         const requesterEmail = user.email.trim().toLowerCase();
-        const finanzasEmail = (process.env.FINANZAS_EMAIL || 'finanzas@dimer.com.mx').trim().toLowerCase();
+
+        // FINANZAS_URL es el nombre actualmente utilizado en Vercel por la configuración
+        // del proyecto. FINANZAS_EMAIL se conserva como compatibilidad con instalaciones
+        // anteriores. No existe fallback a finanzas@dimer.com.mx para evitar que un alias
+        // antiguo pueda redirigir accidentalmente la notificación a Sistemas.
+        const configuredFinanzas = String(process.env.FINANZAS_URL || process.env.FINANZAS_EMAIL || '').trim().toLowerCase();
+        const finanzasEmail = configuredFinanzas && configuredFinanzas !== 'sistemas@dimer.com.mx' ? configuredFinanzas : '';
 
         // SOLICITANTE y FINANZAS son notificaciones independientes.
-        // Aunque ambas direcciones sean iguales, deben enviarse los 2 correos.
-        // SISTEMAS no recibe copia de una aprobación.
+        // SISTEMAS no recibe copia de una aprobación, salvo que sea el propio solicitante.
         const recipientCopies: Array<{ to: string; label: string; subjectSuffix: string }> = [];
         if (requesterEmail) recipientCopies.push({ to: requesterEmail, label: 'SOLICITANTE', subjectSuffix: 'SOLICITANTE' });
-        if (finanzasEmail) recipientCopies.push({ to: finanzasEmail, label: 'FINANZAS', subjectSuffix: 'FINANZAS' });
+        if (finanzasEmail && finanzasEmail !== requesterEmail) recipientCopies.push({ to: finanzasEmail, label: 'FINANZAS', subjectSuffix: 'FINANZAS' });
+
+        if (!finanzasEmail) {
+          console.error('[FINANZAS] No se enviará la notificación porque FINANZAS_URL/FINANZAS_EMAIL no está configurada o apunta a sistemas@dimer.com.mx.');
+        }
 
         for (const recipient of recipientCopies) {
           const html = `<div style="font-family:Arial,sans-serif;font-size:11px;color:#666;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:.4px;">Notificación para: <strong>${recipient.label}</strong></div>${baseHtml}`;

@@ -67,3 +67,63 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+app.use('/api/requests', (req: Request, _res: Response, next: NextFunction) => {
+  if (req.method === 'POST' && req.body && typeof req.body === 'object') {
+    const comments = String(req.body.comments || '');
+    const calculatorUsed = /Desglose estimado:/i.test(comments);
+    if (!calculatorUsed) {
+      req.body.transportCost = 0;
+      req.body.hotelCost = 0;
+      req.body.foodCost = 0;
+      req.body.miscCost = 0;
+    }
+  }
+  next();
+});
+
+app.get('/api/bosses', async (req: Request, res: Response) => {
+  try {
+    if (!(await isAuthenticated(req))) return res.status(401).json({ error: 'Autenticación requerida' });
+    return res.json((await listBosses()).filter(boss => boss.active));
+  } catch (error) {
+    logSystemError(error, req, { source: 'bosses-read', statusCode: 503 });
+    return res.status(503).json({ error: 'Base de datos no disponible' });
+  }
+});
+
+app.post('/api/requests/:id/cancel', async (req: Request, res: Response) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
+    const requestId = String(req.params.id || '').trim();
+    const request = await getRequest(requestId);
+    if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
+    const isOwner = request.userId === user.id;
+    const isAdmin = String(user.role || '').toUpperCase() === 'ADMIN' || Boolean(user.roles?.some(r => String(r.name || '').toUpperCase() === 'ADMIN'));
+    if (!isOwner && !isAdmin) return res.status(403).json({ success: false, error: 'Solo el solicitante puede cancelar esta solicitud.' });
+    if (request.status !== 'PENDIENTE_APROBACION') return res.status(400).json({ success: false, error: `Solo se puede cancelar antes de la aprobación. Estado actual: ${request.status}.` });
+    const reason = String(req.body?.reason || 'Cancelada por el solicitante').trim() || 'Cancelada por el solicitante';
+    const updated = await updateRequest(request.id, { status: 'CANCELADA', comments: `${request.comments ? `${request.comments}\n` : ''}Cancelada: ${reason}`, updatedAt: new Date().toISOString() });
+    await recordAuditLog({ requestId: request.id, userId: user.id, action: isAdmin ? 'CANCELACION_ADMIN_SOLICITUD_PENDIENTE' : 'CANCELACION_SOLICITUD_PENDIENTE', details: { folio: request.folio, reason, previousStatus: request.status } });
+    return res.json({ success: true, request: updated });
+  } catch (error) {
+    logSystemError(error, req, { source: 'request-cancel', statusCode: 500 });
+    return res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Error al cancelar la solicitud.' });
+  }
+});
+
+registerApprovalRoutes(app);
+registerMultiRoleUserRoutes(app);
+
+const mainApp = createApp();
+registerAdminRequestRoutes(mainApp);
+registerRequestCreationRoutes(mainApp);
+app.use(mainApp);
+
+app.use((error: unknown, req: Request, res: Response, next: NextFunction) => {
+  logSystemError(error, req, { source: 'express-error', statusCode: 500 });
+  if (res.headersSent) return next(error);
+  return res.status(500).json({ success: false, error: 'Error interno del servidor.' });
+});
+
+export default app;

@@ -121,6 +121,90 @@ export function buildRejectionEmailHtml(params:{request:TravelRequest;user:User;
   return `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><style>body{font-family:Arial,sans-serif;background:#f1f5f9;margin:0;padding:24px;color:#1e293b}.card{max-width:620px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #cbd5e1}.header{background:#991b1b;color:#fff;padding:24px 32px;border-bottom:3px solid #dc2626}.content{padding:28px 32px}.info-table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13px}.info-table td{padding:8px 10px;border-bottom:1px solid #f1f5f9}.label{font-weight:700;color:#64748b;width:35%;text-transform:uppercase;font-size:11px}.value{color:#0f172a;font-weight:500}.reason-box{background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:16px;margin:20px 0;color:#991b1b}.footer{background:#f8fafc;padding:16px 32px;font-size:11px;color:#94a3b8;text-align:center}</style></head><body><div class="card"><div class="header"><div style="display:inline-block;background:#dc2626;color:#fff;font-size:11px;font-weight:800;padding:4px 10px;border-radius:4px">SOLICITUD NO AUTORIZADA - ${esc(requestType)}</div><h1>SOLICITUD RECHAZADA - ${esc(request.folio)}</h1><p>Notificación oficial de dictamen</p></div><div class="content"><p>Estimado/a <strong>${esc(requesterName)}</strong>, te informamos que la siguiente solicitud de viáticos no fue autorizada:</p><table class="info-table"><tr><td class="label">Folio</td><td class="value"><strong>${esc(request.folio)}</strong></td></tr><tr><td class="label">Solicitante</td><td class="value"><strong>${esc(requesterName)}</strong> (${esc(user.email)})</td></tr><tr><td class="label">Departamento</td><td class="value">${esc(department)}</td></tr><tr><td class="label">Dictaminado por</td><td class="value"><strong>${esc(rejectorName)}</strong> (${esc(rejectorEmail)})</td></tr><tr><td class="label">Monto Solicitado</td><td class="value">${formatCurrency(request.amountRequested)} MXN</td></tr></table><div class="reason-box"><strong>Motivo del rechazo / observaciones:</strong><div style="margin-top:6px;font-size:14px">${esc(reason||'No se especificó motivo')}</div></div><p style="font-size:12px;color:#64748b">Si tienes dudas sobre este dictamen, contacta directamente a tu líder o al departamento correspondiente.</p></div><div class="footer">Sistema de Gestión de Viáticos © 2026 • Dimer Corporativo</div></div></body></html>`;
 }
 
+export function buildPaymentRegisteredEmailHtml(params:{
+  request: TravelRequest;
+  user: User;
+  paymentMethod: 'SPEI' | 'EFECTIVO' | string;
+  reference?: string;
+  notes?: string;
+  paidBy?: string;
+  paidAt?: string;
+}){
+  const { request: r, user, paymentMethod, reference, notes, paidBy = 'Tesorería & Finanzas', paidAt = new Date().toISOString() } = params;
+  const requesterName = r.requesterName || user.name;
+  const department = r.department || user.department || 'Operaciones';
+  const requestType = r.requestType || 'Viáticos y Gastos de Viaje';
+  const isSpei = String(paymentMethod).toUpperCase() === 'SPEI';
+  const methodLabel = isSpei ? 'Transferencia Bancaria SPEI' : 'Pago en Efectivo';
+  const badgeBg = isSpei ? '#2563eb' : '#059669';
+  const amountDisbursed = r.amountAuthorized || r.amountRequested;
+
+  return `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><style>
+body{font-family:Arial,sans-serif;background:#f1f5f9;margin:0;padding:24px;color:#1e293b}
+.card{max-width:620px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #cbd5e1;box-shadow:0 4px 12px rgba(0,0,0,0.06)}
+.header{background:#0f172a;color:#fff;padding:24px 32px;border-bottom:4px solid ${badgeBg}}
+.brand-pill{display:inline-block;background:${badgeBg};color:#fff;font-size:11px;font-weight:800;padding:4px 10px;border-radius:4px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+.header h1{margin:0;font-size:22px;font-weight:800;color:#fff}
+.header p{margin:4px 0 0 0;font-size:13px;color:#94a3b8}
+.content{padding:28px 32px}
+.highlight-banner{background:#ecfdf5;border:1px solid #a7f3d0;border-radius:8px;padding:16px;margin:0 0 20px 0;color:#065f46;text-align:center}
+.highlight-banner .amount-label{font-size:11px;text-transform:uppercase;font-weight:700;color:#047857}
+.highlight-banner .amount-val{font-size:26px;font-weight:900;color:#065f46;margin-top:4px}
+.info-table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13px}
+.info-table td{padding:8px 10px;border-bottom:1px solid #f1f5f9}
+.label{font-weight:700;color:#64748b;width:38%;text-transform:uppercase;font-size:11px}
+.value{color:#0f172a;font-weight:500}
+.notes-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin:16px 0;font-size:13px;color:#334155}
+.reminder-box{background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:14px;margin:20px 0;color:#1e40af;font-size:12px;line-height:1.5}
+.footer{background:#f8fafc;padding:16px 32px;font-size:11px;color:#94a3b8;text-align:center;border-top:1px solid #e2e8f0}
+</style></head><body>
+<div class="card">
+  <div class="header">
+    <div class="brand-pill">PAGO DISPERSADO - ${esc(paymentMethod.toUpperCase())}</div>
+    <h1>¡Tu Solicitud ha sido Pagada!</h1>
+    <p>Folio Oficial: <strong>${esc(r.folio)}</strong> &bull; Notificación Oficial de Tesorería</p>
+  </div>
+  <div class="content">
+    <p>Estimado/a <strong>${esc(requesterName)}</strong>,</p>
+    <p>Te informamos que el departamento de Finanzas / Tesorería ha registrado exitosamente la <strong>dispersión de pago</strong> correspondiente a tu solicitud de viáticos.</p>
+    
+    <div class="highlight-banner">
+      <div class="amount-label">Monto Total Dispersado</div>
+      <div class="amount-val">${formatCurrency(amountDisbursed)} MXN</div>
+    </div>
+
+    <table class="info-table">
+      <tr><td class="label">Folio Oficial</td><td class="value"><strong>${esc(r.folio)}</strong></td></tr>
+      <tr><td class="label">Solicitante</td><td class="value"><strong>${esc(requesterName)}</strong> (${esc(user.email)})</td></tr>
+      <tr><td class="label">Departamento</td><td class="value">${esc(department)}</td></tr>
+      <tr><td class="label">Tipo de Solicitud</td><td class="value">${esc(requestType)}</td></tr>
+      <tr><td class="label">Método de Pago</td><td class="value"><strong style="color:${badgeBg}">${esc(methodLabel)}</strong></td></tr>
+      ${reference ? `<tr><td class="label">Referencia / Folio SPEI</td><td class="value"><span style="font-family:monospace;font-weight:700;color:#0f172a">${esc(reference)}</span></td></tr>` : ''}
+      <tr><td class="label">Fecha y Hora de Pago</td><td class="value">${esc(new Date(paidAt).toLocaleString('es-MX'))}</td></tr>
+      <tr><td class="label">Registrado por</td><td class="value">${esc(paidBy)}</td></tr>
+      ${r.destination ? `<tr><td class="label">Destino</td><td class="value">${esc(r.destination)}</td></tr>` : ''}
+    </table>
+
+    ${notes ? `
+    <div class="notes-box">
+      <strong>Notas de Tesorería:</strong>
+      <div style="margin-top:4px">${esc(notes)}</div>
+    </div>` : ''}
+
+    <div class="reminder-box">
+      <strong>Recordatorio de Comprobación:</strong>
+      <div style="margin-top:4px">
+        Recuerda solicitar facturas electrónicas válidas (CFDI en XML y PDF) a nombre de la empresa por todos los gastos realizados y presentarlas a través del sistema para cerrar tu comprobación en tiempo y forma.
+      </div>
+    </div>
+  </div>
+  <div class="footer">
+    Sistema de Gestión de Viáticos © 2026 • Dimer Corporativo • Tesorería y Finanzas
+  </div>
+</div>
+</body></html>`;
+}
+
 export function buildVerificationEmailHtml(p:{name:string;email:string;code:string;expiresMinutes?:number}){
   return `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Código de Verificación - Viáticos Dimer</title><style>body{font-family:Arial,sans-serif;background:#f1f5f9;margin:0;padding:20px;color:#1e293b}.card{max-width:540px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0}.header{background:#0f172a;color:#fff;padding:28px 24px;text-align:center}.body{padding:32px 28px;text-align:center}.code-box{background:#f8fafc;border:2px dashed #6366f1;border-radius:12px;padding:24px;margin:24px 0}.code-digits{font-family:monospace;font-size:36px;font-weight:900;letter-spacing:.25em;color:#0f172a}.footer{background:#f8fafc;padding:18px 24px;text-align:center;font-size:11px;color:#94a3b8}</style></head><body><div class="card"><div class="header"><h1>Viáticos Dimer</h1><p>Verificación de Seguridad de Cuenta</p></div><div class="body"><p>Hola <strong>${esc(p.name)}</strong>,</p><p>Has solicitado registrar tu cuenta con el correo <strong>${esc(p.email)}</strong>.</p><div class="code-box"><div>Tu Código de Verificación</div><div class="code-digits">${esc(p.code)}</div><div>Válido por <strong>${p.expiresMinutes||15} minutos</strong></div></div><p style="font-size:12px;color:#64748b">Si tú no solicitaste este código, ignora este mensaje.</p></div><div class="footer">Sistema de Gestión de Viáticos © 2026 • Dimer Corporativo</div></div></body></html>`;
 }

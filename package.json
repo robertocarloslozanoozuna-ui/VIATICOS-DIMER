@@ -8,7 +8,7 @@
   },
   "scripts": {
     "dev": "tsx server.ts",
-    "build": "vite build && esbuild api/index.ts --bundle --platform=node --format=cjs --outfile=api/index.js --external:@supabase/supabase-js --external:express --external:nodemailer --external:cors --external:cookie-parser --external:jsonwebtoken --external:@google/genai",
+    "build": "vite build",
     "start": "tsx server.ts",
     "preview": "vite preview",
     "clean": "rm -rf dist api/index.js api/index.js.map",

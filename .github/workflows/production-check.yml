@@ -123,6 +123,5 @@ jobs:
           test ! -e server/db.supabase.fixed.ts
           test ! -e server/db.supabase.ts
           test -e server/apiEntry.ts
-          test -s api/index.js
-          node --check api/index.js
+          test -s api/index.ts
           test -e api/admin/schema.sql

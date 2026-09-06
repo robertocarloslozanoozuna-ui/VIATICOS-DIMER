@@ -8,8 +8,9 @@ import path from 'path';
  * are bundled cleanly without runtime relative directory imports (such as ../server or /server).
  */
 export async function verifyServerlessBundle() {
-  console.log('[BUILD-VERIFY] Verifying serverless bundle integrity for api/index.js from server/apiEntry.ts...');
+  console.log('[BUILD-VERIFY] Verifying serverless bundle integrity from server/apiEntry.ts...');
 
+  const tempOutfile = 'dist/api-bundle-verify.js';
   const result = await esbuild.build({
     entryPoints: ['server/apiEntry.ts'],
     bundle: true,
@@ -19,10 +20,10 @@ export async function verifyServerlessBundle() {
     packages: 'external',
     sourcemap: true,
     write: true,
-    outfile: 'api/index.js',
+    outfile: tempOutfile,
   });
 
-  const outputCode = fs.readFileSync('api/index.js', 'utf8');
+  const outputCode = fs.readFileSync(tempOutfile, 'utf8');
 
   // Assertions for clean bundling
   const hasRelativeServerImport = outputCode.includes('from "../server') || outputCode.includes("from './app") || outputCode.includes("from './db");
@@ -31,9 +32,9 @@ export async function verifyServerlessBundle() {
   }
 
   // Verify direct node runtime import
-  const importedModule = await import('../api/index.js');
+  const importedModule = await import(path.resolve(tempOutfile));
   if (typeof importedModule.default !== 'function') {
-    throw new Error('[BUILD-VERIFY] Failed: default export from api/index.js is not an Express function');
+    throw new Error('[BUILD-VERIFY] Failed: default export is not an Express function');
   }
 
   console.log('[BUILD-VERIFY] Standalone serverless bundle verified successfully:');

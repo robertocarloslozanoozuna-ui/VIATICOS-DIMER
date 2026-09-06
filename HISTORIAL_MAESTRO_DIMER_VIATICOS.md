@@ -101,8 +101,17 @@ Existen/han existido diferencias entre la copia de AI Studio y GitHub. Antes de 
 - Comparar archivos modificados.
 - Evitar workflows antiguos que puedan restaurar `server/app.ts` desde commits históricos.
 - No ejecutar restauraciones destructivas sin verificar el contenido actual.
-- Recompilar `api/index.js` después de cambios de backend cuando el proyecto lo requiera.
+- Mantener `api/index.ts` como único punto de entrada de la Serverless Function de Vercel. NO generar ni comitear `api/index.js` en la carpeta `api/` para evitar colisiones de rutas en el escáner de Vercel CLI.
 - El historial maestro debe reflejar cualquier cambio realizado en AI Studio antes de continuar con otra modificación.
+
+## Corrección de colisión de Serverless Function en Vercel (2026-09-06)
+- **Problema en Vercel CLI:** `Error: Two or more files have conflicting paths or names. The path "api/index.js" has conflicts with "api/index.ts".`
+- **Causa raíz:** `esbuild` generaba `api/index.js` dentro del mismo directorio `api/` donde reside la fuente `api/index.ts`. Como Vercel mapea cada archivo de `api/` a una función basada en su nombre sin extensión, ambos archivos reclamaban la ruta `/api/index`.
+- **Solución implementada:**
+  1. Se eliminó el artefacto compilado `api/index.js` del repositorio.
+  2. Se añadieron `api/index.js` y `api/index.js.map` a `.gitignore`.
+  3. Se simplificó el script `build` en `package.json` a `vite build` (la compilación de `api/index.ts` la realiza Vercel automáticamente según `vercel.json`).
+  4. Se actualizó la verificación en `.github/workflows/production-check.yml` para validar la existencia de `api/index.ts`.
 
 ## Validaciones obligatorias después de cambios
 1. `npx tsc --noEmit`

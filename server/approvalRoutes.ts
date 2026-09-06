@@ -37,7 +37,7 @@ export function registerApprovalRoutes(app: Express) {
       const result = await processApprovalTokenAction(token, decision as 'APROBADA' | 'RECHAZADA', decision === 'APROBADA' ? amount : undefined, comments || undefined);
       const requestId = String(result?.requestId || result?.request_id || validation.request.id);
       const request = await getRequest(requestId) || validation.request;
-      const approverEmail = String(result?.bossEmail || validation.tokenRecord?.bossEmail || request.bossEmail || 'sistemas@dimer.com.mx');
+      const approverEmail = String(result?.bossEmail || validation.tokenRecord?.bossEmail || request.bossEmail || '');
       const approverName = String(result?.bossName || validation.tokenRecord?.bossEmail || request.bossName || request.bossEmail || 'Jefe Aprobador');
       const user = await resolveUser(request);
       if (decision === 'APROBADA') {
@@ -75,7 +75,7 @@ export function registerApprovalRoutes(app: Express) {
         }
       } else {
         const html = buildRejectionEmailHtml({ request, user, rejectorName: approverName, rejectorEmail: approverEmail, reason: request.comments || comments || 'Solicitud no autorizada' });
-        const targets = [user.email.trim().toLowerCase(), 'sistemas@dimer.com.mx'].filter((v, i, a) => Boolean(v) && a.indexOf(v) === i);
+        const targets = [user.email.trim().toLowerCase()].filter((v, i, a) => Boolean(v) && a.indexOf(v) === i);
         for (const to of targets) { try { await sendEmail({ to, subject: `SOLICITUD DE VIÁTICOS NO AUTORIZADA - Folio ${request.folio}`, html, requestId: request.id, folio: request.folio }); } catch {} }
       }
       await recordAuditLog({ requestId: request.id, userId: validation.tokenRecord?.bossId || 'token_auth', action: decision === 'APROBADA' ? 'APROBACION_VIA_TOKEN' : 'RECHAZO_VIA_TOKEN', details: { folio: request.folio, decision, approverEmail, comments } });

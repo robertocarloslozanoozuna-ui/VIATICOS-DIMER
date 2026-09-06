@@ -4,6 +4,7 @@ import { getUserById, getRequest, deleteRequest, updateRequest, recordAuditLog, 
 import { buildBossApprovalEmailHtml, buildRequesterConfirmationEmailHtml, sendEmail } from './mailService.js';
 import type { User } from '../src/types.js';
 import { userHasRole } from '../src/types.js';
+import { resolveBaseUrl } from './baseUrl.js';
 
 function parseCookies(req: Request) {
   const raw = String(req.headers.cookie || '');
@@ -59,15 +60,7 @@ function routeError(res: Response, error: unknown) {
 }
 
 function baseUrl(req: Request) {
-  if (process.env.VERCEL_PROJECT_PRODUCTION_URL) return `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`;
-  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
-  const configured = (process.env.PUBLIC_APP_URL || process.env.APP_URL || '').trim().replace(/\/+$/, '');
-  if (configured && !configured.includes('ai.studio') && !configured.includes('aistudio.google.com')) {
-    if (!(process.env.VERCEL && configured.includes('localhost'))) return configured;
-  }
-  const host = String(req.headers['x-forwarded-host'] || req.headers.host || '').split(',')[0].trim();
-  const proto = String(req.headers['x-forwarded-proto'] || 'https').split(',')[0].trim();
-  return host ? `${proto}://${host}` : 'http://localhost:3000';
+  return resolveBaseUrl(req);
 }
 
 export function registerAdminRequestRoutes(app: Express) {

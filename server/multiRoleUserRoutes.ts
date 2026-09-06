@@ -29,7 +29,7 @@ export function registerMultiRoleUserRoutes(app: Express) {
       await recordAuditLog({ userId: (req as any).dimerUser.id, action: 'ELIMINACION_USUARIO', details: { targetUserId: target.id, targetEmail: target.email, targetName: target.name } });
       return res.json({ success: true });
     } catch (error) {
-      console.error('[USERS] Error al eliminar usuario:', error);
+      console.error('[USER_MGMT] Error al eliminar usuario:', error);
       return res.status(500).json({ success: false, error: error instanceof Error ? error.message : 'Error interno' });
     }
   });

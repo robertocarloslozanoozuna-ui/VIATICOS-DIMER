@@ -1,7 +1,7 @@
 import crypto from 'crypto';
 import type { Request, Response } from 'express';
-import { getUserById, listRoles, listUsers, sanitizeUser, hasPermission, validateApprovalToken, processApprovalTokenAction, getRequest } from './db.js';
-import { buildSystemsApprovedEmailHtml, buildTokenApprovalResultPageHtml, sendEmail } from './mailService.js';
+import { getUserById, listRoles, listUsers, sanitizeUser, hasPermission, validateApprovalToken, processApprovalTokenAction, getRequest, recordAuditLog } from './db.js';
+import { buildSystemsApprovedEmailHtml, buildTokenApprovalResultPageHtml, buildTokenApprovalDecisionPageHtml, buildRejectionEmailHtml, sendEmail } from './mailService.js';
 
 const PUBLIC_EXACT = new Set(['/api/health','/health','/api/diagnostic','/diagnostic','/api/auth/login','/auth/login','/api/login','/login','/api/switch-user','/api/auth/register-init','/api/auth/verify-code','/api/auth/resend-code','/api/departments','/api/bosses','/api/requests']);
 const ADMIN_EXACT = new Set(['/api/outbox','/api/stats','/api/code-artifacts','/api/permissions','/api/roles']);
@@ -22,7 +22,220 @@ function originAllowed(req:Request){
   if(production&&origin===`https://${production}`)return true;
   return true;
 }
-function escapeHtml(v:unknown){return String(v??'').replace(/[&<>\"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[m]!));}
-function approvalPage(token:string,action:'approve'|'reject',request:any){const title=action==='approve'?'Autorizar solicitud':'Rechazar solicitud';const color=action==='approve'?'#059669':'#dc2626';const reason=action==='reject'?'<textarea id="reason" placeholder="Motivo del rechazo" style="width:100%;min-height:100px;padding:10px;border:1px solid #cbd5e1;border-radius:8px;margin:12px 0;box-sizing:border-box"></textarea>':'';const js=`async function go(){const reasonEl=document.getElementById('reason');const reason=reasonEl?reasonEl.value.trim():'';if('${action}'==='reject'&&!reason){alert('El motivo del rechazo es obligatorio.');return;}const q=new URLSearchParams({token:${JSON.stringify(token)},action:${JSON.stringify(action)}});if(reason)q.set('reason',reason);const r=await fetch('/api/approval/token-action/confirm?'+q.toString(),{method:'POST',headers:{'X-Requested-With':'XMLHttpRequest'}});document.open();document.write(await r.text());document.close();}`;return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${escapeHtml(title)}</title></head><body style="font-family:Arial,sans-serif;background:#f1f5f9;padding:24px;color:#0f172a"><div style="max-width:620px;margin:auto;background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden"><div style="background:#0f172a;color:#fff;padding:24px"><h2 style="margin:0">${escapeHtml(title)}</h2><p style="margin-bottom:0">Viáticos Dimer • Folio ${escapeHtml(request.folio)}</p></div><div style="padding:28px"><p><strong>Solicitante:</strong> ${escapeHtml(request.requesterName)}</p><p><strong>Departamento:</strong> ${escapeHtml(request.department)}</p><p><strong>Destino:</strong> ${escapeHtml(request.destination)}</p><p><strong>Monto:</strong> $${Number(request.amountRequested||0).toLocaleString('es-MX',{minimumFractionDigits:2})} MXN</p>${reason}<button onclick="go()" style="background:${color};color:#fff;border:0;border-radius:8px;padding:13px 22px;font-weight:700;cursor:pointer">Confirmar</button></div><div style="padding:16px;background:#f8fafc;color:#64748b;font-size:11px;text-align:center">La acción sólo se ejecuta después de una confirmación humana.</div></div><script>${js}</script></body></html>`;}
-async function handleApproval(req:Request,res:Response){const path=pathOf(req);const isConfirm=path==='/api/approval/token-action/confirm';const legacy=path.startsWith('/approval-response/')||path.startsWith('/api/approval-response/');const url=new URL(String((req as any).originalUrl||(req as any).url||'/'),'http://localhost');let token=url.searchParams.get('token')||'';let action=url.searchParams.get('action')||'';if(legacy){const parts=path.split('/');token=decodeURIComponent(parts.at(-2)||'');action=decodeURIComponent(parts.at(-1)||'');}const decision=action==='reject'||action==='rechazar'?'RECHAZADA':action==='approve'||action==='aprobar'?'APROBADA':null;if(!token||!decision)return res.status(400).send(buildTokenApprovalResultPageHtml({status:'INVALIDA',errorMessage:'Token o acción inválidos.'}));if(req.method==='GET'){const v=await validateApprovalToken(token);if(!v.valid)return res.status(400).send(buildTokenApprovalResultPageHtml({status:'INVALIDA',errorMessage:v.error}));return res.status(200).send(approvalPage(token,decision==='APROBADA'?'approve':'reject',v.request));}if(req.method!=='POST'||!isConfirm)return res.status(405).send('Método no permitido');const site=String(req.headers['sec-fetch-site']||'');if(site==='cross-site'||!originAllowed(req))return res.status(403).send('Origen no permitido');const reason=String(url.searchParams.get('reason')||'').trim();if(decision==='RECHAZADA'&&!reason)return res.status(400).send(buildTokenApprovalResultPageHtml({status:'INVALIDA',errorMessage:'El motivo del rechazo es obligatorio.'}));try{const result=await processApprovalTokenAction(token,decision,undefined,reason||null);const r=await getRequest(String(result.requestId));if(!r)throw new Error('La solicitud procesada no fue encontrada');const requester=result.userId?await getUserById(String(result.userId)):null;const user=requester?sanitizeUser(requester):null;if(decision==='APROBADA'&&user){const html=buildSystemsApprovedEmailHtml({request:r,user,approverName:String(result.bossEmail||'Jefe Aprobador'),approverEmail:String(result.bossEmail||''),approvedAt:String(r.approvedAt||result.processedAt||new Date().toISOString())});await sendEmail({to:user.email,subject:`SOLICITUD DE VIÁTICOS APROBADA - ${r.folio}`,html,requestId:r.id,folio:r.folio});await sendEmail({to:'sistemas@dimer.com.mx',subject:`SOLICITUD DE VIÁTICOS APROBADA - ${r.folio}`,html,requestId:r.id,folio:r.folio});const fin=process.env.FINANZAS_EMAIL||'finanzas@dimer.com.mx';if(fin.toLowerCase()!=='sistemas@dimer.com.mx')await sendEmail({to:fin,subject:`SOLICITUD DE VIÁTICOS APROBADA - ${r.folio}`,html,requestId:r.id,folio:r.folio});}else if(decision==='RECHAZADA'&&user){await sendEmail({to:user.email,subject:`SOLICITUD DE VIÁTICOS RECHAZADA - ${r.folio}`,html:`<p>Su solicitud <strong>${escapeHtml(r.folio)}</strong> fue rechazada.</p><p>${escapeHtml(r.comments||reason)}</p>`,requestId:r.id,folio:r.folio});}return res.status(200).send(buildTokenApprovalResultPageHtml({status:decision,request:r,actionTaken:decision,processedBy:String(result.bossEmail||''),processedAt:String(result.processedAt||new Date().toISOString())}));}catch(e){const msg=e instanceof Error?e.message:'Error procesando autorización';return res.status(/utilizado|expirado|inválido|procesada/i.test(msg)?400:500).send(buildTokenApprovalResultPageHtml({status:'INVALIDA',errorMessage:msg}));}}
-export async function securityGate(req:Request,res:Response,next:(err?:unknown)=>void){const path=pathOf(req);if(path==='/api/approval/token-action'||path==='/api/approval/token-action/confirm'||path.startsWith('/approval-response/')||path.startsWith('/api/approval-response/'))return handleApproval(req,res);if(req.method!=='GET'&&req.method!=='HEAD'&&req.method!=='OPTIONS'){const site=String(req.headers['sec-fetch-site']||'');if(site==='cross-site'||!originAllowed(req))return res.status(403).json({error:'Origen no permitido'});}if(PUBLIC_EXACT.has(path)||/^\/api\/requests\/[^/]+\/notify$/.test(path))return next();if(path.startsWith('/api/')){const user=await currentUser(req);if(!user)return res.status(401).json({error:'Autenticación requerida'});if(path==='/api/me'){const allUsers=await listUsers().catch(()=>[]);return res.json({user,allUsers,appUrl:process.env.APP_URL||undefined,finanzasEmail:process.env.FINANZAS_EMAIL||'finanzas@dimer.com.mx',systemsEmail:'sistemas@dimer.com.mx'});}if(ADMIN_EXACT.has(path)&&!isAdminUser(user))return res.status(403).json({error:'Permiso de administración requerido'});if(CONFIG_EXACT.has(path)&&!hasPermission(user,'administrar_configuracion'))return res.status(403).json({error:'Permiso de configuración requerido'});const requestMatch=/^\/api\/requests\/([^/]+)$/.exec(path);if(requestMatch&&(req.method==='PUT'||req.method==='PATCH')){const r=await getRequest(decodeURIComponent(requestMatch[1]));if(!r)return res.status(404).json({error:'Solicitud no encontrada'});if(!isAdminUser(user)&&(r.userId!==user.id||!['PENDIENTE_APROBACION','CORRECCION_SOLICITADA','BORRADOR'].includes(r.status)))return res.status(403).json({error:'No puedes modificar esta solicitud en su estado actual'});if(req.body&&typeof req.body==='object')for(const key of PROTECTED_REQUEST_FIELDS)delete req.body[key];}(req as any).dimerUser=user;}return next();}
+
+async function handleApproval(req:Request,res:Response){
+  // Garantizar lectura de body si llegó como application/x-www-form-urlencoded y no fue preprocesado
+  if((!req.body || Object.keys(req.body).length === 0) && req.method === 'POST'){
+    try {
+      const rawData = await new Promise<string>((resolve) => {
+        let data = '';
+        req.on('data', chunk => { data += chunk; });
+        req.on('end', () => resolve(data));
+      });
+      if(rawData){
+        const parsed = Object.fromEntries(new URLSearchParams(rawData).entries());
+        req.body = { ...(req.body || {}), ...parsed };
+      }
+    } catch {}
+  }
+
+  const path=pathOf(req);
+  const url=new URL(String((req as any).originalUrl||(req as any).url||'/'),'http://localhost');
+  const legacy=path.startsWith('/approval-response/')||path.startsWith('/api/approval-response/');
+  
+  let token=String(req.body?.token||url.searchParams.get('token')||(req.query as any)?.token||'').trim();
+  let rawAction=String(req.body?.decision||req.body?.action||url.searchParams.get('decision')||url.searchParams.get('action')||(req.query as any)?.decision||(req.query as any)?.action||'').trim();
+
+  if(legacy){
+    const parts=path.split('/').filter(Boolean);
+    if(parts.length>=2){
+      token=decodeURIComponent(parts.at(-2)||token).trim();
+      rawAction=decodeURIComponent(parts.at(-1)||rawAction).trim();
+    }
+  }
+
+  if(!token){
+    return res.status(400).send(buildTokenApprovalResultPageHtml({status:'INVALIDA',errorMessage:'Token de autorización no proporcionado en el enlace.'}));
+  }
+
+  const cleanAction=rawAction.toLowerCase();
+  let decision:'APROBADA'|'RECHAZADA'|null=null;
+  if(['approve','aprobar','aprobada','aprobado','autorizar','autorizada'].includes(cleanAction)){
+    decision='APROBADA';
+  }else if(['reject','rechazar','rechazada','rechazado','denegar'].includes(cleanAction)){
+    decision='RECHAZADA';
+  }
+
+  const v=await validateApprovalToken(token);
+  if(!v.valid||!v.request){
+    return res.status(400).send(buildTokenApprovalResultPageHtml({status:'INVALIDA',errorMessage:v.error||'Este enlace de autorización ya no es válido o ya fue dictaminado con anterioridad.'}));
+  }
+
+  // En GET: Mostramos siempre la interfaz completa de dictamen de solicitud (autorizar o rechazar).
+  if(req.method==='GET'){
+    const initialAction:'approve'|'reject'=decision==='RECHAZADA'?'reject':'approve';
+    const requester=v.request.userId?await getUserById(v.request.userId):null;
+    const user=requester?sanitizeUser(requester):({
+      id:v.request.userId||'usr_solicitante',
+      name:v.request.requesterName||'Colaborador',
+      email:'',
+      department:v.request.department||'General',
+      role:'SOLICITANTE',
+      status:'ACTIVO'
+    } as any);
+
+    return res.status(200).send(buildTokenApprovalDecisionPageHtml({
+      request:v.request,
+      user,
+      token,
+      initialAction,
+      approverEmail:v.tokenRecord?.bossEmail||v.request.bossEmail||'',
+      approverName:v.request.bossName||v.tokenRecord?.bossEmail||'Supervisor'
+    }));
+  }
+
+  if(req.method!=='POST'){
+    return res.status(405).send('Método no permitido');
+  }
+
+  if(!decision){
+    return res.status(400).send(buildTokenApprovalResultPageHtml({status:'INVALIDA',errorMessage:'Debes seleccionar una acción válida (Aprobar o Rechazar).'}));
+  }
+
+  const site=String(req.headers['sec-fetch-site']||'');
+  if(site==='cross-site'&&!originAllowed(req)){
+    console.warn('[APPROVAL-CORS] Aviso origen cruzado en confirmación');
+  }
+
+  const reason=String(req.body?.comments||req.body?.reason||url.searchParams.get('reason')||url.searchParams.get('comments')||'').trim();
+  if(decision==='RECHAZADA'&&!reason){
+    const requester=v.request.userId?await getUserById(v.request.userId):null;
+    const user=requester?sanitizeUser(requester):({id:v.request.userId,name:v.request.requesterName,email:'',department:v.request.department} as any);
+    return res.status(400).send(buildTokenApprovalDecisionPageHtml({
+      request:v.request,
+      user,
+      token,
+      initialAction:'reject',
+      approverEmail:v.tokenRecord?.bossEmail||v.request.bossEmail,
+      errorMessage:'Debes indicar obligatoriamente el motivo por el cual se rechaza la solicitud.'
+    }));
+  }
+
+  const rawAmount=req.body?.amountAuthorized??url.searchParams.get('amountAuthorized');
+  const amountAuthorized=rawAmount!==undefined&&rawAmount!==''?Number(rawAmount):undefined;
+
+  try{
+    const result=await processApprovalTokenAction(token,decision,decision==='APROBADA'?amountAuthorized:undefined,reason||null);
+    const r=await getRequest(String(result.requestId||result.request_id||v.request.id))||v.request;
+    const approverEmail=String(result.bossEmail||v.tokenRecord?.bossEmail||r.bossEmail||'');
+    const approverName=String(result.bossName||v.tokenRecord?.bossEmail||r.bossName||r.bossEmail||'Jefe Aprobador');
+
+    const requester=r.userId?await getUserById(String(r.userId)):null;
+    const user=requester?sanitizeUser(requester):null;
+
+    if(decision==='APROBADA'&&user){
+      const baseHtml=buildSystemsApprovedEmailHtml({
+        request:r,
+        user,
+        approverName,
+        approverEmail,
+        approvedAt:String(r.approvedAt||result.processedAt||new Date().toISOString())
+      });
+      const requesterEmail=user.email.trim().toLowerCase();
+      const finanzasEmail=(process.env.FINANZAS_EMAIL||'finanzas@dimer.com.mx').trim().toLowerCase();
+
+      const recipientCopies:Array<{to:string;label:string;subjectSuffix:string}>=[];
+      if(requesterEmail)recipientCopies.push({to:requesterEmail,label:'SOLICITANTE',subjectSuffix:'SOLICITANTE'});
+      if(finanzasEmail)recipientCopies.push({to:finanzasEmail,label:'FINANZAS',subjectSuffix:'FINANZAS'});
+
+      for(const recipient of recipientCopies){
+        const html=`<div style="font-family:Arial,sans-serif;font-size:11px;color:#666;margin:0 0 8px 0;text-transform:uppercase;letter-spacing:.4px;">Notificación para: <strong>${recipient.label}</strong></div>${baseHtml}`;
+        try{
+          await sendEmail({
+            to:recipient.to,
+            subject:`SOLICITUD DE VIÁTICOS APROBADA - Folio ${r.folio} - ${recipient.subjectSuffix}`,
+            html,
+            requestId:r.id,
+            folio:r.folio
+          });
+        }catch{}
+      }
+    }else if(decision==='RECHAZADA'&&user){
+      const html=buildRejectionEmailHtml({
+        request:r,
+        user,
+        rejectorName:approverName,
+        rejectorEmail:approverEmail,
+        reason:r.comments||reason||'Solicitud no autorizada'
+      });
+      const targets=[user.email.trim().toLowerCase()].filter((val,i,arr)=>Boolean(val)&&arr.indexOf(val)===i);
+      for(const to of targets){
+        try{
+          await sendEmail({
+            to,
+            subject:`SOLICITUD DE VIÁTICOS NO AUTORIZADA - Folio ${r.folio}`,
+            html,
+            requestId:r.id,
+            folio:r.folio
+          });
+        }catch{}
+      }
+    }
+
+    await recordAuditLog({
+      requestId:r.id,
+      userId:v.tokenRecord?.bossId||'token_auth',
+      action:decision==='APROBADA'?'APROBACION_VIA_TOKEN':'RECHAZO_VIA_TOKEN',
+      details:{folio:r.folio,decision,approverEmail,comments:reason}
+    });
+
+    return res.status(200).send(buildTokenApprovalResultPageHtml({
+      status:decision,
+      request:r,
+      actionTaken:decision,
+      processedBy:approverEmail,
+      processedAt:String(result.processedAt||new Date().toISOString())
+    }));
+  }catch(e){
+    const msg=e instanceof Error?e.message:'Error procesando autorización';
+    return res.status(/utilizado|expirado|inválido|procesada/i.test(msg)?400:500).send(buildTokenApprovalResultPageHtml({
+      status:'INVALIDA',
+      errorMessage:msg
+    }));
+  }
+}
+
+export async function securityGate(req:Request,res:Response,next:(err?:unknown)=>void){
+  const path=pathOf(req);
+  if(
+    path.startsWith('/api/approval/') ||
+    path.startsWith('/approval-response/') ||
+    path.startsWith('/api/approval-response/')
+  ){
+    return handleApproval(req,res);
+  }
+  if(req.method!=='GET'&&req.method!=='HEAD'&&req.method!=='OPTIONS'){
+    const site=String(req.headers['sec-fetch-site']||'');
+    if(site==='cross-site'||!originAllowed(req))return res.status(403).json({error:'Origen no permitido'});
+  }
+  if(PUBLIC_EXACT.has(path)||/^\/api\/requests\/[^/]+\/notify$/.test(path))return next();
+  if(path.startsWith('/api/')){
+    const user=await currentUser(req);
+    if(!user)return res.status(401).json({error:'Autenticación requerida'});
+    if(path==='/api/me'){
+      const allUsers=await listUsers().catch(()=>[]);
+      return res.json({user,allUsers,appUrl:process.env.APP_URL||undefined,finanzasEmail:process.env.FINANZAS_EMAIL||'finanzas@dimer.com.mx',systemsEmail:'sistemas@dimer.com.mx'});
+    }
+    if(ADMIN_EXACT.has(path)&&!isAdminUser(user))return res.status(403).json({error:'Permiso de administración requerido'});
+    if(CONFIG_EXACT.has(path)&&!hasPermission(user,'administrar_configuracion'))return res.status(403).json({error:'Permiso de configuración requerido'});
+    const requestMatch=/^\/api\/requests\/([^/]+)$/.exec(path);
+    if(requestMatch&&(req.method==='PUT'||req.method==='PATCH')){
+      const r=await getRequest(decodeURIComponent(requestMatch[1]));
+      if(!r)return res.status(404).json({error:'Solicitud no encontrada'});
+      if(!isAdminUser(user)&&(r.userId!==user.id||!['PENDIENTE_APROBACION','CORRECCION_SOLICITADA','BORRADOR'].includes(r.status)))return res.status(403).json({error:'No puedes modificar esta solicitud en su estado actual'});
+      if(req.body&&typeof req.body==='object')for(const key of PROTECTED_REQUEST_FIELDS)delete req.body[key];
+    }
+    (req as any).dimerUser=user;
+  }
+  return next();
+}

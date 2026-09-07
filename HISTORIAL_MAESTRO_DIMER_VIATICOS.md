@@ -113,6 +113,15 @@ Existen/han existido diferencias entre la copia de AI Studio y GitHub. Antes de 
   3. Se simplificó el script `build` en `package.json` a `vite build` (la compilación de `api/index.ts` la realiza Vercel automáticamente según `vercel.json`).
   4. Se actualizó la verificación en `.github/workflows/production-check.yml` para validar la existencia de `api/index.ts`.
 
+## Corrección de registro de pagos: SPEI / Efectivo en Finanzas (2026-09-06)
+- **Problema previo:** El botón en la vista de Finanzas decía "Registrar SPEI" y abría un formulario exclusivo para transferencia SPEI, sin permitir registrar pagos en efectivo. Además, el frontend no enviaba `paymentMethod` al endpoint `/api/requests/:id/pay`, a pesar de que el backend ya soportaba ambos métodos.
+- **Solución implementada:**
+  1. En `src/components/FinanzasView.tsx`, se renombró el botón de acción a **"Registrar Pago"**.
+  2. En el modal de dispersión, se implementó un selector interactivo para alternar entre **SPEI (Transferencia bancaria)** y **Efectivo (Entrega en caja)**.
+  3. Los campos y validaciones se adaptan al método seleccionado: Clave de rastreo obligatoria para SPEI, o folio de vale/recibo de caja para Efectivo.
+  4. El payload a `/api/requests/:id/pay` envía explícitamente `paymentMethod: 'SPEI' | 'EFECTIVO'`, activando la plantilla de correo y bitácora de auditoría correspondientes.
+  5. En `AuditoriaView.tsx` y `FinanzasDashboard.tsx` se generalizaron los textos a "Dispersión de Pago" y "listas para pago".
+
 ## Validaciones obligatorias después de cambios
 1. `npx tsc --noEmit`
 2. `npm run build`
@@ -136,4 +145,4 @@ Cuando se retome el proyecto, entregar este archivo a Google AI Studio y solicit
 - actualizar este historial después de cada cambio.
 
 ## Última actualización
-`2026-08-31` — Se sincronizó el historial maestro con los resultados de la corrección de persistencia de Bandeja SMTP/Outbox y la corrección de observaciones de aprobación/rechazo. No se almacenan secretos.
+`2026-09-06` — Se actualizó el flujo de tesorería y finanzas para registro de pago permitiendo selección explícita entre SPEI y Efectivo. Se validó compilación limpia y ausencia de errores de tipos.

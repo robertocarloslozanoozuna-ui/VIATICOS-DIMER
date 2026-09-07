@@ -3,7 +3,7 @@ import {
   PlusCircle, FolderClock, CheckCircle2, DollarSign, History, Mail, Code2,
   UserCheck, ChevronDown, Building2, Menu, X, Sparkles, ShieldAlert, Shield,
   ShieldCheck, Settings, Users, LogIn, LogOut, UserPlus, Eye, PanelLeftClose,
-  PanelLeft, CheckCircle, Lock, Zap,
+  PanelLeft, CheckCircle, Lock, Zap, Receipt,
 } from 'lucide-react';
 import DimerLogo from './DimerLogo';
 import type { User, Role } from '../types';
@@ -56,6 +56,7 @@ export default function Navbar({
     { id: 'solicitar', label: 'Nueva Solicitud', icon: PlusCircle, badge: null, visible: hasSolicitante || hasJefe || hasFinanzas || isAdmin },
     { id: 'aprobar', label: 'Aprobaciones', icon: CheckCircle2, badge: pendingApprovalsCount > 0 ? pendingApprovalsCount : null, badgeColor: 'bg-amber-500', visible: isAdmin || hasJefe },
     { id: 'finanzas', label: 'Finanzas y Pagos', icon: DollarSign, badge: approvedForFinanceCount > 0 ? approvedForFinanceCount : null, badgeColor: 'bg-emerald-500', visible: isAdmin || hasFinanzas },
+    { id: 'comprobar', label: 'Comprobar Gastos', icon: Receipt, badge: null, visible: hasSolicitante || isAdmin || hasFinanzas },
     { id: 'administracion-solicitudes', label: 'Control de Solicitudes', icon: FolderClock, badge: 'Admin', badgeColor: 'bg-purple-600', visible: isAdmin },
     { id: 'administracion-rbac', label: 'Usuarios y Configuración', icon: Users, badge: 'Admin', badgeColor: 'bg-purple-600', visible: isAdmin },
     { id: 'auditoria', label: 'Log de Auditoría', icon: History, badge: null, visible: isAdmin },

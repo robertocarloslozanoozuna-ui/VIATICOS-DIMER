@@ -1,0 +1,38 @@
+[
+  {
+    "id": "exp_1788787607571",
+    "requestId": "req_1788529547468_8958890b",
+    "folio": "VIAT-2026-000107",
+    "userId": "usr_adm_1",
+    "userName": "Ing. Sistemas Admin",
+    "userEmail": "sistemas@dimer.com.mx",
+    "department": "Sistemas",
+    "destination": "Ciudad de México (CDMX) - Corporativo",
+    "status": "ENVIADA",
+    "items": [
+      {
+        "id": "it_1",
+        "concept": "Gasolina y casetas",
+        "amount": 1500,
+        "type": "TICKET",
+        "expenseDate": "2026-09-07",
+        "ticketFile": {
+          "id": "f1",
+          "name": "ticket.png",
+          "type": "image/png",
+          "size": 123,
+          "dataUrl": "data:image/png;base64,iVBORw0KGgo="
+        }
+      }
+    ],
+    "totalAmountPaid": 14850,
+    "totalExpenses": 1500,
+    "difference": 13350,
+    "balanceType": "FAVOR_EMPRESA",
+    "balanceAmount": 13350,
+    "notes": "Prueba final con cálculo correcto",
+    "submittedAt": "2026-09-07T13:33:24.981Z",
+    "updatedAt": "2026-09-07T13:33:24.981Z",
+    "createdAt": "2026-09-07T13:26:47.571Z"
+  }
+]

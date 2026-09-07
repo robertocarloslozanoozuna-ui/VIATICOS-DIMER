@@ -16,7 +16,8 @@ import {
   Building,
   TrendingUp,
   Activity,
-  Layers
+  Layers,
+  Receipt
 } from 'lucide-react';
 import type { TravelRequest, User } from '../types';
 import { safeFetchJson } from '../utils/apiHelper';
@@ -27,6 +28,7 @@ interface MisSolicitudesViewProps {
   onNavigateToCreate: () => void;
   onNavigateToApprove: (requestId: string) => void;
   onOpenPrintVoucher: (request: TravelRequest) => void;
+  onNavigateToComprobar?: (folio: string) => void;
 }
 
 export default function MisSolicitudesView({
@@ -35,6 +37,7 @@ export default function MisSolicitudesView({
   onNavigateToCreate,
   onNavigateToApprove,
   onOpenPrintVoucher,
+  onNavigateToComprobar,
 }: MisSolicitudesViewProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('TODAS');
@@ -103,6 +106,12 @@ export default function MisSolicitudesView({
           label: 'Dispersada / Pagada',
           classes: 'bg-blue-100 text-blue-800 border-blue-300',
           icon: DollarSign,
+        };
+      case 'COMPROBADA':
+        return {
+          label: 'Comprobada',
+          classes: 'bg-teal-100 text-teal-800 border-teal-300',
+          icon: Receipt,
         };
       case 'FINALIZADA':
         return {
@@ -351,6 +360,16 @@ export default function MisSolicitudesView({
                               className="p-1 bg-amber-50 hover:bg-amber-100 text-amber-700 rounded transition"
                             >
                               <ExternalLink className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+
+                          {(r.status === 'PAGADA' || r.status === 'COMPROBADA') && onNavigateToComprobar && (
+                            <button
+                              onClick={() => onNavigateToComprobar(r.folio)}
+                              title={r.status === 'COMPROBADA' ? 'Ver comprobación de gastos' : 'Comprobar gastos'}
+                              className="p-1 bg-teal-50 hover:bg-teal-100 text-teal-700 rounded transition"
+                            >
+                              <Receipt className="w-3.5 h-3.5" />
                             </button>
                           )}
                         </div>

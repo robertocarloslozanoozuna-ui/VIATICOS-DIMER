@@ -63,7 +63,18 @@ export function resolveBaseUrl(req?: Request): string {
     return configured.startsWith('http') ? configured : `https://${configured}`;
   }
 
-  // 3. Variables automáticas de Vercel (filtrando dominios sin DNS como viaticos.dimer.mx)
+  // 3. Variables de entorno Cloud Run (ais-dev-*.run.app o ais-pre-*.run.app)
+  const allowedHost = String(process.env.NG_ALLOWED_HOSTS || '').split(',')[0].trim();
+  if (allowedHost && allowedHost.includes('run.app') && !isInvalidDomain(allowedHost)) {
+    return `https://${allowedHost}`;
+  }
+
+  // 4. Variables de NextAuth / Vercel (filtrando dominios sin DNS como viaticos.dimer.mx)
+  const nextAuthUrl = (process.env.NEXTAUTH_URL || '').trim().replace(/\/+$/, '');
+  if (nextAuthUrl && !isInvalidDomain(nextAuthUrl)) {
+    return nextAuthUrl.startsWith('http') ? nextAuthUrl : `https://${nextAuthUrl}`;
+  }
+
   const vercelProd = (process.env.VERCEL_PROJECT_PRODUCTION_URL || '').trim().replace(/\/+$/, '');
   if (vercelProd && !isInvalidDomain(vercelProd)) {
     return `https://${vercelProd}`;
@@ -74,7 +85,7 @@ export function resolveBaseUrl(req?: Request): string {
     return `https://${vercelUrl}`;
   }
 
-  // 4. Fallback canónico para producción / Vercel (garantiza que el botón del correo NUNCA dé NXDOMAIN)
+  // 5. Fallback canónico para producción / Vercel (garantiza que el botón del correo NUNCA dé NXDOMAIN ni mande a AI Studio)
   return 'https://viaticos-dimer.vercel.app';
 }
 

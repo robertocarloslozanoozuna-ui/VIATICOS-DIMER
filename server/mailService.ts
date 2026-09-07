@@ -1,7 +1,8 @@
 import nodemailer from 'nodemailer';
-import type { TravelRequest, User, EmailLog } from '../src/types';
+import type { TravelRequest, User, EmailLog, ExpenseVerification } from '../src/types';
 import { recordAuditLog } from './db.js';
 import { buildEmailDeliveryKey, reserveEmailDelivery, markEmailDeliverySent, releaseEmailDelivery } from './emailIdempotency.js';
+import { resolveBaseUrl } from './baseUrl.js';
 
 export const outboxLogs: EmailLog[] = [];
 
@@ -203,6 +204,195 @@ body{font-family:Arial,sans-serif;background:#f1f5f9;margin:0;padding:24px;color
 </div>
 </body></html>`;
 }
+
+export function buildExpenseVerificationSubmittedEmailHtml(params: {
+  request: TravelRequest;
+  user: User;
+  verification: ExpenseVerification;
+  appUrl?: string;
+}) {
+  const { request: r, user, verification: v, appUrl } = params;
+  const requesterName = r.requesterName || user.name;
+  const department = r.department || user.department || 'Operaciones';
+
+  // Garantizar que la URL apunte a la aplicación web real y nunca al entorno de edición de AI Studio ni localhost
+  let cleanUrl = (appUrl || '').trim();
+  if (
+    !cleanUrl ||
+    cleanUrl.includes('ai.studio') ||
+    cleanUrl.includes('aistudio.google.com') ||
+    cleanUrl.includes('localhost') ||
+    cleanUrl.includes('127.0.0.1')
+  ) {
+    cleanUrl = resolveBaseUrl();
+  }
+  cleanUrl = cleanUrl.replace(/\/+$/, '');
+
+  const portalLink = `${cleanUrl}/?tab=comprobar&folio=${encodeURIComponent(r.folio)}#comprobar`;
+
+  const amountPaid = v.totalAmountPaid;
+  const totalExpenses = v.totalExpenses;
+  const diff = v.difference;
+
+  let balanceBadge = '#0d9488';
+  let balanceText = 'Comprobación Exacta';
+  let balanceDescription = 'Monto comprobado coincide exactamente con el anticipo otorgado.';
+
+  if (diff > 0) {
+    balanceBadge = '#16a34a';
+    balanceText = `Sobrante a favor de la empresa: ${formatCurrency(diff)} MXN`;
+    balanceDescription = 'El colaborador gastó menos del anticipo recibido y reintegrará el remanente a caja.';
+  } else if (diff < 0) {
+    balanceBadge = '#2563eb';
+    balanceText = `Faltante a favor del colaborador: ${formatCurrency(Math.abs(diff))} MXN`;
+    balanceDescription = 'El colaborador cubrió gastos adicionales y tiene saldo pendiente de reembolso.';
+  }
+
+  const itemsRows = v.items.map((item, idx) => {
+    const isFactura = item.type === 'FACTURA';
+    const filesDesc: string[] = [];
+    if (isFactura) {
+      if (item.xmlFile) filesDesc.push(`XML: ${item.xmlFile.name}`);
+      if (item.pdfFile) filesDesc.push(`PDF: ${item.pdfFile.name}`);
+    } else if (item.ticketFile) {
+      filesDesc.push(`Ticket: ${item.ticketFile.name}`);
+    }
+    return `<tr>
+      <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;font-weight:600">${idx + 1}. ${esc(item.concept)}</td>
+      <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;color:#64748b">${esc(item.expenseDate || 'N/D')}</td>
+      <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9"><span style="display:inline-block;padding:2px 6px;border-radius:4px;font-size:10px;font-weight:700;${isFactura ? 'background:#dbeafe;color:#1e40af' : 'background:#fef3c7;color:#92400e'}">${isFactura ? 'FACTURA (CFDI)' : 'TICKET'}</span></td>
+      <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;font-weight:700;text-align:right">${formatCurrency(item.amount)} MXN</td>
+      <td style="padding:8px 10px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#475569">${esc(filesDesc.join(' | ') || 'Sin adjunto')}</td>
+    </tr>`;
+  }).join('');
+
+  return `<!DOCTYPE html><html lang="es"><head><meta charset="utf-8"><style>
+body{font-family:Arial,sans-serif;background:#f1f5f9;margin:0;padding:24px;color:#1e293b}
+.card{max-width:680px;margin:0 auto;background:#fff;border-radius:12px;overflow:hidden;border:1px solid #cbd5e1;box-shadow:0 4px 12px rgba(0,0,0,0.06)}
+.header{background:#0f172a;color:#fff;padding:24px 32px;border-bottom:4px solid #0d9488}
+.brand-pill{display:inline-block;background:#0d9488;color:#fff;font-size:11px;font-weight:800;padding:4px 10px;border-radius:4px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+.header h1{margin:0;font-size:22px;font-weight:800;color:#fff}
+.header p{margin:4px 0 0 0;font-size:13px;color:#94a3b8}
+.content{padding:28px 32px}
+.summary-container{display:table;width:100%;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;margin:0 0 20px 0;table-layout:fixed}
+.summary-cell{display:table-cell;text-align:center;padding:16px 12px;vertical-align:middle}
+.summary-cell:not(:last-child){border-right:1px solid #e2e8f0}
+.sum-label{font-size:10px;text-transform:uppercase;font-weight:700;color:#64748b;letter-spacing:.5px}
+.sum-val{font-size:18px;font-weight:900;color:#0f172a;margin-top:4px}
+.balance-banner{background:#f0fdfa;border:1px solid #99f6e4;border-radius:8px;padding:14px;margin:16px 0 24px 0;text-align:center}
+.balance-title{font-size:14px;font-weight:800;color:${balanceBadge}}
+.balance-desc{font-size:12px;color:#475569;margin-top:4px}
+.info-table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13px}
+.info-table td{padding:8px 10px;border-bottom:1px solid #f1f5f9}
+.label{font-weight:700;color:#64748b;width:32%;text-transform:uppercase;font-size:11px}
+.value{color:#0f172a;font-weight:500}
+.items-table{width:100%;border-collapse:collapse;margin:16px 0;font-size:12px}
+.items-table th{background:#f8fafc;padding:8px 10px;text-align:left;font-size:10px;text-transform:uppercase;color:#475569;border-bottom:2px solid #e2e8f0}
+.btn-action{display:inline-block;background:#0d9488;color:#ffffff!important;text-decoration:none;font-weight:700;font-size:13px;padding:12px 24px;border-radius:6px;margin:20px 0 10px 0;text-align:center}
+.footer{background:#f8fafc;padding:16px 32px;font-size:11px;color:#94a3b8;text-align:center;border-top:1px solid #e2e8f0}
+</style></head><body>
+<div class="card">
+  <div class="header">
+    <div class="brand-pill">COMPROBACIÓN DE GASTOS RECIBIDA</div>
+    <h1>Comprobación de Viáticos Lista para Revisión</h1>
+    <p>Folio Oficial: <strong>${esc(r.folio)}</strong> &bull; Solicitante: <strong>${esc(requesterName)}</strong></p>
+  </div>
+  <div class="content">
+    <p>Estimado equipo de <strong>Finanzas y Tesorería</strong>,</p>
+    <p>Se ha recibido la comprobación de gastos finalizada para la solicitud <strong>${esc(r.folio)}</strong>. A continuación se presenta el balance y el desglose de los comprobantes adjuntos (facturas fiscales XML/PDF y tickets) para su revisión y conciliación contable.</p>
+
+    <div class="summary-container">
+      <div class="summary-cell">
+        <div class="sum-label">Anticipo Pagado</div>
+        <div class="sum-val">${formatCurrency(amountPaid)}</div>
+      </div>
+      <div class="summary-cell">
+        <div class="sum-label">Total Comprobado</div>
+        <div class="sum-val" style="color:#0d9488">${formatCurrency(totalExpenses)}</div>
+      </div>
+      <div class="summary-cell">
+        <div class="sum-label">Diferencia / Balance</div>
+        <div class="sum-val" style="color:${balanceBadge}">${formatCurrency(diff)}</div>
+      </div>
+    </div>
+
+    <div class="balance-banner">
+      <div class="balance-title">${esc(balanceText)}</div>
+      <div class="balance-desc">${esc(balanceDescription)}</div>
+    </div>
+
+    <table class="info-table">
+      <tr><td class="label">Folio de Solicitud</td><td class="value"><strong>${esc(r.folio)}</strong></td></tr>
+      <tr><td class="label">Solicitante</td><td class="value"><strong>${esc(requesterName)}</strong> (${esc(user.email)})</td></tr>
+      <tr><td class="label">Departamento</td><td class="value">${esc(department)}</td></tr>
+      ${r.destination ? `<tr><td class="label">Destino del Viaje</td><td class="value">${esc(r.destination)}</td></tr>` : ''}
+      ${r.startDate ? `<tr><td class="label">Fechas del Viaje</td><td class="value">${esc(new Date(r.startDate).toLocaleDateString('es-MX'))} al ${esc(new Date(r.endDate).toLocaleDateString('es-MX'))}</td></tr>` : ''}
+      <tr><td class="label">Fecha de Envío</td><td class="value">${esc(new Date(v.submittedAt || new Date()).toLocaleString('es-MX'))}</td></tr>
+      <tr><td class="label">Total de Comprobantes</td><td class="value">${v.items.length} concepto(s) registrados</td></tr>
+    </table>
+
+    ${v.notes ? `
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin:16px 0;font-size:12px;color:#334155">
+      <strong>Observaciones del Solicitante:</strong>
+      <div style="margin-top:4px">${esc(v.notes)}</div>
+    </div>` : ''}
+
+    ${v.refund ? `
+    <div style="background:#ecfdf5;border:1px solid #6ee7b7;border-radius:8px;padding:14px;margin:16px 0;font-size:12px;color:#065f46">
+      <strong style="font-size:13px;color:#047857">Reintegro de Sobrante a Finanzas Registrado:</strong>
+      <div style="margin-top:6px;display:table;width:100%">
+        <div style="display:table-row">
+          <div style="display:table-cell;padding:3px 0;font-weight:700;width:38%">Monto Reintegrado:</div>
+          <div style="display:table-cell;padding:3px 0;font-weight:800;color:#065f46">${formatCurrency(v.refund.amount)} MXN</div>
+        </div>
+        <div style="display:table-row">
+          <div style="display:table-cell;padding:3px 0;font-weight:700">Método de Devolución:</div>
+          <div style="display:table-cell;padding:3px 0">${v.refund.method === 'SPEI' ? 'Transferencia Bancaria (SPEI)' : 'Efectivo / Entrega en Caja'}</div>
+        </div>
+        <div style="display:table-row">
+          <div style="display:table-cell;padding:3px 0;font-weight:700">Referencia / Rastreo:</div>
+          <div style="display:table-cell;padding:3px 0"><code style="background:#d1fae5;padding:2px 6px;border-radius:4px">${esc(v.refund.reference)}</code></div>
+        </div>
+        <div style="display:table-row">
+          <div style="display:table-cell;padding:3px 0;font-weight:700">Fecha del Reembolso:</div>
+          <div style="display:table-cell;padding:3px 0">${esc(v.refund.refundDate)}</div>
+        </div>
+        ${v.refund.receiptFile ? `
+        <div style="display:table-row">
+          <div style="display:table-cell;padding:3px 0;font-weight:700">Ficha / Comprobante:</div>
+          <div style="display:table-cell;padding:3px 0">${esc(v.refund.receiptFile.name)} (${(v.refund.receiptFile.size / 1024).toFixed(1)} KB)</div>
+        </div>` : ''}
+      </div>
+      ${v.refund.notes ? `<div style="margin-top:6px;font-style:italic">Observaciones: ${esc(v.refund.notes)}</div>` : ''}
+    </div>` : ''}
+
+    <h3 style="font-size:13px;text-transform:uppercase;color:#0f172a;margin:24px 0 8px 0;font-weight:800">Desglose de Comprobantes Adjuntos</h3>
+    <table class="items-table">
+      <thead>
+        <tr>
+          <th>Concepto</th>
+          <th>Fecha</th>
+          <th>Tipo</th>
+          <th style="text-align:right">Monto</th>
+          <th>Archivos</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${itemsRows}
+      </tbody>
+    </table>
+
+    <div style="text-align:center">
+      <a href="${portalLink}" class="btn-action">Abrir Portal y Descargar Comprobantes</a>
+    </div>
+  </div>
+  <div class="footer">
+    Sistema de Gestión de Viáticos © 2026 • Dimer Corporativo • Módulo de Comprobación y Finanzas
+  </div>
+</div>
+</body></html>`;
+}
+
 
 export function buildVerificationEmailHtml(p:{name:string;email:string;code:string;expiresMinutes?:number}){
   return `<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Código de Verificación - Viáticos Dimer</title><style>body{font-family:Arial,sans-serif;background:#f1f5f9;margin:0;padding:20px;color:#1e293b}.card{max-width:540px;margin:0 auto;background:#fff;border-radius:16px;overflow:hidden;border:1px solid #e2e8f0}.header{background:#0f172a;color:#fff;padding:28px 24px;text-align:center}.body{padding:32px 28px;text-align:center}.code-box{background:#f8fafc;border:2px dashed #6366f1;border-radius:12px;padding:24px;margin:24px 0}.code-digits{font-family:monospace;font-size:36px;font-weight:900;letter-spacing:.25em;color:#0f172a}.footer{background:#f8fafc;padding:18px 24px;text-align:center;font-size:11px;color:#94a3b8}</style></head><body><div class="card"><div class="header"><h1>Viáticos Dimer</h1><p>Verificación de Seguridad de Cuenta</p></div><div class="body"><p>Hola <strong>${esc(p.name)}</strong>,</p><p>Has solicitado registrar tu cuenta con el correo <strong>${esc(p.email)}</strong>.</p><div class="code-box"><div>Tu Código de Verificación</div><div class="code-digits">${esc(p.code)}</div><div>Válido por <strong>${p.expiresMinutes||15} minutos</strong></div></div><p style="font-size:12px;color:#64748b">Si tú no solicitaste este código, ignora este mensaje.</p></div><div class="footer">Sistema de Gestión de Viáticos © 2026 • Dimer Corporativo</div></div></body></html>`;

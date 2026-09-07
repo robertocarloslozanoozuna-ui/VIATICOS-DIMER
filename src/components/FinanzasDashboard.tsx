@@ -140,7 +140,7 @@ export default function FinanzasDashboard({ requests }: FinanzasDashboardProps) 
     {
       title: 'Pendiente de pago',
       value: money(pendingPayment),
-      detail: `${safeRequests.filter((request) => request.status === 'APROBADA').length} solicitud(es) listas para SPEI`,
+      detail: `${safeRequests.filter((request) => request.status === 'APROBADA').length} solicitud(es) listas para pago`,
       icon: WalletCards,
       tone: 'amber',
     },

@@ -81,7 +81,7 @@ export default function AuditoriaView() {
       case 'SOLICITUD_CORRECCION':
         return { label: 'Corrección Solicitada', color: 'bg-amber-100 text-amber-800 border-amber-300', icon: Clock };
       case 'DISPERSION_PAGO':
-        return { label: 'Dispersión de Pago (SPEI)', color: 'bg-purple-100 text-purple-800 border-purple-300', icon: CreditCard };
+        return { label: 'Dispersión de Pago', color: 'bg-purple-100 text-purple-800 border-purple-300', icon: CreditCard };
       case 'VISUALIZACION_SOLICITUD':
         return { label: 'Apertura / Visualización', color: 'bg-slate-100 text-slate-700 border-slate-300', icon: Eye };
       default:

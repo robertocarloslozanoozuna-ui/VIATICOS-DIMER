@@ -15,6 +15,7 @@ export type Status =
   | 'CANCELADA'
   | 'CORRECCION_SOLICITADA' 
   | 'PAGADA' 
+  | 'COMPROBADA'
   | 'FINALIZADA';
 
 export type UserStatus = 'ACTIVO' | 'INACTIVO';
@@ -38,3 +39,60 @@ export interface TravelRequest { id:string; folio:string; status:Status; userId:
 export interface AuditLog { id:string; requestId?:string|null; userId:string; userEmail?:string; userName?:string; action:string; details?:Record<string,any>|null; createdAt:string; }
 export interface EmailLog { id:string; requestId?:string; folio?:string; to:string; subject:string; html:string; status:'ENVIADO'|'SIMULADO'|'FALLIDO'; error?:string; createdAt:string; }
 export interface SystemStats { totalRequests:number; pendingApproval:number; approved:number; paid:number; rejected:number; correctionRequested:number; totalAmountRequested:number; totalAmountAuthorized:number; totalUsers?:number; totalDepartments?:number; totalBosses?:number; totalRoles?:number; }
+
+export type ExpenseType = 'FACTURA' | 'TICKET';
+
+export interface ExpenseFileAttachment {
+  id: string;
+  name: string;
+  size: number;
+  type: string;
+  dataUrl: string;
+  uploadedAt: string;
+}
+
+export interface ExpenseItem {
+  id: string;
+  concept: string;
+  amount: number;
+  type: ExpenseType;
+  expenseDate: string;
+  xmlFile?: ExpenseFileAttachment;
+  pdfFile?: ExpenseFileAttachment;
+  ticketFile?: ExpenseFileAttachment;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface ExpenseRefund {
+  amount: number;
+  method: 'SPEI' | 'EFECTIVO';
+  reference: string;
+  refundDate: string;
+  receiptFile?: ExpenseFileAttachment;
+  notes?: string;
+  registeredAt: string;
+}
+
+export interface ExpenseVerification {
+  id: string;
+  requestId: string;
+  folio: string;
+  userId: string;
+  userName?: string;
+  userEmail?: string;
+  department?: string;
+  destination?: string;
+  status: 'BORRADOR' | 'ENVIADA';
+  items: ExpenseItem[];
+  totalAmountPaid: number;
+  totalExpenses: number;
+  difference: number;
+  balanceType: 'FAVOR_EMPRESA' | 'FAVOR_COLABORADOR' | 'EXACTO';
+  balanceAmount: number;
+  refund?: ExpenseRefund;
+  notes?: string;
+  submittedAt?: string;
+  updatedAt: string;
+  createdAt: string;
+}

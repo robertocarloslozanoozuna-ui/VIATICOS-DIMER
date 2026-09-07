@@ -5,7 +5,8 @@ import { securityGate } from './securityGate.js';
 const app = createApp();
 const handler = express();
 handler.set('trust proxy', 1);
-handler.use(express.json({ limit: '10mb' }));
+handler.use(express.json({ limit: '25mb' }));
+handler.use(express.urlencoded({ extended: true, limit: '25mb' }));
 handler.use(securityGate);
 handler.use(app);
 

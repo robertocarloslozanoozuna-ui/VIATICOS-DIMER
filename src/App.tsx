@@ -14,16 +14,50 @@ import NextjsCodeView from './components/NextjsCodeView';
 import PrintVoucherModal from './components/PrintVoucherModal';
 import AuthModal from './components/AuthModal';
 import LoginView from './components/LoginView';
+import { ComprobarGastosView } from './components/ComprobarGastosView';
 import type { User, TravelRequest } from './types';
 import { userHasAnyRole, userHasRole } from './types';
 import { safeFetchJson, setAuthToken } from './utils/apiHelper';
 
+function getRouteFromUrl() {
+  if (typeof window === 'undefined') return { tab: null, folio: null };
+  const hash = window.location.hash.replace(/^#\/?/, '').trim();
+  const searchParams = new URLSearchParams(window.location.search);
+  const tabParam = searchParams.get('tab');
+  const folioParam = searchParams.get('folio');
+
+  let tab = tabParam || null;
+  let folio = folioParam || null;
+
+  if (!tab && hash) {
+    const parts = hash.split('/');
+    tab = parts[0] || null;
+    if (parts[1] && !folio) {
+      folio = decodeURIComponent(parts[1]);
+    }
+  }
+  return { tab, folio };
+}
+
+function isTabAllowed(tab: string, user: User | null): boolean {
+  if (!user) return false;
+  if (userHasRole(user, 'ADMIN')) return true;
+  if (tab === 'mis-solicitudes') return true;
+  if (tab === 'solicitar') return userHasAnyRole(user, ['SOLICITANTE', 'EMPLEADO', 'JEFE', 'FINANZAS']);
+  if (tab === 'aprobar') return userHasAnyRole(user, ['JEFE']);
+  if (tab === 'finanzas') return userHasAnyRole(user, ['FINANZAS']);
+  if (tab === 'comprobar') return userHasAnyRole(user, ['SOLICITANTE', 'EMPLEADO', 'JEFE', 'FINANZAS']);
+  return false;
+}
+
 export default function App() {
+  const initialRoute = getRouteFromUrl();
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [allUsers, setAllUsers] = useState<User[]>([]);
   const [requests, setRequests] = useState<TravelRequest[]>([]);
-  const [activeTab, setActiveTab] = useState<string>('mis-solicitudes');
+  const [activeTab, setActiveTab] = useState<string>(initialRoute.tab || 'mis-solicitudes');
   const [selectedRequestIdForApproval, setSelectedRequestIdForApproval] = useState<string | null>(null);
+  const [selectedFolioForComprobacion, setSelectedFolioForComprobacion] = useState<string | null>(initialRoute.folio || null);
   const [printRequest, setPrintRequest] = useState<TravelRequest | null>(null);
   const [loading, setLoading] = useState(true);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -42,6 +76,14 @@ export default function App() {
         setCurrentUser(meData.user);
         setAllUsers(meData.allUsers || []);
         if (meData.token) setAuthToken(meData.token);
+
+        const { tab: urlTab, folio: urlFolio } = getRouteFromUrl();
+        if (urlTab && isTabAllowed(urlTab, meData.user)) {
+          setActiveTab(urlTab);
+          if (urlTab === 'comprobar' && urlFolio) {
+            setSelectedFolioForComprobacion(urlFolio);
+          }
+        }
       }
       if (Array.isArray(reqData)) {
         setRequests(reqData);
@@ -54,7 +96,25 @@ export default function App() {
     }
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => {
+    fetchData();
+
+    const syncFromUrl = () => {
+      const { tab: urlTab, folio: urlFolio } = getRouteFromUrl();
+      if (urlTab) {
+        setActiveTab(urlTab);
+        if (urlTab === 'comprobar' && urlFolio) {
+          setSelectedFolioForComprobacion(urlFolio);
+        }
+      }
+    };
+    window.addEventListener('hashchange', syncFromUrl);
+    window.addEventListener('popstate', syncFromUrl);
+    return () => {
+      window.removeEventListener('hashchange', syncFromUrl);
+      window.removeEventListener('popstate', syncFromUrl);
+    };
+  }, []);
 
   const handleSwitchUser = async (emailOrId: string) => {
     try {
@@ -79,11 +139,20 @@ export default function App() {
     if (token) setAuthToken(token);
     setCurrentUser(user);
     setLastEventText(`AUTH_SWITCH: ${user.email} (${user.role})`);
-    if (userHasRole(user, 'SOLO_LECTURA_APROBADAS') && !userHasAnyRole(user, ['SOLICITANTE', 'EMPLEADO', 'JEFE', 'FINANZAS', 'ADMIN'])) setActiveTab('mis-solicitudes');
-    else if (userHasRole(user, 'JEFE')) setActiveTab('aprobar');
-    else if (userHasRole(user, 'FINANZAS')) setActiveTab('finanzas');
-    else if (userHasAnyRole(user, ['SOLICITANTE', 'EMPLEADO'])) setActiveTab('solicitar');
-    else setActiveTab('mis-solicitudes');
+
+    const { tab: urlTab, folio: urlFolio } = getRouteFromUrl();
+    if (urlTab && isTabAllowed(urlTab, user)) {
+      setActiveTab(urlTab);
+      if (urlTab === 'comprobar' && urlFolio) {
+        setSelectedFolioForComprobacion(urlFolio);
+      }
+    } else {
+      if (userHasRole(user, 'SOLO_LECTURA_APROBADAS') && !userHasAnyRole(user, ['SOLICITANTE', 'EMPLEADO', 'JEFE', 'FINANZAS', 'ADMIN'])) setActiveTab('mis-solicitudes');
+      else if (userHasRole(user, 'JEFE')) setActiveTab('aprobar');
+      else if (userHasRole(user, 'FINANZAS')) setActiveTab('finanzas');
+      else if (userHasAnyRole(user, ['SOLICITANTE', 'EMPLEADO'])) setActiveTab('solicitar');
+      else setActiveTab('mis-solicitudes');
+    }
     try {
       const data = await safeFetchJson<TravelRequest[]>('/api/requests');
       setRequests(Array.isArray(data) ? data : []);
@@ -119,26 +188,23 @@ export default function App() {
       case 'auditoria': return 'Bitácora Inmutable de Auditoría (AuditLog)';
       case 'outbox': return 'Bandeja de Salida SMTP & Plantillas HTML';
       case 'nextjs-code': return 'Esquema de Producción Next.js 14 App Router';
+      case 'comprobar': return 'Comprobación y Rendición de Gastos de Viáticos';
       default: return 'Gestión de Viáticos';
     }
   };
 
-  const isTabAllowed = (tab: string, user: User | null): boolean => {
-    if (!user) return false;
-    if (userHasRole(user, 'ADMIN')) return true;
-    if (tab === 'mis-solicitudes') return true;
-    if (tab === 'solicitar') return userHasAnyRole(user, ['SOLICITANTE', 'EMPLEADO', 'JEFE', 'FINANZAS']);
-    if (tab === 'aprobar') return userHasAnyRole(user, ['JEFE']);
-    if (tab === 'finanzas') return userHasAnyRole(user, ['FINANZAS']);
-    return false;
-  };
   const allowed = isTabAllowed(activeTab, currentUser);
 
   return (
     <div className="flex h-screen min-h-0 min-w-0 w-full bg-[#f8fafc] font-sans text-[#1e293b] overflow-hidden">
       <Navbar
         currentUser={currentUser} allUsers={allUsers} activeTab={activeTab}
-        onSelectTab={(tab) => { setActiveTab(tab); if (tab !== 'aprobar') setSelectedRequestIdForApproval(null); }}
+        onSelectTab={(tab) => {
+          setActiveTab(tab);
+          window.location.hash = tab;
+          if (tab !== 'aprobar') setSelectedRequestIdForApproval(null);
+          if (tab !== 'comprobar') setSelectedFolioForComprobacion(null);
+        }}
         onSwitchUser={handleSwitchUser}
         onOpenAuthModal={(mode) => { setAuthModalMode(mode); setAuthModalOpen(true); }}
         onLogout={handleLogout} pendingApprovalsCount={pendingApprovalsCount} approvedForFinanceCount={approvedForFinanceCount}
@@ -202,13 +268,41 @@ export default function App() {
             <>
               {isSoloLectura && !userHasAnyRole(currentUser, ['SOLICITANTE', 'EMPLEADO', 'JEFE', 'FINANZAS', 'ADMIN']) && <div className="bg-emerald-50 border border-emerald-200 p-3 rounded-lg flex items-center justify-between text-xs text-emerald-900"><div className="flex items-center gap-2"><ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" /><span><strong>Modo de Consulta Autorizada:</strong> Tienes acceso de solo lectura a las solicitudes aprobadas, pagadas y finalizadas por Dirección.</span></div><span className="bg-emerald-200/80 text-emerald-900 text-[10px] font-bold px-2 py-0.5 rounded font-mono">SOLO_LECTURA_APROBADAS</span></div>}
               {activeTab === 'solicitar' && <SolicitarView currentUser={currentUser} onRequestCreated={handleRequestCreated} onNavigateToApprovals={handleNavigateToApprovals} onLogout={handleLogout} />}
-              {activeTab === 'mis-solicitudes' && <MisSolicitudesView currentUser={currentUser} requests={requests} onNavigateToCreate={() => setActiveTab('solicitar')} onNavigateToApprove={handleNavigateToApprovals} onOpenPrintVoucher={(req) => setPrintRequest(req)} />}
+              {activeTab === 'mis-solicitudes' && (
+                <MisSolicitudesView
+                  currentUser={currentUser}
+                  requests={requests}
+                  onNavigateToCreate={() => setActiveTab('solicitar')}
+                  onNavigateToApprove={handleNavigateToApprovals}
+                  onOpenPrintVoucher={(req) => setPrintRequest(req)}
+                  onNavigateToComprobar={(folio) => {
+                    setSelectedFolioForComprobacion(folio);
+                    setActiveTab('comprobar');
+                  }}
+                />
+              )}
               {activeTab === 'aprobar' && <AprobarView currentUser={currentUser} selectedRequestId={selectedRequestIdForApproval} onClearSelectedRequest={() => setSelectedRequestIdForApproval(null)} onSwitchUser={handleSwitchUser} onRefreshData={fetchData} />}
               {activeTab === 'finanzas' && (
                 <>
                   <FinanzasDashboard requests={safeRequests} />
-                  <FinanzasView currentUser={currentUser} requests={requests} onRefreshData={fetchData} onOpenPrintVoucher={(req) => setPrintRequest(req)} />
+                  <FinanzasView
+                    currentUser={currentUser}
+                    requests={requests}
+                    onRefreshData={fetchData}
+                    onOpenPrintVoucher={(req) => setPrintRequest(req)}
+                    onNavigateToComprobar={(folio) => {
+                      setSelectedFolioForComprobacion(folio);
+                      setActiveTab('comprobar');
+                    }}
+                  />
                 </>
+              )}
+              {activeTab === 'comprobar' && (
+                <ComprobarGastosView
+                  currentUser={currentUser}
+                  initialFolio={selectedFolioForComprobacion}
+                  onNavigateToRequests={() => setActiveTab('mis-solicitudes')}
+                />
               )}
               {activeTab === 'administracion-solicitudes' && isAdmin && (
                 <AdminRequestManagement requests={safeRequests} onRefreshData={fetchData} />

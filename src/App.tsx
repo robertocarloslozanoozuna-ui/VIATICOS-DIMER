@@ -140,6 +140,10 @@ export default function App() {
     setCurrentUser(user);
     setLastEventText(`AUTH_SWITCH: ${user.email} (${user.role})`);
 
+    // Nunca conservar el folio seleccionado por el usuario anterior.
+    // Solo se restablece si la URL contiene explícitamente un folio.
+    setSelectedFolioForComprobacion(null);
+
     const { tab: urlTab, folio: urlFolio } = getRouteFromUrl();
     if (urlTab && isTabAllowed(urlTab, user)) {
       setActiveTab(urlTab);
@@ -158,6 +162,27 @@ export default function App() {
       setRequests(Array.isArray(data) ? data : []);
     } catch (err) { console.error(err); setRequests([]); }
   };
+
+  // Al abrir Comprobar Gastos sin un folio explícito, un solicitante solo puede
+  // recibir automáticamente el último folio PAGADO que le pertenece.
+  // Esto evita reutilizar el folio que quedó seleccionado en otra cuenta.
+  useEffect(() => {
+    if (!currentUser || activeTab !== 'comprobar' || selectedFolioForComprobacion) return;
+    if (userHasAnyRole(currentUser, ['ADMIN', 'FINANZAS'])) return;
+    if (!Array.isArray(requests) || requests.length === 0) return;
+
+    const ownPaid = requests
+      .filter((r) =>
+        r.status === 'PAGADA' &&
+        (r.userId === currentUser.id ||
+          (r.user?.email && currentUser.email && r.user.email.toLowerCase() === currentUser.email.toLowerCase()))
+      )
+      .sort((a, b) => String(b.folio || '').localeCompare(String(a.folio || '')));
+
+    if (ownPaid.length > 0) {
+      setSelectedFolioForComprobacion(ownPaid[0].folio);
+    }
+  }, [activeTab, currentUser, requests, selectedFolioForComprobacion]);
 
   const handleRequestCreated = (newReq: TravelRequest) => {
     setRequests((prev) => [newReq, ...(Array.isArray(prev) ? prev : [])]);

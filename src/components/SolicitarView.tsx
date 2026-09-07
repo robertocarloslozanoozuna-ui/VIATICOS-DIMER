@@ -45,7 +45,7 @@ export default function SolicitarView({ currentUser, onRequestCreated, onNavigat
   },[]);
   useEffect(()=>{if(currentUser){if(!requesterName)setRequesterName(currentUser.name);if(!department&&currentUser.department)setDepartment(currentUser.department);}},[currentUser]);
   const handleBossChange=(bossId:string)=>{setSelectedBossId(bossId);const found=bosses.find(b=>b.id===bossId);if(found){setBossEmail(found.email);setBossName(found.name);}else{setBossEmail('');setBossName('');}};
-  const popularDestinations=['Monterrey, N.L. - Planta Industrial','Guadalajara, Jal. - Parque Tecnológico','Querétaro, Qro. - Parque Logístico','Ciudad de México (CDMX) - Corporativo','Toluca, Edo. Méx. - Centro de Distribución','Oficinas Centrales Dimer'];
+  const popularDestinations=['Bodega Sanluis','Bodega Apodaca','Bodega Saltillo','Planta Celaya','Planta Reynosa'];
   const calculateDays=()=>{if(!startDate||!endDate)return 0;const start=new Date(startDate);const end=new Date(endDate);const diffTime=end.getTime()-start.getTime();if(diffTime<0)return -1;return Math.ceil(diffTime/86400000)+1;};
   const travelDays=calculateDays();
   const applyCalculatorTotal=()=>{const total=Number(calcHotel||0)+Number(calcTransport||0)+Number(calcFood||0)+Number(calcMisc||0);setAmountRequested(String(total));const breakdownText=`Desglose estimado: Hospedaje ($${Number(calcHotel||0)}), Transporte ($${Number(calcTransport||0)}), Alimentos ($${Number(calcFood||0)}), Imprevistos/Taxis ($${Number(calcMisc||0)}).`;setComments(prev=>prev?`${prev}\n${breakdownText}`:breakdownText);setShowCalculator(false);};

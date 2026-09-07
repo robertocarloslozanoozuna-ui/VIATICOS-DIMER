@@ -44,11 +44,10 @@ export function registerApprovalRoutes(app: Express) {
         const baseHtml = buildSystemsApprovedEmailHtml({ request, user, approverName, approverEmail, approvedAt: request.approvedAt || new Date().toISOString() });
         const requesterEmail = user.email.trim().toLowerCase();
 
-        // FINANZAS_URL es el nombre actualmente utilizado en Vercel por la configuración
-        // del proyecto. FINANZAS_EMAIL se conserva como compatibilidad con instalaciones
-        // anteriores. No existe fallback a finanzas@dimer.com.mx para evitar que un alias
-        // antiguo pueda redirigir accidentalmente la notificación a Sistemas.
-        const configuredFinanzas = String(process.env.FINANZAS_URL || process.env.FINANZAS_EMAIL || '').trim().toLowerCase();
+        // FINANZAS_EMAIL es la variable oficial configurada para el destinatario de Finanzas.
+        // FINANZAS_URL se acepta únicamente como compatibilidad con configuraciones que la usen.
+        // No existe fallback a finanzas@dimer.com.mx.
+        const configuredFinanzas = String(process.env.FINANZAS_EMAIL || process.env.FINANZAS_URL || '').trim().toLowerCase();
         const finanzasEmail = configuredFinanzas && configuredFinanzas !== 'sistemas@dimer.com.mx' ? configuredFinanzas : '';
 
         // SOLICITANTE y FINANZAS son notificaciones independientes.
@@ -58,7 +57,7 @@ export function registerApprovalRoutes(app: Express) {
         if (finanzasEmail && finanzasEmail !== requesterEmail) recipientCopies.push({ to: finanzasEmail, label: 'FINANZAS', subjectSuffix: 'FINANZAS' });
 
         if (!finanzasEmail) {
-          console.error('[FINANZAS] No se enviará la notificación porque FINANZAS_URL/FINANZAS_EMAIL no está configurada o apunta a sistemas@dimer.com.mx.');
+          console.error('[FINANZAS] No se enviará la notificación porque FINANZAS_EMAIL/FINANZAS_URL no está configurada o apunta a sistemas@dimer.com.mx.');
         }
 
         for (const recipient of recipientCopies) {

@@ -18,37 +18,60 @@ const u32 = (value: number) => { const a = new Uint8Array(4); new DataView(a.buf
 const concatBytes = (...parts: Uint8Array[]) => { const total = parts.reduce((sum, part) => sum + part.length, 0); const result = new Uint8Array(total); let offset = 0; parts.forEach((part) => { result.set(part, offset); offset += part.length; }); return result; };
 
 const zipStore = (files: Array<{ name: string; data: Uint8Array }>) => {
-  const encoder = new TextEncoder(); const localParts: Uint8Array[] = []; const centralParts: Uint8Array[] = []; let offset = 0;
+  const encoder = new TextEncoder();
+  const localParts: Uint8Array[] = [];
+  const centralParts: Uint8Array[] = [];
+  let offset = 0;
   files.forEach(({ name, data }) => {
-    const nameBytes = encoder.encode(name); const crc = crc32(data);
-    const localHeader = concatBytes(u32(0x04034b50), u16(20), u16(0x0800), u16(0), u16(0), u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0), nameBytes);
+    const nameBytes = encoder.encode(name);
+    const crc = crc32(data);
+    const localHeader = concatBytes(
+      u32(0x04034b50), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
+      u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0), nameBytes,
+    );
     localParts.push(localHeader, data);
-    // Central-directory header: signature + 6 UInt16 fields before CRC (version-made, version-needed, flags, compression, time, date).
-    const centralHeader = concatBytes(u32(0x02014b50), u16(20), u16(20), u16(0x0800), u16(0), u16(0), u16(0), u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(offset), nameBytes);
-    centralParts.push(centralHeader); offset += localHeader.length + data.length;
+    const centralHeader = concatBytes(
+      u32(0x02014b50), u16(20), u16(20), u16(0x0800), u16(0), u16(0), u16(0),
+      u32(crc), u32(data.length), u32(data.length), u16(nameBytes.length), u16(0), u16(0),
+      u16(0), u16(0), u32(0), u32(offset), nameBytes,
+    );
+    centralParts.push(centralHeader);
+    offset += localHeader.length + data.length;
   });
-  const centralDirectory = concatBytes(...centralParts); const localDirectory = concatBytes(...localParts);
-  const end = concatBytes(u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length), u32(centralDirectory.length), u32(localDirectory.length), u16(0));
+  const localDirectory = concatBytes(...localParts);
+  const centralDirectory = concatBytes(...centralParts);
+  const end = concatBytes(
+    u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length),
+    u32(centralDirectory.length), u32(localDirectory.length), u16(0),
+  );
   return concatBytes(localDirectory, centralDirectory, end);
 };
 
 const createXlsxBlob = (rows: Array<Array<string | number>>) => {
   const encoder = new TextEncoder();
   const columnName = (index: number) => { let n = index + 1; let result = ''; while (n > 0) { const remainder = (n - 1) % 26; result = String.fromCharCode(65 + remainder) + result; n = Math.floor((n - 1) / 26); } return result; };
-  const cells = rows.map((row, rowIndex) => {
-    const cellsXml = row.map((value, colIndex) => { const ref = `${columnName(colIndex)}${rowIndex + 1}`; const isNumber = typeof value === 'number' && Number.isFinite(value); const style = rowIndex === 0 ? '1' : (colIndex === 6 || colIndex === 7 ? '2' : '0'); if (isNumber) return `<c r="${ref}" s="${style}"><v>${value}</v></c>`; return `<c r="${ref}" s="${style}" t="inlineStr"><is><t>${excelXmlEscape(value)}</t></is></c>`; }).join(''); return `<row r="${rowIndex + 1}">${cellsXml}</row>`;
+  const safeRows = rows.length > 0 ? rows : [['Sin datos']];
+  const cells = safeRows.map((row, rowIndex) => {
+    const cellsXml = row.map((value, colIndex) => {
+      const ref = `${columnName(colIndex)}${rowIndex + 1}`;
+      const isNumber = typeof value === 'number' && Number.isFinite(value);
+      if (isNumber) return `<c r="${ref}"><v>${value}</v></c>`;
+      return `<c r="${ref}" t="inlineStr"><is><t>${excelXmlEscape(value)}</t></is></c>`;
+    }).join('');
+    return `<row r="${rowIndex + 1}">${cellsXml}</row>`;
   }).join('');
-  const lastColumn = columnName((rows[0]?.length || 1) - 1);
-  const worksheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${lastColumn}${rows.length || 1}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetData>${cells}</sheetData><autoFilter ref="A1:${lastColumn}${rows.length || 1}"/><sheetFormatPr defaultRowHeight="15"/></worksheet>`;
+  const lastColumn = columnName((safeRows[0]?.length || 1) - 1);
+  const worksheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${lastColumn}${safeRows.length}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetData>${cells}</sheetData><autoFilter ref="A1:${lastColumn}${safeRows.length}"/><pageMargins left="0.7" right="0.7" top="0.75" bottom="0.75" header="0.3" footer="0.3"/></worksheet>`;
   const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Solicitudes" sheetId="1" r:id="rId1"/></sheets></workbook>`;
-  const workbookRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
-  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;$&quot;#,##0.00"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Aptos"/></font><font><b/><sz val="11"/><name val="Aptos"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="E2E8F0"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="0" fontId="1" fillId="1" borderId="0" applyFont="1" applyFill="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" applyNumberFormat="1"/></cellXfs></styleSheet>`;
-  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
+  const workbookRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`;
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`;
   const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
   return new Blob([zipStore([
-    { name: '[Content_Types].xml', data: encoder.encode(contentTypes) }, { name: '_rels/.rels', data: encoder.encode(rootRels) },
-    { name: 'xl/workbook.xml', data: encoder.encode(workbook) }, { name: 'xl/_rels/workbook.xml.rels', data: encoder.encode(workbookRels) },
-    { name: 'xl/styles.xml', data: encoder.encode(styles) }, { name: 'xl/worksheets/sheet1.xml', data: encoder.encode(worksheet) },
+    { name: '[Content_Types].xml', data: encoder.encode(contentTypes) },
+    { name: '_rels/.rels', data: encoder.encode(rootRels) },
+    { name: 'xl/workbook.xml', data: encoder.encode(workbook) },
+    { name: 'xl/_rels/workbook.xml.rels', data: encoder.encode(workbookRels) },
+    { name: 'xl/worksheets/sheet1.xml', data: encoder.encode(worksheet) },
   ])], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
 };
 const formatDate = (value?: string) => { if (!value) return ''; const date = new Date(value); return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('es-MX'); };

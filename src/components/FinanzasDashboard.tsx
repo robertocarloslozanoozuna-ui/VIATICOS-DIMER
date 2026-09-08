@@ -1,10 +1,12 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import {
   BarChart3,
   BriefcaseBusiness,
   CalendarDays,
   CheckCircle2,
   CircleDollarSign,
+  Download,
+  FileSpreadsheet,
   MapPin,
   TrendingUp,
   UserRound,
@@ -35,6 +37,124 @@ const monthKey = (date: string) => {
 const monthLabel = (key: string) => {
   const [year, month] = key.split('-').map(Number);
   return new Date(year, month - 1, 1).toLocaleDateString('es-MX', { month: 'short' }).replace('.', '');
+};
+
+const excelXmlEscape = (value: unknown) => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&apos;');
+
+const crc32 = (input: Uint8Array) => {
+  let crc = 0xffffffff;
+  for (const byte of input) {
+    crc ^= byte;
+    for (let i = 0; i < 8; i += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+};
+
+const u16 = (value: number) => {
+  const a = new Uint8Array(2);
+  new DataView(a.buffer).setUint16(0, value, true);
+  return a;
+};
+
+const u32 = (value: number) => {
+  const a = new Uint8Array(4);
+  new DataView(a.buffer).setUint32(0, value >>> 0, true);
+  return a;
+};
+
+const concatBytes = (...parts: Uint8Array[]) => {
+  const total = parts.reduce((sum, part) => sum + part.length, 0);
+  const result = new Uint8Array(total);
+  let offset = 0;
+  parts.forEach((part) => {
+    result.set(part, offset);
+    offset += part.length;
+  });
+  return result;
+};
+
+const zipStore = (files: Array<{ name: string; data: Uint8Array }>) => {
+  const encoder = new TextEncoder();
+  const localParts: Uint8Array[] = [];
+  const centralParts: Uint8Array[] = [];
+  let offset = 0;
+
+  files.forEach(({ name, data }) => {
+    const nameBytes = encoder.encode(name);
+    const crc = crc32(data);
+    const localHeader = concatBytes(
+      u32(0x04034b50), u16(20), u16(0x0800), u16(0), u16(0), u32(crc), u32(data.length), u32(data.length),
+      u16(nameBytes.length), u16(0), nameBytes,
+    );
+    localParts.push(localHeader, data);
+
+    const centralHeader = concatBytes(
+      u32(0x02014b50), u16(20), u16(20), u16(0x0800), u16(0), u16(0), u32(crc), u32(data.length), u32(data.length),
+      u16(nameBytes.length), u16(0), u16(0), u16(0), u16(0), u32(0), u32(offset), nameBytes,
+    );
+    centralParts.push(centralHeader);
+    offset += localHeader.length + data.length;
+  });
+
+  const centralDirectory = concatBytes(...centralParts);
+  const localDirectory = concatBytes(...localParts);
+  const end = concatBytes(
+    u32(0x06054b50), u16(0), u16(0), u16(files.length), u16(files.length), u32(centralDirectory.length), u32(localDirectory.length), u16(0),
+  );
+  return concatBytes(localDirectory, centralDirectory, end);
+};
+
+const createXlsxBlob = (rows: Array<Array<string | number>>) => {
+  const encoder = new TextEncoder();
+  const columnName = (index: number) => {
+    let n = index + 1;
+    let result = '';
+    while (n > 0) {
+      const remainder = (n - 1) % 26;
+      result = String.fromCharCode(65 + remainder) + result;
+      n = Math.floor((n - 1) / 26);
+    }
+    return result;
+  };
+
+  const cells = rows.map((row, rowIndex) => {
+    const cellsXml = row.map((value, colIndex) => {
+      const ref = `${columnName(colIndex)}${rowIndex + 1}`;
+      const isNumber = typeof value === 'number' && Number.isFinite(value);
+      const style = rowIndex === 0 ? '1' : (colIndex === 6 || colIndex === 7 ? '2' : '0');
+      if (isNumber) return `<c r="${ref}" s="${style}"><v>${value}</v></c>`;
+      return `<c r="${ref}" s="${style}" t="inlineStr"><is><t>${excelXmlEscape(value)}</t></is></c>`;
+    }).join('');
+    return `<row r="${rowIndex + 1}">${cellsXml}</row>`;
+  }).join('');
+
+  const lastColumn = columnName((rows[0]?.length || 1) - 1);
+  const worksheet = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><dimension ref="A1:${lastColumn}${rows.length || 1}"/><sheetViews><sheetView workbookViewId="0"/></sheetViews><sheetData>${cells}</sheetData><autoFilter ref="A1:${lastColumn}${rows.length || 1}"/><sheetFormatPr defaultRowHeight="15"/></worksheet>`;
+  const workbook = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Solicitudes" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+  const workbookRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+  const styles = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="1"><numFmt numFmtId="164" formatCode="&quot;$&quot;#,##0.00"/></numFmts><fonts count="2"><font><sz val="11"/><name val="Aptos"/></font><font><b/><sz val="11"/><name val="Aptos"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="solid"><fgColor rgb="E2E8F0"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/><xf numFmtId="0" fontId="1" fillId="1" borderId="0" applyFont="1" applyFill="1"/><xf numFmtId="164" fontId="0" fillId="0" borderId="0" applyNumberFormat="1"/></cellXfs></styleSheet>`;
+  const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
+  const rootRels = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
+  const bytes = zipStore([
+    { name: '[Content_Types].xml', data: encoder.encode(contentTypes) },
+    { name: '_rels/.rels', data: encoder.encode(rootRels) },
+    { name: 'xl/workbook.xml', data: encoder.encode(workbook) },
+    { name: 'xl/_rels/workbook.xml.rels', data: encoder.encode(workbookRels) },
+    { name: 'xl/styles.xml', data: encoder.encode(styles) },
+    { name: 'xl/worksheets/sheet1.xml', data: encoder.encode(worksheet) },
+  ]);
+  return new Blob([bytes], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+};
+
+const formatDate = (value?: string) => {
+  if (!value) return '';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString('es-MX');
 };
 
 function RankedBars({
@@ -74,6 +194,54 @@ export default function FinanzasDashboard({ requests }: FinanzasDashboardProps) 
   const now = new Date();
   const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
   const currentMonthRequests = safeRequests.filter((request) => monthKey(request.createdAt) === currentMonthKey);
+
+  const [reportStartDate, setReportStartDate] = useState('');
+  const [reportEndDate, setReportEndDate] = useState('');
+  const [reportStatus, setReportStatus] = useState('TODOS');
+  const [reportDepartment, setReportDepartment] = useState('TODOS');
+  const [reportRequester, setReportRequester] = useState('TODOS');
+
+  const departments = useMemo(() => Array.from(new Set(safeRequests.map((r) => r.department || r.user?.department || 'Sin departamento'))).sort(), [safeRequests]);
+  const requesters = useMemo(() => Array.from(new Set(safeRequests.map((r) => r.requesterName || r.user?.name || 'Colaborador'))).sort(), [safeRequests]);
+
+  const reportRequests = useMemo(() => safeRequests.filter((request) => {
+    const requestDate = new Date(request.requestDate || request.createdAt);
+    const requestDateOnly = Number.isNaN(requestDate.getTime()) ? '' : requestDate.toISOString().slice(0, 10);
+    const requester = request.requesterName || request.user?.name || 'Colaborador';
+    const department = request.department || request.user?.department || 'Sin departamento';
+    const matchesStart = !reportStartDate || requestDateOnly >= reportStartDate;
+    const matchesEnd = !reportEndDate || requestDateOnly <= reportEndDate;
+    const matchesStatus = reportStatus === 'TODOS' || request.status === reportStatus;
+    const matchesDepartment = reportDepartment === 'TODOS' || department === reportDepartment;
+    const matchesRequester = reportRequester === 'TODOS' || requester === reportRequester;
+    return matchesStart && matchesEnd && matchesStatus && matchesDepartment && matchesRequester;
+  }), [safeRequests, reportStartDate, reportEndDate, reportStatus, reportDepartment, reportRequester]);
+
+  const downloadReport = () => {
+    const rows: Array<Array<string | number>> = [
+      ['Folio', 'Solicitante', 'Departamento', 'Fecha de solicitud', 'Fecha de salida', 'Fecha de regreso', 'Monto solicitado', 'Monto autorizado', 'Estado'],
+      ...reportRequests.map((request) => [
+        request.folio,
+        request.requesterName || request.user?.name || 'Colaborador',
+        request.department || request.user?.department || 'Sin departamento',
+        formatDate(request.requestDate || request.createdAt),
+        formatDate(request.startDate),
+        formatDate(request.endDate),
+        Number(request.amountRequested || 0),
+        Number(request.amountAuthorized ?? request.amountRequested ?? 0),
+        request.status,
+      ]),
+    ];
+    const blob = createXlsxBlob(rows);
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `reporte-viaticos-${new Date().toISOString().slice(0, 10)}.xlsx`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
 
   const requestedThisMonth = currentMonthRequests.reduce((sum, request) => sum + Number(request.amountRequested || 0), 0);
   const authorizedThisMonth = currentMonthRequests
@@ -199,6 +367,68 @@ export default function FinanzasDashboard({ requests }: FinanzasDashboardProps) 
             </div>
           );
         })}
+      </div>
+
+      <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center"><FileSpreadsheet className="w-4 h-4" /></div>
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">Reporte de solicitudes</h2>
+                <p className="text-[10px] text-slate-400">Filtra las solicitudes y descarga el reporte para Finanzas.</p>
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={downloadReport}
+            disabled={reportRequests.length === 0}
+            className="shrink-0 inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-black shadow-sm transition disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Download className="w-4 h-4" />
+            DESCARGAR REPORTE EXCEL
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-2.5 mt-4 pt-4 border-t border-slate-100">
+          <label className="text-[10px] font-bold text-slate-500">Fecha de solicitud desde
+            <input type="date" value={reportStartDate} onChange={(e) => setReportStartDate(e.target.value)} className="mt-1 w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+          </label>
+          <label className="text-[10px] font-bold text-slate-500">Fecha de solicitud hasta
+            <input type="date" value={reportEndDate} onChange={(e) => setReportEndDate(e.target.value)} className="mt-1 w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500" />
+          </label>
+          <label className="text-[10px] font-bold text-slate-500">Estado
+            <select value={reportStatus} onChange={(e) => setReportStatus(e.target.value)} className="mt-1 w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <option value="TODOS">Todos</option>
+              <option value="PENDIENTE_APROBACION">Pendiente de aprobación</option>
+              <option value="APROBADA">Aprobada</option>
+              <option value="RECHAZADA">Rechazada</option>
+              <option value="PAGADA">Pagada</option>
+              <option value="COMPROBADA">Comprobada</option>
+              <option value="FINALIZADA">Finalizada</option>
+              <option value="CANCELADA">Cancelada</option>
+            </select>
+          </label>
+          <label className="text-[10px] font-bold text-slate-500">Departamento
+            <select value={reportDepartment} onChange={(e) => setReportDepartment(e.target.value)} className="mt-1 w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <option value="TODOS">Todos</option>
+              {departments.map((department) => <option key={department} value={department}>{department}</option>)}
+            </select>
+          </label>
+          <label className="text-[10px] font-bold text-slate-500">Solicitante
+            <select value={reportRequester} onChange={(e) => setReportRequester(e.target.value)} className="mt-1 w-full px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-indigo-500">
+              <option value="TODOS">Todos</option>
+              {requesters.map((requester) => <option key={requester} value={requester}>{requester}</option>)}
+            </select>
+          </label>
+        </div>
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-[10px] text-slate-500">
+          <span><strong className="text-slate-800">{reportRequests.length}</strong> solicitud(es) coinciden con los filtros.</span>
+          <span>Monto solicitado: <strong className="text-slate-800">{money(reportRequests.reduce((sum, request) => sum + Number(request.amountRequested || 0), 0))}</strong></span>
+          <span>Monto autorizado: <strong className="text-slate-800">{money(reportRequests.reduce((sum, request) => sum + amountOf(request), 0))}</strong></span>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-4">

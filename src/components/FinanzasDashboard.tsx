@@ -117,7 +117,7 @@ export default function FinanzasDashboard({ requests }: FinanzasDashboardProps) 
     return {
       key,
       label: monthLabel(key),
-      value: monthRequests.reduce((sum, request) => sum + Number(request.amountRequested || 0), 0),
+      value: monthRequests.reduce((sum, request) => sum + amountOf(request), 0),
     };
   });
   const maxMonth = Math.max(...monthlyData.map((item) => item.value), 1);
@@ -221,7 +221,7 @@ export default function FinanzasDashboard({ requests }: FinanzasDashboardProps) 
         <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm min-w-0">
           <div className="flex items-center gap-2 mb-4">
             <div className="w-8 h-8 rounded-lg bg-sky-50 text-sky-600 flex items-center justify-center"><BarChart3 className="w-4 h-4" /></div>
-            <div><h2 className="text-sm font-bold text-slate-900">Viáticos por mes</h2><p className="text-[10px] text-slate-400">Solicitado durante los últimos 6 meses</p></div>
+            <div><h2 className="text-sm font-bold text-slate-900">Viáticos por mes</h2><p className="text-[10px] text-slate-400">Monto autorizado durante los últimos 6 meses</p></div>
           </div>
           <div className="h-48 flex items-end gap-2 sm:gap-4 border-b border-slate-100 px-1 pt-4">
             {monthlyData.map((item) => (

@@ -29,10 +29,10 @@ export default function SolicitarView({ currentUser, onRequestCreated, onNavigat
   const [amountRequested, setAmountRequested] = useState('');
   const [comments, setComments] = useState('');
   const [showCalculator, setShowCalculator] = useState(false);
-  const [calcHotel, setCalcHotel] = useState('6000');
-  const [calcTransport, setCalcTransport] = useState('5000');
-  const [calcFood, setCalcFood] = useState('3000');
-  const [calcMisc, setCalcMisc] = useState('850');
+  const [calcHotel, setCalcHotel] = useState('0');
+  const [calcTransport, setCalcTransport] = useState('0');
+  const [calcFood, setCalcFood] = useState('0');
+  const [calcMisc, setCalcMisc] = useState('0');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [copiedJson, setCopiedJson] = useState(false);

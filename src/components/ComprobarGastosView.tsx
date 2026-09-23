@@ -1392,14 +1392,17 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
                       <div>
                         <span className="text-[10px] text-emerald-700 font-bold uppercase block">Ficha / Comprobante</span>
-                        {refund.receiptFile ? (
+                        {refund.receiptFile || refund.signedReceiptFile ? (
                           <button
                             type="button"
-                            onClick={() => downloadAttachment(refund.receiptFile!)}
+                            onClick={() => downloadAttachment((refund.receiptFile || refund.signedReceiptFile)!)}
                             className="inline-flex items-center gap-1 text-emerald-800 hover:text-emerald-950 font-bold underline text-xs cursor-pointer"
+                            title={refund.receiptFile ? 'Descargar ficha / comprobante del reintegro' : 'Descargar el PDF adjunto del reembolso'}
                           >
                             <Download className="w-3.5 h-3.5 text-emerald-700" />
-                            <span className="truncate max-w-[130px]">{refund.receiptFile.name}</span>
+                            <span className="truncate max-w-[130px]">
+                              {(refund.receiptFile || refund.signedReceiptFile)!.name}
+                            </span>
                           </button>
                         ) : (
                           <span className="text-slate-400 italic">Sin archivo adjunto</span>

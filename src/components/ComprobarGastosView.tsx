@@ -427,6 +427,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       setRefundReference(refund.reference);
       setRefundDate(refund.refundDate);
       setRefundFile(refund.receiptFile || null);
+      setSignedRefundFile(refund.signedReceiptFile || null);
       setRefundNotes(refund.notes || '');
     } else {
       const defaultAmount = difference > 0 ? String(difference.toFixed(2)) : '';
@@ -435,6 +436,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       setRefundReference('');
       setRefundDate(new Date().toISOString().split('T')[0]);
       setRefundFile(null);
+      setSignedRefundFile(null);
       setRefundNotes('');
     }
     setShowRefundModal(true);
@@ -510,6 +512,8 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   function handleRemoveRefund() {
     if (confirm('¿Deseas eliminar el comprobante de reembolso registrado?')) {
       setRefund(null);
+      setRefundFile(null);
+      setSignedRefundFile(null);
       setActionSuccess('Reembolso eliminado.');
     }
   }

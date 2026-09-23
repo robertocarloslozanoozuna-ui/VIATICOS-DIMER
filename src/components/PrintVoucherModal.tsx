@@ -1,6 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Printer, X, Building2, CheckCircle2, ShieldCheck } from 'lucide-react';
-import type { TravelRequest } from '../types';
+import type { TravelRequest, ExpenseVerification } from '../types';
+import { safeFetchJson } from '../utils/apiHelper';
 
 interface PrintVoucherModalProps {
   request: TravelRequest | null;
@@ -9,6 +10,22 @@ interface PrintVoucherModalProps {
 
 export default function PrintVoucherModal({ request, onClose }: PrintVoucherModalProps) {
   if (!request) return null;
+
+  const [verification, setVerification] = useState<ExpenseVerification | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadVerification = async () => {
+      try {
+        const data = await safeFetchJson<any>(`/api/expenses/search?folio=${encodeURIComponent(request.folio)}`);
+        if (!cancelled && data?.verification) setVerification(data.verification as ExpenseVerification);
+      } catch {
+        if (!cancelled) setVerification(null);
+      }
+    };
+    loadVerification();
+    return () => { cancelled = true; };
+  }, [request.folio]);
 
   const handlePrint = () => {
     window.print();
@@ -134,11 +151,41 @@ export default function PrintVoucherModal({ request, onClose }: PrintVoucherModa
               <span className="font-bold text-slate-500 uppercase block">Descripción / Detalle de lo Solicitado</span>
               <p className="text-slate-800 mt-0.5 leading-relaxed font-sans">{request.detail || request.reason}</p>
             </div>
-
-            {request.comments && (
+            {(request.hotelCost || request.foodCost || request.transportCost || request.miscCost || request.comments) && (
               <div>
                 <span className="font-bold text-slate-500 uppercase block">Observaciones / Desglose</span>
-                <p className="text-slate-600 italic mt-0.5">{request.comments}</p>
+                <div className="mt-1 space-y-1">
+                  {Number(request.hotelCost || 0) > 0 && (
+                    <div className="flex items-center justify-between gap-4 border-b border-slate-200 pb-1">
+                      <span className="text-slate-700 font-medium">Hospedaje</span>
+                      <span className="font-bold text-slate-900">{formatCurrency(Number(request.hotelCost))}</span>
+                    </div>
+                  )}
+                  {Number(request.foodCost || 0) > 0 && (
+                    <div className="flex items-center justify-between gap-4 border-b border-slate-200 pb-1">
+                      <span className="text-slate-700 font-medium">Alimentos</span>
+                      <span className="font-bold text-slate-900">{formatCurrency(Number(request.foodCost))}</span>
+                    </div>
+                  )}
+                  {Number(request.transportCost || 0) > 0 && (
+                    <div className="flex items-center justify-between gap-4 border-b border-slate-200 pb-1">
+                      <span className="text-slate-700 font-medium">Transporte</span>
+                      <span className="font-bold text-slate-900">{formatCurrency(Number(request.transportCost))}</span>
+                    </div>
+                  )}
+                  {Number(request.miscCost || 0) > 0 && (
+                    <div className="flex items-center justify-between gap-4 border-b border-slate-200 pb-1">
+                      <span className="text-slate-700 font-medium">Otros</span>
+                      <span className="font-bold text-slate-900">{formatCurrency(Number(request.miscCost))}</span>
+                    </div>
+                  )}
+                  {request.comments && (
+                    <div className="pt-1">
+                      <span className="font-bold text-slate-500 uppercase text-[10px] block">Observaciones</span>
+                      <p className="text-slate-600 italic mt-0.5">{request.comments}</p>
+                    </div>
+                  )}
+                </div>
               </div>
             )}
           </div>
@@ -157,6 +204,12 @@ export default function PrintVoucherModal({ request, onClose }: PrintVoucherModa
                   <td className="py-3 px-4 font-semibold text-slate-700">Monto Total Solicitado por el Empleado</td>
                   <td className="py-3 px-4 text-right font-bold text-slate-900">
                     {formatCurrency(request.amountRequested)}
+                  </td>
+                </tr>
+                <tr className="bg-amber-50">
+                  <td className="py-3 px-4 font-bold text-amber-900">Monto Reembolsado</td>
+                  <td className="py-3 px-4 text-right font-black text-amber-800 text-base">
+                    {formatCurrency(Number(verification?.refund?.amount || 0))}
                   </td>
                 </tr>
                 <tr className="bg-emerald-50">

@@ -14,6 +14,14 @@ export default function PrintVoucherModal({ request, onClose }: PrintVoucherModa
   const [verification, setVerification] = useState<ExpenseVerification | null>(null);
 
   useEffect(() => {
+    const handleEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleEscape);
+    return () => window.removeEventListener('keydown', handleEscape);
+  }, [onClose]);
+
+  useEffect(() => {
     let cancelled = false;
     const loadVerification = async () => {
       try {
@@ -35,10 +43,15 @@ export default function PrintVoucherModal({ request, onClose }: PrintVoucherModa
     new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(val);
 
   return (
-    <div className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full border border-slate-200 overflow-hidden print:m-0 print:border-none print:shadow-none animate-in fade-in duration-150">
+    <div
+      className="fixed inset-0 z-50 bg-slate-900/70 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[calc(100vh-2rem)] border border-slate-200 overflow-hidden print:m-0 print:border-none print:shadow-none animate-in fade-in duration-150">
         {/* Modal Controls (Hidden in Print) */}
-        <div className="bg-slate-900 p-4 text-white flex items-center justify-between print:hidden">
+        <div className="sticky top-0 z-20 bg-slate-900 p-4 text-white flex items-center justify-between print:hidden shadow-md">
           <div className="flex items-center gap-2">
             <Printer className="w-5 h-5 text-blue-400" />
             <span className="font-bold text-sm">Póliza Oficial de Viáticos &mdash; {request.folio}</span>
@@ -52,8 +65,11 @@ export default function PrintVoucherModal({ request, onClose }: PrintVoucherModa
               <span>Imprimir Documento</span>
             </button>
             <button
+              type="button"
               onClick={onClose}
-              className="p-1.5 text-slate-400 hover:text-white rounded-lg"
+              aria-label="Cerrar póliza"
+              title="Cerrar póliza (Esc)"
+              className="ml-1 inline-flex h-9 w-9 items-center justify-center text-slate-300 hover:text-white hover:bg-slate-700 rounded-lg border border-slate-700 transition cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
@@ -245,9 +261,19 @@ export default function PrintVoucherModal({ request, onClose }: PrintVoucherModa
           </div>
 
           {/* Footer */}
-          <div className="pt-6 border-t border-slate-200 text-[10px] text-slate-400 flex justify-between items-center">
+          <div className="pt-6 border-t border-slate-200 text-[10px] text-slate-400 flex flex-col sm:flex-row justify-between items-center gap-3">
             <span>Sistema Automatizado de Gestión de Viáticos &copy; 2026</span>
-            <span>Documento Oficial con Validez Interna</span>
+            <div className="flex items-center gap-3">
+              <span>Documento Oficial con Validez Interna</span>
+              <button
+                type="button"
+                onClick={onClose}
+                className="print:hidden inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-900 hover:bg-slate-700 text-white rounded-lg text-[10px] font-bold transition cursor-pointer"
+              >
+                <X className="w-3 h-3" />
+                Cerrar
+              </button>
+            </div>
           </div>
         </div>
       </div>

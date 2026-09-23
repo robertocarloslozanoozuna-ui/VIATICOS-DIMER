@@ -54,7 +54,7 @@ export default function RefundReceiptModal({
         <div className="bg-white shadow-2xl print:shadow-none print:rounded-none rounded-b-xl p-6 text-slate-900">
           <div className="text-center border-b-2 border-slate-900 pb-4">
             <div className="mx-auto w-10 h-10 rounded-lg bg-slate-900 text-white flex items-center justify-center font-black text-lg">D</div>
-            <h1 className="mt-2 text-base font-black uppercase">DIMER CORPORATIVO</h1>
+            <h1 className="mt-2 text-base font-black uppercase text-center">DIMER</h1>
             <p className="text-[11px] font-bold uppercase tracking-wider text-slate-500">Recibo de Reembolso de Viáticos</p>
           </div>
 

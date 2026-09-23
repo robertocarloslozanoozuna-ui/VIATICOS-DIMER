@@ -1422,15 +1422,12 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                 ) : (
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs">
                     <div className="space-y-0.5">
+                    {!isFavorEmpresa && (
                       <p className="font-bold text-slate-800">
-                        {isFavorEmpresa
-                          ? `Tienes un sobrante a devolver a Finanzas de ${formatCurrency(difference)} MXN.`
-                          : 'No se ha registrado ningún reembolso de dinero sobrante a Finanzas.'}
+                        No se ha registrado ningún reembolso de dinero sobrante a Finanzas.
                       </p>
-                      <p className="text-[11px] text-slate-500">
-                        Cuenta bancaria oficial BBVA: <strong>0123456789</strong> &bull; CLABE: <strong>012180001234567890</strong> &bull; Titular: <strong>Dimer Corporativo S.A. de C.V.</strong>
-                      </p>
-                    </div>
+                    )}
+                  </div>
 
                     {canEdit && (
                       <button

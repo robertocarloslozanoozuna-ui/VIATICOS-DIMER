@@ -7,7 +7,7 @@ import {
 } from 'lucide-react';
 import DimerLogo from './DimerLogo';
 import type { User, Role } from '../types';
-import { userHasAnyRole, userHasRole } from '../types';
+import { userHasAnyRole, userHasRole, userHasPermission } from '../types';
 
 interface NavbarProps {
   currentUser: User | null;
@@ -38,7 +38,7 @@ export default function Navbar({
   const isSoloLecturaOnly = hasSoloLectura && !hasOperationalRole;
   const hasSolicitante = currentUser ? userHasAnyRole(currentUser, ['SOLICITANTE', 'EMPLEADO']) : false;
   const hasJefe = currentUser ? userHasRole(currentUser, 'JEFE') : false;
-  const hasFinanzas = currentUser ? userHasRole(currentUser, 'FINANZAS') : false;
+  const hasFinanzas = currentUser ? (userHasRole(currentUser, 'FINANZAS') || userHasPermission(currentUser, 'ver_reportes')) : false;
 
   const getRoleDisplayName = (role: Role) => {
     switch (role) {

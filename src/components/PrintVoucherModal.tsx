@@ -151,7 +151,7 @@ export default function PrintVoucherModal({ request, onClose }: PrintVoucherModa
               <span className="font-bold text-slate-500 uppercase block">Descripción / Detalle de lo Solicitado</span>
               <p className="text-slate-800 mt-0.5 leading-relaxed font-sans">{request.detail || request.reason}</p>
             </div>
-            {(request.hotelCost || request.foodCost || request.transportCost || request.miscCost || request.comments) && (
+            {(request.hotelCost || request.foodCost || request.transportCost || request.miscCost || request.comments || verification?.refund?.amount) && (
               <div>
                 <span className="font-bold text-slate-500 uppercase block">Observaciones / Desglose</span>
                 <div className="mt-1 space-y-1">
@@ -188,6 +188,14 @@ export default function PrintVoucherModal({ request, onClose }: PrintVoucherModa
                 </div>
               </div>
             )}
+            {verification?.refund?.amount && Number(verification.refund.amount) > 0 && (
+              <div className="mt-3 pt-2 border-t border-amber-200">
+                <div className="flex items-center justify-between gap-4">
+                  <span className="font-bold text-amber-900 uppercase">Monto Reembolsado</span>
+                  <span className="font-black text-amber-800 text-base">{formatCurrency(Number(verification.refund.amount))}</span>
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Cuadro Financiero */}
@@ -204,12 +212,6 @@ export default function PrintVoucherModal({ request, onClose }: PrintVoucherModa
                   <td className="py-3 px-4 font-semibold text-slate-700">Monto Total Solicitado por el Empleado</td>
                   <td className="py-3 px-4 text-right font-bold text-slate-900">
                     {formatCurrency(request.amountRequested)}
-                  </td>
-                </tr>
-                <tr className="bg-amber-50">
-                  <td className="py-3 px-4 font-bold text-amber-900">Monto Reembolsado</td>
-                  <td className="py-3 px-4 text-right font-black text-amber-800 text-base">
-                    {formatCurrency(Number(verification?.refund?.amount || 0))}
                   </td>
                 </tr>
                 <tr className="bg-emerald-50">

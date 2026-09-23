@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   BarChart3, BriefcaseBusiness, CalendarDays, CheckCircle2, CircleDollarSign, Download,
   FileSpreadsheet, MapPin, TrendingUp, UserRound, WalletCards, XCircle,
@@ -6,6 +6,11 @@ import {
 import type { TravelRequest } from '../types';
 
 interface FinanzasDashboardProps { requests: TravelRequest[]; }
+interface ExpenseVerificationSummary {
+  folio: string;
+  totalExpenses?: number;
+  refund?: { amount?: number; monto?: number };
+}
 const money = (value: number) => new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN', maximumFractionDigits: 0 }).format(value || 0);
 const amountOf = (request: TravelRequest) => Number(request.amountAuthorized ?? request.amountRequested ?? 0);
 const monthKey = (date: string) => { const value = new Date(date); if (Number.isNaN(value.getTime())) return ''; return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}`; };
@@ -84,10 +89,25 @@ function RankedBars({ items, valueFormatter = money }: { items: Array<{ label: s
 export default function FinanzasDashboard({ requests }: FinanzasDashboardProps) {
   const safeRequests = Array.isArray(requests) ? requests : []; const now = new Date(); const currentMonthKey = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`; const currentMonthRequests = safeRequests.filter((request) => monthKey(request.createdAt) === currentMonthKey);
   const [reportStartDate, setReportStartDate] = useState(''); const [reportEndDate, setReportEndDate] = useState(''); const [reportStatus, setReportStatus] = useState('TODOS'); const [reportDepartment, setReportDepartment] = useState('TODOS'); const [reportRequester, setReportRequester] = useState('TODOS');
+  const [expenseVerifications, setExpenseVerifications] = useState<ExpenseVerificationSummary[]>([]);
+  useEffect(() => {
+    let active = true;
+    fetch('/api/expenses/list', { credentials: 'include' })
+      .then((response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (!active || !Array.isArray(data?.verifications)) return;
+        setExpenseVerifications(data.verifications);
+      })
+      .catch(() => {
+        // El reporte conserva su funcionamiento actual aunque no esté disponible la comprobación de gastos.
+      });
+    return () => { active = false; };
+  }, []);
+  const verificationByFolio = useMemo(() => new Map(expenseVerifications.map((verification) => [String(verification.folio).toUpperCase(), verification])), [expenseVerifications]);
   const departments = useMemo(() => Array.from(new Set(safeRequests.map((r) => r.department || r.user?.department || 'Sin departamento'))).sort(), [safeRequests]);
   const requesters = useMemo(() => Array.from(new Set(safeRequests.map((r) => r.requesterName || r.user?.name || 'Colaborador'))).sort(), [safeRequests]);
   const reportRequests = useMemo(() => safeRequests.filter((request) => { const requestDate = new Date(request.requestDate || request.createdAt); const requestDateOnly = Number.isNaN(requestDate.getTime()) ? '' : requestDate.toISOString().slice(0, 10); const requester = request.requesterName || request.user?.name || 'Colaborador'; const department = request.department || request.user?.department || 'Sin departamento'; return (!reportStartDate || requestDateOnly >= reportStartDate) && (!reportEndDate || requestDateOnly <= reportEndDate) && (reportStatus === 'TODOS' || request.status === reportStatus) && (reportDepartment === 'TODOS' || department === reportDepartment) && (reportRequester === 'TODOS' || requester === reportRequester); }), [safeRequests, reportStartDate, reportEndDate, reportStatus, reportDepartment, reportRequester]);
-  const downloadReport = () => { const rows: Array<Array<string | number>> = [['Folio', 'Solicitante', 'Departamento', 'Fecha de solicitud', 'Fecha de salida', 'Fecha de regreso', 'Monto solicitado', 'Monto autorizado', 'Estado'], ...reportRequests.map((request) => [request.folio, request.requesterName || request.user?.name || 'Colaborador', request.department || request.user?.department || 'Sin departamento', formatDate(request.requestDate || request.createdAt), formatDate(request.startDate), formatDate(request.endDate), Number(request.amountRequested || 0), Number(request.amountAuthorized ?? request.amountRequested ?? 0), request.status])]; const blob = createXlsxBlob(rows); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `reporte-viaticos-${new Date().toISOString().slice(0, 10)}.xlsx`; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); };
+  const downloadReport = () => { const rows: Array<Array<string | number>> = [['Folio', 'Solicitante', 'Departamento', 'Fecha de solicitud', 'Fecha de salida', 'Fecha de regreso', 'Monto solicitado', 'Monto autorizado', 'Gasto total', 'Reembolsado', 'Estado'], ...reportRequests.map((request) => { const verification = verificationByFolio.get(String(request.folio).toUpperCase()); const refunded = Number(verification?.refund?.amount ?? verification?.refund?.monto ?? 0); return [request.folio, request.requesterName || request.user?.name || 'Colaborador', request.department || request.user?.department || 'Sin departamento', formatDate(request.requestDate || request.createdAt), formatDate(request.startDate), formatDate(request.endDate), Number(request.amountRequested || 0), Number(request.amountAuthorized ?? request.amountRequested ?? 0), Number(verification?.totalExpenses || 0), refunded, request.status]; })]; const blob = createXlsxBlob(rows); const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `reporte-viaticos-${new Date().toISOString().slice(0, 10)}.xlsx`; document.body.appendChild(link); link.click(); link.remove(); URL.revokeObjectURL(url); };
   const requestedThisMonth = currentMonthRequests.reduce((sum, request) => sum + Number(request.amountRequested || 0), 0); const authorizedThisMonth = currentMonthRequests.filter((request) => ['APROBADA', 'PAGADA', 'FINALIZADA'].includes(request.status)).reduce((sum, request) => sum + amountOf(request), 0); const pendingPayment = safeRequests.filter((request) => request.status === 'APROBADA').reduce((sum, request) => sum + amountOf(request), 0); const rejectedThisMonth = currentMonthRequests.filter((request) => request.status === 'RECHAZADA').reduce((sum, request) => sum + Number(request.amountRequested || 0), 0);
   const departmentMap = new Map<string, number>(); const employeeMap = new Map<string, number>(); const destinationMap = new Map<string, number>(); safeRequests.forEach((request) => { const department = request.department || request.user?.department || 'Sin departamento'; const employee = request.requesterName || request.user?.name || 'Solicitante'; const destination = request.destination || 'Sin destino'; const amount = amountOf(request); departmentMap.set(department, (departmentMap.get(department) || 0) + amount); employeeMap.set(employee, (employeeMap.get(employee) || 0) + amount); destinationMap.set(destination, (destinationMap.get(destination) || 0) + amount); });
   const rank = (map: Map<string, number>, limit = 6) => [...map.entries()].map(([label, value]) => ({ label, value })).sort((a, b) => b.value - a.value).slice(0, limit); const departmentData = rank(departmentMap); const employeeData = rank(employeeMap); const destinationData = rank(destinationMap);

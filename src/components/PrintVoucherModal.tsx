@@ -49,7 +49,7 @@ export default function PrintVoucherModal({ request, onClose }: PrintVoucherModa
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[calc(100vh-2rem)] border border-slate-200 overflow-hidden print:m-0 print:border-none print:shadow-none animate-in fade-in duration-150">
+      <div className="bg-white rounded-2xl shadow-2xl max-w-3xl w-full max-h-[calc(100vh-2rem)] border border-slate-200 overflow-hidden flex flex-col print:m-0 print:border-none print:shadow-none animate-in fade-in duration-150">
         {/* Modal Controls (Hidden in Print) */}
         <div className="sticky top-0 z-20 bg-slate-900 p-4 text-white flex items-center justify-between print:hidden shadow-md">
           <div className="flex items-center gap-2">
@@ -77,7 +77,7 @@ export default function PrintVoucherModal({ request, onClose }: PrintVoucherModa
         </div>
 
         {/* Printable Document Body */}
-        <div className="p-8 sm:p-10 space-y-6 text-slate-800 bg-white font-sans">
+        <div className="p-8 sm:p-10 space-y-6 text-slate-800 bg-white font-sans overflow-y-auto flex-1 min-h-0 print:overflow-visible">
           {/* Header */}
           <div className="flex items-start justify-between border-b-2 border-slate-900 pb-6">
             <div className="flex items-center gap-3">

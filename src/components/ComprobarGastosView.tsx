@@ -90,12 +90,14 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
   // Refund state (Opción para reembolsar dinero a finanzas que les sobró)
   const [refund, setRefund] = useState<ExpenseRefund | null>(null);
-  const [showRefundModal, setShowRefundModal] = useState<boolean>(false);\n  const [showRefundReceipt, setShowRefundReceipt] = useState<boolean>(false);
+  const [showRefundModal, setShowRefundModal] = useState<boolean>(false);
+  const [showRefundReceipt, setShowRefundReceipt] = useState<boolean>(false);
   const [refundAmount, setRefundAmount] = useState<string>('');
   const [refundMethod, setRefundMethod] = useState<'SPEI' | 'EFECTIVO'>('SPEI');
   const [refundReference, setRefundReference] = useState<string>('');
   const [refundDate, setRefundDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [refundFile, setRefundFile] = useState<ExpenseFileAttachment | null>(null);\n  const [signedRefundFile, setSignedRefundFile] = useState<ExpenseFileAttachment | null>(null);
+  const [refundFile, setRefundFile] = useState<ExpenseFileAttachment | null>(null);
+  const [signedRefundFile, setSignedRefundFile] = useState<ExpenseFileAttachment | null>(null);
   const [refundNotes, setRefundNotes] = useState<string>('');
   const [refundFormError, setRefundFormError] = useState<string | null>(null);
 

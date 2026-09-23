@@ -88,6 +88,7 @@ export async function findFileById(fileId: string): Promise<{ file: ExpenseFileA
       if (item.ticketFile?.id === key) return { file: item.ticketFile, folio: v.folio, concept: item.concept };
     }
     if (v.refund?.receiptFile?.id === key) return { file: v.refund.receiptFile, folio: v.folio, concept: 'Comprobante de Reembolso a Finanzas' };
+    if (v.refund?.signedReceiptFile?.id === key) return { file: v.refund.signedReceiptFile, folio: v.folio, concept: 'Recibo de Reembolso Firmado' };
   }
   return null;
 }

@@ -1,6 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import crypto from 'crypto';
-import { getRequest, updateRequest, recordAuditLog, getUserById, listRoles, sanitizeUser } from './db.js';
+import { getRequest, updateRequest, recordAuditLog, getUserById, hasPermission } from './db.js';
 import { getVerificationByFolio, saveVerification, listAllVerifications, findFileById } from './expenseStorage.js';
 import { sendEmail, buildExpenseVerificationSubmittedEmailHtml } from './mailService.js';
 import { resolveBaseUrl } from './baseUrl.js';
@@ -36,10 +36,10 @@ async function getRequestUser(req: Request): Promise<User | null> {
     const payload = verifyJwt(token);
     const stored = await getUserById(payload.sub);
     if (!stored || stored.status !== 'ACTIVO') return null;
-    const roles = await listRoles();
-    const sanitized = sanitizeUser(stored, roles.find(r => r.id === stored.roleId));
-    (req as any).dimerUser = sanitized;
-    return sanitized;
+    // getUserById() already resolves the effective multi-role permissions.
+    // Re-sanitizing against one role can lose the user's effective RBAC context.
+    (req as any).dimerUser = stored;
+    return stored;
   } catch {
     return null;
   }
@@ -51,6 +51,8 @@ function userIsAdminOrFinanzas(user: User | null): boolean {
   if (roleName === 'ADMIN' || roleName === 'ADMINISTRADOR' || roleName === 'FINANZAS') return true;
   if (user.roles?.some(r => ['ADMIN', 'ADMINISTRADOR', 'FINANZAS', 'ROLE_ADMIN', 'ROLE_FINANZAS'].includes(String(r.name || r.id).toUpperCase()))) return true;
   if (user.roleId === 'role_admin' || user.roleId === 'role_finanzas') return true;
+  // Existing Finance/Treasury permission: "Ver reportes y Finanzas".
+  if (hasPermission(user, 'ver_reportes')) return true;
   if (user.email?.toLowerCase() === 'sistemas@dimer.com.mx') return true;
   return false;
 }
@@ -115,7 +117,12 @@ export function registerExpenseRoutes(app: Express) {
       let canEdit = false;
       let statusNotice: string | null = null;
       if (request.status === 'PAGADA') canEdit = true;
-      else if (request.status === 'COMPROBADA') statusNotice = 'Esta solicitud ya cuenta con comprobación de gastos finalizada y enviada a Finanzas. No puede modificarse.';
+      else if (request.status === 'COMPROBADA') {
+        canEdit = privileged;
+        statusNotice = privileged
+          ? 'La comprobación está finalizada. Finanzas/Administrador puede corregirla y volver a enviarla.'
+          : 'Esta solicitud ya cuenta con comprobación de gastos finalizada y enviada a Finanzas. No puede modificarse.';
+      }
       else if (request.status === 'PENDIENTE_APROBACION' || request.status === 'BORRADOR') statusNotice = `La solicitud se encuentra en estado "${request.status}". Aún no ha sido autorizada ni pagada.`;
       else if (request.status === 'APROBADA') statusNotice = 'La solicitud fue autorizada, pero Finanzas aún no registra el pago.';
       else if (request.status === 'RECHAZADA') statusNotice = 'La solicitud fue rechazada y no cuenta con viáticos para comprobar.';
@@ -143,22 +150,41 @@ export function registerExpenseRoutes(app: Express) {
       if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
       const privileged = userIsAdminOrFinanzas(user);
       if (!privileged && !isOwner(request, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para guardar comprobantes en este folio' });
-      if (request.status === 'COMPROBADA') return res.status(409).json({ success: false, error: 'La comprobación ya fue finalizada y está cerrada. No se permiten modificaciones.' });
-      if (request.status !== 'PAGADA') return res.status(400).json({ success: false, error: `Solo se pueden registrar comprobantes en solicitudes pagadas. Estado actual: ${request.status}` });
+      if (request.status === 'COMPROBADA' && !privileged) {
+        return res.status(409).json({ success: false, error: 'La comprobación ya fue finalizada y está cerrada. Solo Finanzas o Administrador puede corregirla.' });
+      }
+      if (request.status !== 'PAGADA' && request.status !== 'COMPROBADA') {
+        return res.status(400).json({ success: false, error: `Solo se pueden registrar comprobantes en solicitudes pagadas. Estado actual: ${request.status}` });
+      }
 
       const totals = calculateTotals(request, items);
       const existing = await getVerificationByFolio(folio);
       const now = new Date().toISOString();
       const verification: ExpenseVerification = {
         id: existing?.id || `exp_${Date.now()}`,
-        requestId: request.id, folio: request.folio, userId: user.id, userName: user.name, userEmail: user.email,
+        requestId: request.id, folio: request.folio,
+        userId: existing?.userId || request.userId || user.id,
+        userName: existing?.userName || request.requesterName || user.name,
+        userEmail: existing?.userEmail || request.user?.email || user.email,
         department: request.department || user.department, destination: request.destination,
         status: 'BORRADOR', items, ...totals, notes,
         refund: refund !== undefined ? refund : existing?.refund,
         submittedAt: existing?.submittedAt, updatedAt: now, createdAt: existing?.createdAt || now,
       };
       const saved = await saveVerification(verification);
-      await recordAuditLog({ requestId: request.id, userId: user.id, action: 'COMPROBACION_GASTOS_BORRADOR', details: { verification: saved } });
+      if (request.status === 'COMPROBADA' && privileged) {
+        await updateRequest(request.id, {
+          status: 'PAGADA',
+          updatedAt: now,
+          comments: `${request.comments || ''} | Corrección de comprobación reabierta por ${user.name}`.trim(),
+        });
+      }
+      await recordAuditLog({
+        requestId: request.id,
+        userId: user.id,
+        action: request.status === 'COMPROBADA' ? 'CORRECCION_COMPROBACION_BORRADOR' : 'COMPROBACION_GASTOS_BORRADOR',
+        details: { verification: saved, previousStatus: request.status },
+      });
       return res.json({ success: true, verification: saved });
     } catch (e: any) {
       console.error('[EXPENSE-DRAFT-ERROR]', e);
@@ -180,8 +206,12 @@ export function registerExpenseRoutes(app: Express) {
       if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
       const privileged = userIsAdminOrFinanzas(user);
       if (!privileged && !isOwner(request, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para finalizar esta comprobación' });
-      if (request.status === 'COMPROBADA') return res.status(409).json({ success: false, error: 'La comprobación ya fue finalizada y está cerrada. Para corregirla debe existir un proceso de corrección autorizado.' });
-      if (request.status !== 'PAGADA') return res.status(400).json({ success: false, error: `Solo se puede finalizar sobre solicitudes pagadas. Estado actual: ${request.status}` });
+      if (request.status === 'COMPROBADA' && !privileged) {
+        return res.status(409).json({ success: false, error: 'La comprobación ya fue finalizada. Solo Finanzas o Administrador puede corregirla.' });
+      }
+      if (request.status !== 'PAGADA' && request.status !== 'COMPROBADA') {
+        return res.status(400).json({ success: false, error: `Solo se puede finalizar sobre solicitudes pagadas. Estado actual: ${request.status}` });
+      }
 
       const itemError = validateItems(items);
       if (itemError) return res.status(400).json({ success: false, error: itemError });

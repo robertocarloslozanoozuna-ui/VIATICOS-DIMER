@@ -1314,23 +1314,24 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                       <span>{refund ? 'Modificar Reembolso' : '+ Registrar Reembolso de Sobrante'}</span>
                     </button>
 
-                    {refund && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setRefundAmount(String(refund.amount));
-                          setRefundMethod(refund.method);
-                          setRefundReference(refund.reference);
-                          setRefundDate(refund.refundDate);
-                          setRefundFormError(null);
-                          setShowRefundReceipt(true);
-                        }}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer"
-                      >
-                        <Printer className="w-3.5 h-3.5" />
-                        <span>Imprimir Recibo</span>
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const amount = Number(refundAmount || refund?.amount || difference || 0);
+                        if (isNaN(amount) || amount <= 0) {
+                          setRefundFormError('Primero captura o calcula un monto de reembolso mayor a $0.00 MXN.');
+                          return;
+                        }
+
+                        setRefundAmount(String(amount.toFixed(2)));
+                        setRefundFormError(null);
+                        setShowRefundReceipt(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      <span>Imprimir Recibo</span>
+                    </button>
                   </div>
                 )}
               </div>

@@ -71,6 +71,7 @@ export interface ExpenseRefund {
   reference: string;
   refundDate: string;
   receiptFile?: ExpenseFileAttachment;
+  signedReceiptFile?: ExpenseFileAttachment;
   notes?: string;
   registeredAt: string;
 }

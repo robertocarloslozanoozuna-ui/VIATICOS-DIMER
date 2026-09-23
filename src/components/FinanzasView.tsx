@@ -19,7 +19,8 @@ import {
   Archive,
   Eye,
   CheckCircle,
-  FileSpreadsheet
+  FileSpreadsheet,
+  XCircle
 } from 'lucide-react';
 import type { TravelRequest, User } from '../types';
 import { safeFetchJson } from '../utils/apiHelper';
@@ -553,6 +554,38 @@ export default function FinanzasView({
                             <Printer className="w-3 h-3" />
                             <span>Póliza</span>
                           </button>
+
+                          {/* PENDIENTES DE PAGO: Cancelar viaje no realizado + Registrar Pago */}
+                          {isAprobada && (
+                            <button
+                              id={`btn-cancelar-viaje-${r.id}`}
+                              type="button"
+                              onClick={async () => {
+                                const reason = window.prompt(
+                                  `Motivo de cancelación para ${r.folio}:`,
+                                  'Viaje no realizado'
+                                );
+                                if (reason === null) return;
+                                const cleanReason = reason.trim() || 'Viaje no realizado';
+                                if (!window.confirm(`¿Confirmas cancelar el viaje ${r.folio}? Esta acción cambiará el estado a CANCELADA.`)) return;
+                                try {
+                                  await safeFetchJson(`/api/requests/${r.id}/cancel`, {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify({ reason: cleanReason }),
+                                  });
+                                  setStatusMessage(`Solicitud ${r.folio} cancelada correctamente.`);
+                                  onRefreshData();
+                                } catch (e: any) {
+                                  alert(e.message);
+                                }
+                              }}
+                              className="px-2.5 py-1 bg-rose-50 hover:bg-rose-100 text-rose-800 border border-rose-200 rounded-md text-[11px] font-bold flex items-center gap-1 cursor-pointer transition"
+                            >
+                              <XCircle className="w-3 h-3" />
+                              <span>Cancelar Viaje</span>
+                            </button>
+                          )}
 
                           {/* PENDIENTES DE PAGO: Registrar Pago */}
                           {isAprobada && (

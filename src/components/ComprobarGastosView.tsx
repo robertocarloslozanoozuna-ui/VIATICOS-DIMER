@@ -34,7 +34,8 @@ import {
   Archive,
   ArrowLeft,
   CheckCircle2,
-  Edit3
+  Edit3,
+  Printer
 } from 'lucide-react';
 import RefundReceiptModal from './RefundReceiptModal';
 import type {

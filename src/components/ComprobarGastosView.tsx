@@ -249,8 +249,22 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         setNotes(data.verification.notes || '');
         if (data.verification.refund) {
           setRefund(data.verification.refund);
+          setRefundAmount(String(data.verification.refund.amount ?? ''));
+          setRefundMethod(data.verification.refund.method || 'SPEI');
+          setRefundReference(data.verification.refund.reference || '');
+          setRefundDate(data.verification.refund.refundDate || new Date().toISOString().split('T')[0]);
+          setRefundFile(data.verification.refund.receiptFile || null);
+          setSignedRefundFile(data.verification.refund.signedReceiptFile || null);
+          setRefundNotes(data.verification.refund.notes || '');
         } else {
           setRefund(null);
+          setRefundAmount('');
+          setRefundMethod('SPEI');
+          setRefundReference('');
+          setRefundDate(new Date().toISOString().split('T')[0]);
+          setRefundFile(null);
+          setSignedRefundFile(null);
+          setRefundNotes('');
         }
       } else {
         setItems([]);
@@ -453,6 +467,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       reference: refundReference.trim(),
       refundDate,
       receiptFile: refundFile || undefined,
+      signedReceiptFile: signedRefundFile || undefined,
       notes: refundNotes.trim() || undefined,
       registeredAt: refund?.registeredAt || new Date().toISOString(),
     };

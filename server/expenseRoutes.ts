@@ -223,7 +223,10 @@ export function registerExpenseRoutes(app: Express) {
       const now = new Date().toISOString();
       const verification: ExpenseVerification = {
         id: existing?.id || `exp_${Date.now()}`,
-        requestId: request.id, folio: request.folio, userId: user.id, userName: user.name, userEmail: user.email,
+        requestId: request.id, folio: request.folio,
+        userId: existing?.userId || request.userId || user.id,
+        userName: existing?.userName || request.requesterName || user.name,
+        userEmail: existing?.userEmail || request.user?.email || user.email,
         department: request.department || user.department, destination: request.destination,
         status: 'ENVIADA', items, ...totals, notes,
         refund: refund !== undefined ? refund : existing?.refund,

@@ -16,7 +16,7 @@ import AuthModal from './components/AuthModal';
 import LoginView from './components/LoginView';
 import { ComprobarGastosView } from './components/ComprobarGastosView';
 import type { User, TravelRequest } from './types';
-import { userHasAnyRole, userHasRole } from './types';
+import { userHasAnyRole, userHasRole, userHasPermission } from './types';
 import { safeFetchJson, setAuthToken } from './utils/apiHelper';
 
 function getRouteFromUrl() {
@@ -45,8 +45,8 @@ function isTabAllowed(tab: string, user: User | null): boolean {
   if (tab === 'mis-solicitudes') return true;
   if (tab === 'solicitar') return userHasAnyRole(user, ['SOLICITANTE', 'EMPLEADO', 'JEFE', 'FINANZAS']);
   if (tab === 'aprobar') return userHasAnyRole(user, ['JEFE']);
-  if (tab === 'finanzas') return userHasAnyRole(user, ['FINANZAS']);
-  if (tab === 'comprobar') return userHasAnyRole(user, ['SOLICITANTE', 'EMPLEADO', 'JEFE', 'FINANZAS']);
+  if (tab === 'finanzas') return userHasAnyRole(user, ['FINANZAS']) || userHasPermission(user, 'ver_reportes');
+  if (tab === 'comprobar') return userHasAnyRole(user, ['SOLICITANTE', 'EMPLEADO', 'JEFE', 'FINANZAS']) || userHasPermission(user, 'ver_reportes');
   return false;
 }
 

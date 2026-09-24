@@ -85,7 +85,7 @@ export default function PrintVoucherModal({ request, onClose }: PrintVoucherModa
                 D
               </div>
               <div>
-                <h1 className="font-black text-xl text-slate-900 tracking-tight">DIMER CORPORATIVO</h1>
+                <h1 className="font-black text-xl text-slate-900 tracking-tight">DIMER</h1>
                 <p className="text-xs text-slate-500 font-semibold uppercase tracking-wider">
                   Póliza de Autorización y Comprobación de Viáticos
                 </p>

@@ -52,8 +52,8 @@ export const CATEGORY_OPTIONS: { value: ExpenseCategoryType; label: string; icon
 ];
 
 export const PAYMENT_METHOD_OPTIONS: { value: PaymentMethodType; label: string; badgeClass: string }[] = [
-  { value: 'ANTICIPO', label: 'Anticipo Otorgado (Tarjeta Personal)', badgeClass: 'bg-teal-100 text-teal-800 border-teal-200' },
-  { value: 'PERSONAL_REEMBOLSO', label: 'Desembolso Adicional (Reembolso)', badgeClass: 'bg-blue-100 text-blue-800 border-blue-200' },
+  { value: 'ANTICIPO', label: 'Pago con tarjeta', badgeClass: 'bg-teal-100 text-teal-800 border-teal-200' },
+  { value: 'PERSONAL_REEMBOLSO', label: 'Pago con efectivo', badgeClass: 'bg-blue-100 text-blue-800 border-blue-200' },
 ];
 
 export const ExcelExpensesTable: React.FC<ExcelExpensesTableProps> = ({

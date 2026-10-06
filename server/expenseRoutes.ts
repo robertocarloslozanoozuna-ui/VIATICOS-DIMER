@@ -222,10 +222,10 @@ export function registerExpenseRoutes(app: Express) {
 
       const itemError = validateItems(items);
       if (itemError) return res.status(400).json({ success: false, error: itemError });
-      const totals = calculateTotals(request, items);
-      const refundError = validateRefund(totals.difference, refund);
+      const totalsBeforeRefund = calculateTotals(request, items);
+      const refundError = validateRefund(totalsBeforeRefund.difference, refund);
       if (refundError) return res.status(400).json({ success: false, error: refundError });
-
+      const totals = calculateTotals(request, items, refund);
       const existing = await getVerificationByFolio(folio);
       const now = new Date().toISOString();
       const verification: ExpenseVerification = {

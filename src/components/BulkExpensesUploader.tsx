@@ -480,7 +480,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
                     )}
                     {item.attachment?.analysis?.status === 'DETECTADO' && item.attachment.analysis.amount ? (
                       <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
-                        {item.attachment.analysis.documentType === 'FACTURA' ? 'Factura' : item.attachment.analysis.documentType === 'TICKET' ? 'Ticket' : 'Documento'} &bull; Total: ${item.attachment.analysis.amount.toFixed(2)}
+                        {item.attachment.analysis.documentType === 'FACTURA' ? 'Factura' : item.attachment.analysis.documentType === 'TICKET' ? 'Ticket' : 'Documento'} &bull; Total: {item.attachment.analysis.amount.toFixed(2)}
                       </span>
                     ) : item.attachment?.analysis?.status === 'SIN_TOTAL' ? (
                       <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-200">

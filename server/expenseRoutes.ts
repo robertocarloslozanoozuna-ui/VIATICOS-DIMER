@@ -8,6 +8,7 @@ import { resolveBaseUrl } from './baseUrl.js';
 import type { User, ExpenseItem, ExpenseVerification } from '../src/types.js';
 import { computeExpenseBalances } from '../src/utils/expenseCalculations.js';
 import { parseDimerExpenseExcel } from './excelImport.js';
+import { analyzeDocumentAmount } from './documentAmountAnalyzer.js';
 import { supabase } from './supabase.js';
 
 
@@ -243,6 +244,7 @@ function validateItems(items: ExpenseItem[]): string | null {
     if (!it.concept?.trim()) return `El comprobante #${i + 1} requiere un concepto o descripción.`;
     if (typeof it.amount !== 'number' || !Number.isFinite(it.amount) || it.amount <= 0) return `El monto del comprobante "${it.concept}" debe ser mayor a 0.`;
     if (!it.expenseDate) return `El comprobante "${it.concept}" requiere fecha del gasto.`;
+    if (it.type === 'PENDIENTE') return `El comprobante "${it.concept}" debe clasificarse como Factura o Ticket antes de finalizar.`;
     if (it.type === 'FACTURA' && (!it.xmlFile || !it.pdfFile)) return `La factura "${it.concept}" está incompleta: requiere XML (CFDI) y PDF.`;
     if (it.type === 'TICKET' && !it.ticketFile) return `El ticket "${it.concept}" requiere adjuntar el comprobante (PDF o imagen).`;
   }
@@ -324,6 +326,60 @@ export function registerExpenseRoutes(app: Express) {
       return res.status(500).json({ success: false, error: e.message || 'Error al validar el archivo.' });
     }
   });
+  app.post('/api/expenses/analyze-document', async (req: Request, res: Response) => {
+    try {
+      const user = await getRequestUser(req);
+      if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
+
+      const folio = String(req.body?.folio || '').trim().toUpperCase();
+      const fileName = String(req.body?.name || '').trim();
+      const dataUrl = String(req.body?.dataUrl || '');
+      const fileType = String(req.body?.type || '').trim().toLowerCase();
+      const declaredSize = Number(req.body?.size) || 0;
+
+      if (!folio) return res.status(400).json({ success: false, error: 'Folio requerido' });
+      if (!fileName) return res.status(400).json({ success: false, error: 'Nombre de archivo requerido' });
+      if (!dataUrl.startsWith('data:') || !dataUrl.includes(';base64,')) {
+        return res.status(400).json({ success: false, error: 'Contenido de archivo inválido.' });
+      }
+
+      const request = await getRequest(folio);
+      if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
+
+      const privileged = userIsAdminOrFinanzas(user);
+      if (!privileged && !isOwner(request, user)) {
+        return res.status(403).json({ success: false, error: 'No tienes permiso para analizar documentos en este folio' });
+      }
+      if (request.status !== 'PAGADA' && !(request.status === 'COMPROBADA' && privileged)) {
+        return res.status(400).json({ success: false, error: 'Solo se pueden analizar documentos en solicitudes pagadas o comprobaciones reabiertas por Finanzas/Administrador.' });
+      }
+
+      const payload = dataUrl.split(';base64,')[1] || '';
+      const estimatedBytes = Math.floor((payload.length * 3) / 4) - (payload.endsWith('==') ? 2 : payload.endsWith('=') ? 1 : 0);
+      const effectiveSize = declaredSize > 0 ? declaredSize : estimatedBytes;
+      if (effectiveSize <= 0 || effectiveSize > 10 * 1024 * 1024) {
+        return res.status(400).json({ success: false, error: 'El archivo debe tener entre 1 byte y 10 MB.' });
+      }
+
+      const allowed = new Set(['pdf', 'xml', 'jpg', 'jpeg', 'png', 'webp']);
+      const ext = fileName.toLowerCase().split('.').pop() || '';
+      if (!allowed.has(ext)) {
+        return res.status(400).json({ success: false, error: 'Formato no admitido para lectura automática.' });
+      }
+
+      const analysis = await analyzeDocumentAmount({
+        fileName,
+        fileType,
+        dataUrl,
+      });
+
+      return res.json({ success: true, analysis });
+    } catch (e: any) {
+      console.error('[EXPENSE-DOCUMENT-ANALYSIS-ROUTE-ERROR]', e);
+      return res.status(500).json({ success: false, error: e.message || 'Error al analizar el documento.' });
+    }
+  });
+
   app.post('/api/expenses/import-excel', async (req: Request, res: Response) => {
     try {
       const user = await getRequestUser(req);

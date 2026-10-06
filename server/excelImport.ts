@@ -157,8 +157,9 @@ export function parseDimerExpenseExcel(input: {
 
   const cfgSheet = wb.Sheets[CONFIG_SHEET];
   const cfg = readConfig(cfgSheet);
-  const mainSheetName = requiredConfig(cfg, 'HOJA_PRINCIPAL');
-  if (!wb.SheetNames.includes(mainSheetName)) {
+  const mainSheetName = requiredConfig(cfg, 'HOJA_PRINCIPAL').trim();
+  const actualSheetName = wb.SheetNames.find(name => name.trim() === mainSheetName);
+  if (!actualSheetName) {
     throw new Error(`La plantilla no es compatible: falta la hoja "${mainSheetName}".`);
   }
 
@@ -186,7 +187,7 @@ export function parseDimerExpenseExcel(input: {
     throw new Error('DIMER_CONFIG exige ORIGINAL_FILE_REQUIRED=TRUE para esta plantilla.');
   }
 
-  const main = wb.Sheets[mainSheetName];
+  const main = wb.Sheets[actualSheetName];
   const dateHeaderRow = Number(requiredConfig(cfg, 'FECHA_HEADER_ROW'));
   if (!Number.isInteger(dateHeaderRow) || dateHeaderRow < 1) throw new Error('FECHA_HEADER_ROW no es válido en DIMER_CONFIG.');
 

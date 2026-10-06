@@ -5,6 +5,7 @@ import { getVerificationByFolio, saveVerification, listAllVerifications, findFil
 import { sendEmail, buildExpenseVerificationSubmittedEmailHtml } from './mailService.js';
 import { resolveBaseUrl } from './baseUrl.js';
 import type { User, ExpenseItem, ExpenseVerification } from '../src/types.js';
+import { computeExpenseBalances } from '../src/utils/expenseCalculations.js';
 
 function parseCookies(req: Request) {
   const raw = String(req.headers.cookie || '');
@@ -67,16 +68,22 @@ function effectiveFinanzasEmail(): string {
   return String(process.env.FINANZAS_URL || process.env.FINANZAS_EMAIL || '').trim().toLowerCase();
 }
 
-function calculateTotals(request: any, items: ExpenseItem[]) {
+function calculateTotals(request: any, items: ExpenseItem[], refund?: any) {
   const totalAmountPaid = Number(
     request.amountAuthorized && Number(request.amountAuthorized) > 0
       ? request.amountAuthorized
       : (request.amountRequested || 0)
   );
-  const totalExpenses = Number(items.reduce((sum, it) => sum + Number(it.amount || 0), 0).toFixed(2));
-  const difference = Number((totalAmountPaid - totalExpenses).toFixed(2));
-  const balanceType = difference > 0 ? 'FAVOR_EMPRESA' : difference < 0 ? 'FAVOR_COLABORADOR' : 'EXACTO';
-  return { totalAmountPaid, totalExpenses, difference, balanceType, balanceAmount: Math.abs(difference) };
+
+  const balances = computeExpenseBalances(totalAmountPaid, items, refund);
+
+  return {
+    totalAmountPaid: balances.totalAmountPaid,
+    totalExpenses: balances.totalExpenses,
+    difference: balances.difference,
+    balanceType: balances.balanceType,
+    balanceAmount: balances.balanceAmount,
+  };
 }
 
 function validateItems(items: ExpenseItem[]): string | null {
@@ -157,7 +164,7 @@ export function registerExpenseRoutes(app: Express) {
         return res.status(400).json({ success: false, error: `Solo se pueden registrar comprobantes en solicitudes pagadas. Estado actual: ${request.status}` });
       }
 
-      const totals = calculateTotals(request, items);
+      const totals = calculateTotals(request, items, refund);
       const existing = await getVerificationByFolio(folio);
       const now = new Date().toISOString();
       const verification: ExpenseVerification = {

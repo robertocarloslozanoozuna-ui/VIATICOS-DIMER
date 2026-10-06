@@ -1,5 +1,6 @@
 import type { Express, Request, Response } from 'express';
 import crypto from 'crypto';
+import { deflateRawSync, inflateRawSync } from 'zlib';
 import { getRequest, updateRequest, recordAuditLog, getUserById, hasPermission } from './db.js';
 import { getVerificationByFolio, saveVerification, listAllVerifications, findFileById } from './expenseStorage.js';
 import { sendEmail, buildExpenseVerificationSubmittedEmailHtml } from './mailService.js';
@@ -7,6 +8,151 @@ import { resolveBaseUrl } from './baseUrl.js';
 import type { User, ExpenseItem, ExpenseVerification } from '../src/types.js';
 import { computeExpenseBalances } from '../src/utils/expenseCalculations.js';
 import { parseDimerExpenseExcel } from './excelImport.js';
+
+
+const OFFICIAL_TEMPLATE_SOURCE_FOLIO = 'VIAT-2026-000002';
+const OFFICIAL_TEMPLATE_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+
+function readUInt16(buf: Buffer, offset: number) { return buf.readUInt16LE(offset); }
+function readUInt32(buf: Buffer, offset: number) { return buf.readUInt32LE(offset); }
+function writeUInt32(buf: Buffer, offset: number, value: number) { buf.writeUInt32LE(value >>> 0, offset); }
+
+function crc32Buffer(input: Buffer) {
+  let crc = 0xffffffff;
+  for (const byte of input) {
+    crc ^= byte;
+    for (let i = 0; i < 8; i += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function zeroWorksheetAmounts(xml: Buffer) {
+  const text = xml.toString('utf8');
+  const expenseRows = new Set<number>();
+  for (let row = 11; row <= 43; row += 1) expenseRows.add(row);
+
+  return Buffer.from(text.replace(/<c\\b([^>]*)\\br="([A-Z]+)(\\d+)"([^>]*)>([\\s\\S]*?)<\\/c>/g, (full, before, col, rowText, after, inner) => {
+    const row = Number(rowText);
+    if (!expenseRows.has(row)) return full;
+    const normalizedCol = String(col).toUpperCase();
+    if (!/^[C-J]$/.test(normalizedCol)) return full;
+    if (!/<v\\b[^>]*>[\\s\\S]*?<\\/v>/.test(inner)) return full;
+    const patchedInner = inner.replace(/(<v\\b[^>]*>)[\\s\\S]*?(<\\/v>)/, '$10$2');
+    return '<c ' + before + 'r="' + col + rowText + '"' + after + '>' + patchedInner + '</c>';
+  }), 'utf8');
+}
+
+function zeroOfficialTemplateAmounts(input: Buffer) {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let cursor = 0;
+  let centralOffset = 0;
+
+  while (cursor + 30 <= input.length && readUInt32(input, cursor) === 0x04034b50) {
+    const nameLength = readUInt16(input, cursor + 26);
+    const extraLength = readUInt16(input, cursor + 28);
+    const method = readUInt16(input, cursor + 8);
+    const flags = readUInt16(input, cursor + 6);
+    const compressedSize = readUInt32(input, cursor + 18);
+    const uncompressedSize = readUInt32(input, cursor + 22);
+    const nameStart = cursor + 30;
+    const dataStart = nameStart + nameLength + extraLength;
+    const dataEnd = dataStart + compressedSize;
+    if (dataEnd > input.length) throw new Error('El XLSX original tiene una estructura ZIP incompleta.');
+    const name = input.subarray(nameStart, nameStart + nameLength).toString('utf8');
+    const originalCompressed = input.subarray(dataStart, dataEnd);
+
+    let data = method === 8 ? inflateRawSync(originalCompressed) : Buffer.from(originalCompressed);
+    if (name === 'xl/worksheets/sheet1.xml') data = zeroWorksheetAmounts(data);
+    if (flags & 0x0008) throw new Error('El XLSX original usa un descriptor ZIP no soportado para la plantilla oficial.');
+    if (data.length !== uncompressedSize && name !== 'xl/worksheets/sheet1.xml') {
+      throw new Error('No se pudo validar una entrada interna del XLSX original.');
+    }
+
+    const compressed = method === 8 ? deflateRawSync(data) : data;
+    const localHeader = Buffer.from(input.subarray(cursor, dataStart));
+    writeUInt32(localHeader, 14, crc32Buffer(data));
+    writeUInt32(localHeader, 18, compressed.length);
+    writeUInt32(localHeader, 22, data.length);
+    const localRecord = Buffer.concat([localHeader, compressed]);
+    localParts.push(localRecord);
+
+    const centralHeaderOffsetPlaceholder = centralOffset;
+    centralOffset += localRecord.length;
+    centralParts.push(Buffer.from([0]));
+    (centralParts as any)[centralParts.length - 1] = { name, originalOffset: cursor, data, compressed, method, localHeader, centralHeaderOffsetPlaceholder };
+    cursor = dataEnd;
+  }
+
+  if (cursor + 46 > input.length || readUInt32(input, cursor) !== 0x02014b50) throw new Error('No se encontró el directorio central del XLSX original.');
+  const centralStart = cursor;
+  const localEntries = centralParts as any[];
+  const centralByName = new Map<string, any>();
+  let centralCursor = centralStart;
+  while (centralCursor + 46 <= input.length && readUInt32(input, centralCursor) === 0x02014b50) {
+    const nameLength = readUInt16(input, centralCursor + 28);
+    const extraLength = readUInt16(input, centralCursor + 30);
+    const commentLength = readUInt16(input, centralCursor + 32);
+    const entryEnd = centralCursor + 46 + nameLength + extraLength + commentLength;
+    if (entryEnd > input.length) throw new Error('El directorio central del XLSX original está incompleto.');
+    const name = input.subarray(centralCursor + 46, centralCursor + 46 + nameLength).toString('utf8');
+    centralByName.set(name, input.subarray(centralCursor, entryEnd));
+    centralCursor = entryEnd;
+  }
+
+  if (localEntries.length !== centralByName.size) throw new Error('No se pudo reconstruir la estructura interna de la plantilla Excel.');
+
+  let localOffset = 0;
+  let centralSize = 0;
+  const rebuiltCentral: Buffer[] = [];
+  for (const entry of localEntries) {
+    const central = Buffer.from(centralByName.get(entry.name));
+    writeUInt32(central, 16, crc32Buffer(entry.data));
+    writeUInt32(central, 20, entry.compressed.length);
+    writeUInt32(central, 24, entry.data.length);
+    writeUInt32(central, 42, localOffset);
+    rebuiltCentral.push(central);
+    centralSize += central.length;
+    localOffset += localParts.shift()!.length;
+  }
+
+  const localDirectory = Buffer.concat((centralParts as any[]).map(() => Buffer.alloc(0)));
+  const rebuiltLocals: Buffer[] = [];
+  // localParts was consumed above for offsets; rebuild deterministically from stored entry data.
+  for (const entry of localEntries) {
+    const header = Buffer.from(input.subarray(entry.originalOffset, entry.originalOffset + 30 + readUInt16(input, entry.originalOffset + 26) + readUInt16(input, entry.originalOffset + 28)));
+    writeUInt32(header, 14, crc32Buffer(entry.data));
+    writeUInt32(header, 18, entry.compressed.length);
+    writeUInt32(header, 22, entry.data.length);
+    rebuiltLocals.push(Buffer.concat([header, entry.compressed]));
+  }
+  void localDirectory;
+  const locals = Buffer.concat(rebuiltLocals);
+  const centralDirectory = Buffer.concat(rebuiltCentral);
+  const end = Buffer.alloc(22);
+  writeUInt32(end, 0, 0x06054b50);
+  end.writeUInt16LE(0, 4); end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(localEntries.length, 8); end.writeUInt16LE(localEntries.length, 10);
+  writeUInt32(end, 12, centralDirectory.length); writeUInt32(end, 16, locals.length); end.writeUInt16LE(0, 20);
+  return Buffer.concat([locals, centralDirectory, end]);
+}
+
+async function getOfficialTemplateFromFolio() {
+  const { data, error } = await supabase.from('audit_logs').select('details,created_at')
+    .in('action', ['COMPROBACION_GASTOS_BORRADOR','COMPROBACION_GASTOS_FINALIZADA','CORRECCION_COMPROBACION_BORRADOR'])
+    .order('created_at', { ascending: false }).limit(100);
+  if (error) throw error;
+  const row = (data || []).find((item: any) =>
+    item?.details?.verification?.folio === OFFICIAL_TEMPLATE_SOURCE_FOLIO &&
+    item?.details?.verification?.originalExcelFile?.dataUrl
+  );
+  const dataUrl = String(row?.details?.verification?.originalExcelFile?.dataUrl || '');
+  const match = dataUrl.match(/^data:[^;]+;base64,(.+)$/);
+  if (!match) throw new Error('No se encontró el Excel original del folio VIAT-2026-000002.');
+  const buffer = Buffer.from(match[1], 'base64');
+  if (!buffer.length) throw new Error('El Excel original del folio VIAT-2026-000002 está vacío.');
+  return buffer;
+}
 
 function parseCookies(req: Request) {
   const raw = String(req.headers.cookie || '');
@@ -202,29 +348,22 @@ export function registerExpenseRoutes(app: Express) {
     try {
       const user = await getRequestUser(req);
       if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
-      const configuredBase64 = String(process.env.DIMER_EXCEL_TEMPLATE_BASE64 || '');
-      let buffer = configuredBase64 ? Buffer.from(configuredBase64.replace(/^data:[^;]+;base64,/, ''), 'base64') : Buffer.alloc(0);
-      if (!buffer.length) {
-        const XLSX = (await import('xlsx')).default;
-        const rows: any[][] = Array.from({ length: 44 }, () => Array(10).fill(''));
-        rows[1][1] = 'NOMBRE'; rows[3][0] = 'MES DE COMPROBACIÓN'; rows[5][1] = 'FECHA';
-        const monday = new Date(); monday.setHours(0,0,0,0); const day = monday.getDay(); monday.setDate(monday.getDate() - ((day + 6) % 7));
-        for (let i=0;i<7;i++){ const d=new Date(monday); d.setDate(monday.getDate()+i); rows[5][2+i]=d; }
-        rows[5][9]='TOTAL SEMANAL'; rows[7][0]='LUGAR DEL VIAJE:';
-        const concepts: Array<[number,number,string,string]> = [
-          [11,1,'Estancia/ Hospedaje','VIAJES'],[12,2,'Boletos de Autobus','VIAJES'],[13,3,'Gasolina','VIAJES'],[14,4,'Estacionamiento','VIAJES'],[15,5,'Casetas','VIAJES'],[16,6,'Rentas de Autos','VIAJES'],[17,7,'Taxi','VIAJES'],[18,8,'Uber or others','VIAJES'],
-          [20,9,'Desayuno','COMIDAS'],[21,10,'Comida','COMIDAS'],[22,11,'Cena','COMIDAS'],[23,12,'Snack / Café','COMIDAS'],[24,13,'Tragos','COMIDAS'],[25,14,'Propina','COMIDAS'],
-          [27,15,'Mantenimiento','GASTOS DE OFICINA'],[28,16,'Teléfono de casa / Celular','GASTOS DE OFICINA'],[29,17,'Papelería','GASTOS DE OFICINA'],[30,18,'Muebles y mmto de equipo','GASTOS DE OFICINA'],[31,19,'Envíos postales','GASTOS DE OFICINA'],
-          [33,20,'Entretenimiento clientes','OTROS GASTOS'],[34,21,'Regalos clientes','OTROS GASTOS'],[35,22,'Comida','OTROS GASTOS'],[36,23,'Propina','OTROS GASTOS'],[37,24,'Estancia/ Hospedaje','OTROS GASTOS'],[38,25,'Otros (lavar ropa)','OTROS GASTOS'],[39,26,'Uber or others','OTROS GASTOS'],[40,27,'Boletos de Avión','OTROS GASTOS']
-        ];
-        rows[9][1]='VIAJES'; rows[18][1]='COMIDAS'; rows[25][1]='GASTOS DE OFICINA'; rows[31][1]='OTROS GASTOS';
-        concepts.forEach(([r,n,c])=>{rows[r][0]=n; rows[r][1]=c;}); rows[41][1]='TOTAL DE GASTOS'; rows[42][0]='FIRMA DEL EMPLEADO'; rows[42][9]='Fecha de Pago';
-        const config: any[][] = [['KEY','VALUE','DESCRIPTION'],['CONFIG_VERSION','2.0','Versión del contrato de plantilla DIMER.'],['PLANTILLA_ID','DIMER_REPORTE_GASTOS','Identificador único de esta plantilla.'],['STRICT_TEMPLATE_CHECK','TRUE','La importación debe validar esta estructura.'],['ORIGINAL_FILE_REQUIRED','TRUE','Debe conservarse el Excel original cargado.'],['HOJA_PRINCIPAL','REPORTE DE GASTOS MENSUAL','Hoja oficial del reporte.'],['NOMBRE_LABEL_CELL','B3','Etiqueta NOMBRE.'],['MES_COMPROBACION_LABEL_CELL','A5','Etiqueta MES DE COMPROBACIÓN.'],['FECHA_LABEL_CELL','B8','Etiqueta FECHA.'],['FECHA_HEADER_ROW','8','Fila que contiene las fechas.'],['FECHA_COLUMNS','C:I','Columnas diarias del reporte.'],['CONCEPTO_COLUMN','B','Columna de concepto.'],['IMPORTE_COLUMNS','C:I','Columnas donde se capturan importes diarios.'],['EXPENSE_DATA_ROWS','13:20,22:27,29:33,35:42','Filas de conceptos que generan partidas.'],['ROW_TOTAL_COLUMN','J','Columna de total por concepto; nunca genera partidas.'],['CONTROL_ROWS','43:44','Filas de control/firma; nunca generan partidas.'],['TOTAL_GASTOS_LABEL_CELL','B43','Etiqueta TOTAL DE GASTOS.'],['TOTAL_GASTOS_CONTROL_CELL','J43','Total general del reporte.'],['TOTAL_GASTOS_FORMULA','SUM(C43:I43)','Control visible de la plantilla.'],['TOTAL_CALCULATION','SUM(EXPENSEITEM.AMOUNT)','Regla de conciliación de importación.'],['REEMBOLSO_CONTROL_RANGE','NOT_PRESENT','Esta versión no contiene fila de reembolso.'],['PAYMENT_METHOD_BY_ROW','REQUIERE_REVISION','El método de pago se clasifica durante la comprobación.'],['IGNORE_ZERO_OR_BLANK','TRUE','Celdas vacías o cero no generan partidas.'],['CREATE_ITEM_PER_NONZERO_CELL','TRUE','Cada importe diario distinto de cero genera una partida.'],['CONCILIATION_TOLERANCE_MXN','0.01','Tolerancia de conciliación en MXN.'],['MAX_FILE_SIZE_MB','15','Límite de archivo de importación.'],['VALIDATE_FILE_TYPE','TRUE','Validar que el archivo sea XLSX válido.'],['DUPLICATE_FILE_CHECK','TRUE','Detectar archivo ya importado mediante hash.'],['DIMER_CONFIG - CATALOGO DE CONCEPTOS','',''],['ROW','CONCEPTO','SECCION'],...concepts.map(([r,,c,s])=>[r+2,c,s]),['','',''],['DIMER_CONFIG - METODOS DE PAGO','',''],['VALUE','DESCRIPTION',''],['ANTICIPO','Gasto cubierto con anticipo.',''],['REQUIERE_REVISION','El reporte no identifica automáticamente el método de pago; el usuario debe clasificarlo.',''],['REEMBOLSO','Importe que corresponde reembolsar al empleado, cuando aplique.',''],['NOTA','Esta hoja DIMER_CONFIG es la fuente de verdad para la importación.','']];
-        const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'REPORTE DE GASTOS MENSUAL'); XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([]),'Hoja1'); XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(config),'DIMER_CONFIG'); buffer=XLSX.write(wb,{type:'buffer',bookType:'xlsx'});
-      }
+
+      // Fuente oficial: el Excel original realmente cargado en VIAT-2026-000002.
+      // Se modifica únicamente el valor de los montos existentes a 0 y se conserva
+      // el resto del XLSX (hojas, estilos, fórmulas, encabezados y estructura).
+      const original = await getOfficialTemplateFromFolio();
+      const buffer = zeroOfficialTemplateAmounts(original);
       if (!buffer.length) return res.status(503).json({ success: false, error: 'No fue posible generar la plantilla oficial Excel.' });
-      res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); res.setHeader('Content-Disposition','attachment; filename="Reporte de Gastos DIMER.xlsx"'); res.setHeader('Content-Length',buffer.length); return res.send(buffer);
-    } catch (e: any) { console.error('[EXPENSE-EXCEL-TEMPLATE-ERROR]',e); return res.status(500).json({ success:false,error:e.message || 'Error al descargar la plantilla.' }); }
+
+      res.setHeader('Content-Type', OFFICIAL_TEMPLATE_MIME);
+      res.setHeader('Content-Disposition', 'attachment; filename="Reporte de Gastos DIMER.xlsx"');
+      res.setHeader('Content-Length', buffer.length);
+      return res.send(buffer);
+    } catch (e: any) {
+      console.error('[EXPENSE-EXCEL-TEMPLATE-ERROR]', e);
+      return res.status(500).json({ success: false, error: e.message || 'Error al descargar la plantilla.' });
+    }
   });
   app.get('/api/expenses/search', async (req: Request, res: Response) => {
     try {

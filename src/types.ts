@@ -43,6 +43,21 @@ export interface SystemStats { totalRequests:number; pendingApproval:number; app
 
 export type ExpenseType = 'FACTURA' | 'TICKET';
 
+export type PaymentMethodType =
+  | 'ANTICIPO'
+  | 'TARJETA_EMPRESA'
+  | 'PERSONAL_REEMBOLSO';
+
+export type ExpenseCategoryType =
+  | 'HOSPEDAJE'
+  | 'GASOLINA'
+  | 'CASETAS'
+  | 'TRANSPORTE_FORANEO'
+  | 'TRANSPORTE_LOCAL'
+  | 'ALIMENTOS'
+  | 'ESTACIONAMIENTO'
+  | 'GASTOS_MENORES';
+
 export interface ExpenseFileAttachment {
   id: string;
   name: string;
@@ -50,6 +65,8 @@ export interface ExpenseFileAttachment {
   type: string;
   dataUrl: string;
   uploadedAt: string;
+  uuid?: string;
+  role?: 'COMPROBANTE_PRINCIPAL' | 'COMPLEMENTO_FISCAL' | 'DOCUMENTO_ORIGINAL_EXCEL';
 }
 
 export interface ExpenseItem {
@@ -58,11 +75,42 @@ export interface ExpenseItem {
   amount: number;
   type: ExpenseType;
   expenseDate: string;
+  category?: ExpenseCategoryType;
+  paymentMethod?: PaymentMethodType;
+  sourceCategory?: string;
+  importedFromExcel?: boolean;
+  excelRowIndex?: number;
   xmlFile?: ExpenseFileAttachment;
   pdfFile?: ExpenseFileAttachment;
   ticketFile?: ExpenseFileAttachment;
   notes?: string;
   createdAt: string;
+}
+
+export interface ExcelAuditSummary {
+  filename: string;
+  sizeBytes: number;
+  uploadedAt: string;
+  uploadedBy?: string;
+  sheetName: string;
+  totalExcel: number;
+  totalImported: number;
+  difference: number;
+  itemsCount: number;
+  reconciliationStatus: 'CONCILIACION_CORRECTA' | 'DIFERENCIA_DETECTADA';
+}
+
+export interface ExcelParsedExpense {
+  id: string;
+  concept: string;
+  sourceCategory: string;
+  amount: number;
+  expenseDate: string;
+  category?: ExpenseCategoryType;
+  paymentMethod?: PaymentMethodType;
+  sectionTitle?: string;
+  excelCellRef?: string;
+  isOutOfRange?: boolean;
 }
 
 export interface ExpenseRefund {
@@ -89,10 +137,21 @@ export interface ExpenseVerification {
   items: ExpenseItem[];
   totalAmountPaid: number;
   totalExpenses: number;
+  totalAnticipo?: number;
+  totalTarjetaEmpresa?: number;
+  totalPersonal?: number;
+  saldoAnticipoAntesReintegro?: number;
+  saldoPendienteDevolucion?: number;
+  saldoFavorColaborador?: number;
+  financialStatus?: 'CUENTA_SALDADA' | 'SOBRANTE_PENDIENTE' | 'FAVOR_COLABORADOR';
   difference: number;
   balanceType: 'FAVOR_EMPRESA' | 'FAVOR_COLABORADOR' | 'EXACTO';
   balanceAmount: number;
   refund?: ExpenseRefund;
+  pendingFiscalXmls?: ExpenseFileAttachment[];
+  supportFiles?: ExpenseFileAttachment[];
+  originalExcelFile?: ExpenseFileAttachment;
+  excelAuditSummary?: ExcelAuditSummary;
   notes?: string;
   submittedAt?: string;
   updatedAt: string;

@@ -35,9 +35,11 @@ import {
   ArrowLeft,
   CheckCircle2,
   Edit3,
-  Printer
+  FileSpreadsheet,
+  Image as ImageIcon,
+  Paperclip,
+  FileCheck
 } from 'lucide-react';
-import RefundReceiptModal from './RefundReceiptModal';
 import type {
   User as UserType,
   TravelRequest,
@@ -46,8 +48,13 @@ import type {
   ExpenseType,
   ExpenseFileAttachment,
   ExpenseRefund,
+  ExcelAuditSummary,
 } from '../types';
 import { authFetch } from '../utils/apiHelper';
+import { computeExpenseBalances } from '../utils/expenseCalculations';
+import { BulkExpensesUploader } from './BulkExpensesUploader';
+import { ExcelExpensesTable } from './ExcelExpensesTable';
+import { ExcelExpensesImporter } from './ExcelExpensesImporter';
 
 interface ComprobarGastosViewProps {
   currentUser: UserType;
@@ -91,13 +98,11 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   // Refund state (Opción para reembolsar dinero a finanzas que les sobró)
   const [refund, setRefund] = useState<ExpenseRefund | null>(null);
   const [showRefundModal, setShowRefundModal] = useState<boolean>(false);
-  const [showRefundReceipt, setShowRefundReceipt] = useState<boolean>(false);
   const [refundAmount, setRefundAmount] = useState<string>('');
   const [refundMethod, setRefundMethod] = useState<'SPEI' | 'EFECTIVO'>('SPEI');
   const [refundReference, setRefundReference] = useState<string>('');
   const [refundDate, setRefundDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [refundFile, setRefundFile] = useState<ExpenseFileAttachment | null>(null);
-  const [signedRefundFile, setSignedRefundFile] = useState<ExpenseFileAttachment | null>(null);
   const [refundNotes, setRefundNotes] = useState<string>('');
   const [refundFormError, setRefundFormError] = useState<string | null>(null);
 
@@ -112,6 +117,22 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   const [itemTicketFile, setItemTicketFile] = useState<ExpenseFileAttachment | null>(null);
   const [itemNotes, setItemNotes] = useState<string>('');
   const [itemFormError, setItemFormError] = useState<string | null>(null);
+
+  // Bulk Uploader & Available Attachments Pool
+  const [showBulkUploaderModal, setShowBulkUploaderModal] = useState<boolean>(false);
+  const [uploadedAttachmentsPool, setUploadedAttachmentsPool] = useState<ExpenseFileAttachment[]>([]);
+  const [pendingFiscalXmls, setPendingFiscalXmls] = useState<ExpenseFileAttachment[]>([]);
+  const [supportFiles, setSupportFiles] = useState<ExpenseFileAttachment[]>([]);
+  const [previewModalFile, setPreviewModalFile] = useState<ExpenseFileAttachment | null>(null);
+
+  // Original Excel Report File and Audit Summary
+  const [originalExcelFile, setOriginalExcelFile] = useState<ExpenseFileAttachment | null>(null);
+  const [excelAuditSummary, setExcelAuditSummary] = useState<ExcelAuditSummary | null>(null);
+
+  // Finanzas Accounting Closure
+  const [showFinalizeAccountingModal, setShowFinalizeAccountingModal] = useState<boolean>(false);
+  const [finalizingAccounting, setFinalizingAccounting] = useState<boolean>(false);
+  const [finalizeAccountingNotes, setFinalizeAccountingNotes] = useState<string>('Facturas fiscales SAT y comprobantes validados al 100%. Expediente concluido.');
 
   // Saving / Finalizing states
   const [savingDraft, setSavingDraft] = useState<boolean>(false);
@@ -246,30 +267,48 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
       if (data.verification) {
         setItems(data.verification.items || []);
+        setPendingFiscalXmls(data.verification.pendingFiscalXmls || []);
+        setSupportFiles(data.verification.supportFiles || []);
+        setOriginalExcelFile(data.verification.originalExcelFile || null);
+        setExcelAuditSummary(data.verification.excelAuditSummary || null);
         setNotes(data.verification.notes || '');
         if (data.verification.refund) {
           setRefund(data.verification.refund);
-          setRefundAmount(String(data.verification.refund.amount ?? ''));
-          setRefundMethod(data.verification.refund.method || 'SPEI');
-          setRefundReference(data.verification.refund.reference || '');
-          setRefundDate(data.verification.refund.refundDate || new Date().toISOString().split('T')[0]);
-          setRefundFile(data.verification.refund.receiptFile || null);
-          setSignedRefundFile(data.verification.refund.signedReceiptFile || null);
-          setRefundNotes(data.verification.refund.notes || '');
         } else {
           setRefund(null);
-          setRefundAmount('');
-          setRefundMethod('SPEI');
-          setRefundReference('');
-          setRefundDate(new Date().toISOString().split('T')[0]);
-          setRefundFile(null);
-          setSignedRefundFile(null);
-          setRefundNotes('');
         }
+
+        // Collect existing attachments to pool
+        const existingAtts: ExpenseFileAttachment[] = [];
+        (data.verification.items || []).forEach((it: ExpenseItem) => {
+          if (it.xmlFile) existingAtts.push(it.xmlFile);
+          if (it.pdfFile) existingAtts.push(it.pdfFile);
+          if (it.ticketFile) existingAtts.push(it.ticketFile);
+        });
+        (data.verification.supportFiles || []).forEach((sf: ExpenseFileAttachment) => {
+          existingAtts.push(sf);
+        });
+        (data.verification.pendingFiscalXmls || []).forEach((px: ExpenseFileAttachment) => {
+          existingAtts.push(px);
+        });
+        if (data.verification.originalExcelFile) {
+          existingAtts.push(data.verification.originalExcelFile);
+        }
+        setUploadedAttachmentsPool(existingAtts);
       } else {
         setItems([]);
+        setPendingFiscalXmls([]);
+        setSupportFiles([]);
+        setOriginalExcelFile(null);
+        setExcelAuditSummary(null);
         setNotes('');
         setRefund(null);
+        setUploadedAttachmentsPool([]);
+      }
+
+      // Auto-switch to COMPROBADAS_100 if the folio has already been sent to Finanzas or finalized
+      if (data.request.status === 'COMPROBADA' || data.request.status === 'FINALIZADA') {
+        setActiveFolioCategory('COMPROBADAS_100');
       }
     } catch (e: any) {
       setSearchError(e.message || 'Error de conexión al buscar solicitud.');
@@ -427,7 +466,6 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       setRefundReference(refund.reference);
       setRefundDate(refund.refundDate);
       setRefundFile(refund.receiptFile || null);
-      setSignedRefundFile(refund.signedReceiptFile || null);
       setRefundNotes(refund.notes || '');
     } else {
       const defaultAmount = difference > 0 ? String(difference.toFixed(2)) : '';
@@ -436,7 +474,6 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       setRefundReference('');
       setRefundDate(new Date().toISOString().split('T')[0]);
       setRefundFile(null);
-      setSignedRefundFile(null);
       setRefundNotes('');
     }
     setShowRefundModal(true);
@@ -469,7 +506,6 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       reference: refundReference.trim(),
       refundDate,
       receiptFile: refundFile || undefined,
-      signedReceiptFile: signedRefundFile || undefined,
       notes: refundNotes.trim() || undefined,
       registeredAt: refund?.registeredAt || new Date().toISOString(),
     };
@@ -479,56 +515,210 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     setActionSuccess('Comprobante de reembolso de sobrante registrado. Recuerda guardar el borrador o finalizar.');
   }
 
-  function handleSignedRefundFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.size > 10 * 1024 * 1024) {
-      setRefundFormError(`El recibo firmado "${file.name}" supera el límite de 10 MB.`);
-      return;
-    }
-
-    if (!file.name.toLowerCase().endsWith('.pdf') && !file.type.includes('pdf')) {
-      setRefundFormError('El recibo firmado debe ser un archivo PDF.');
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      setSignedRefundFile({
-        id: `signed_refund_att_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-        name: file.name,
-        size: file.size,
-        type: file.type || 'application/pdf',
-        dataUrl: reader.result as string,
-        uploadedAt: new Date().toISOString(),
-      });
-      setRefundFormError(null);
-    };
-    reader.onerror = () => setRefundFormError('Error al leer el recibo firmado.');
-    reader.readAsDataURL(file);
-  }
-
   function handleRemoveRefund() {
     if (confirm('¿Deseas eliminar el comprobante de reembolso registrado?')) {
       setRefund(null);
-      setRefundFile(null);
-      setSignedRefundFile(null);
       setActionSuccess('Reembolso eliminado.');
     }
   }
 
-  // Financial calculations
+  // Official Financial Calculations Engine
   const totalAmountPaid = Number(
     loadedRequest?.amountAuthorized && Number(loadedRequest.amountAuthorized) > 0
       ? loadedRequest.amountAuthorized
       : loadedRequest?.amountRequested || 0
   );
-  const totalExpenses = items.reduce((acc, it) => acc + Number(it.amount || 0), 0);
-  const difference = Number((totalAmountPaid - totalExpenses).toFixed(2));
-  const isFavorEmpresa = difference > 0;
-  const isFavorColaborador = difference < 0;
-  const isExacto = difference === 0;
+
+  const financialBalances = useMemo(() => {
+    return computeExpenseBalances(totalAmountPaid, items, refund);
+  }, [totalAmountPaid, items, refund]);
+
+  const {
+    totalExpenses,
+    totalAnticipo,
+    totalTarjetaEmpresa,
+    totalPersonal,
+    refundAmount: computedRefundAmount,
+    saldoAnticipoAntesReintegro,
+    saldoPendienteDevolucion,
+    saldoFavorColaborador,
+    financialStatus,
+    difference,
+    balanceType,
+    balanceAmount,
+    saldoNoUtilizado,
+    importeADevolverDIMER,
+    importeAdicionalReembolsar,
+  } = financialBalances;
+
+  const isFavorEmpresa = financialStatus === 'SOBRANTE_PENDIENTE';
+  const isFavorColaborador = financialStatus === 'FAVOR_COLABORADOR';
+  const isExacto = financialStatus === 'CUENTA_SALDADA';
+
+  // Normaliza el nombre base para detectar parejas (ej. factura_hotel.pdf y factura_hotel.xml)
+  function getFileBaseSignature(filename: string): string {
+    return filename
+      .replace(/\.[^/.]+$/, '')
+      .toLowerCase()
+      .replace(/[_\s-]+/g, '')
+      .trim();
+  }
+
+  // Handle files uploaded from BulkExpensesUploader
+  // REGLA DEFINITIVA SOLICITADA POR EL USUARIO:
+  // Cuando se suban los documentos como PDF, XML o capturas:
+  // NO se registran como una comprobación en la tabla para agregar montos.
+  // Solo se suben al expediente como soporte documental y quedan listos para ser descargados por Finanzas o por el mismo usuario.
+  function handleAttachmentsUploaded(newAttachments: ExpenseFileAttachment[]) {
+    // 1. Incorporar al expediente de documentos de soporte (supportFiles)
+    setSupportFiles((prev) => {
+      const existingKeys = new Set(prev.map((f) => f.id || `${f.name}_${f.size}`));
+      const fresh = newAttachments.filter((f) => !existingKeys.has(f.id || `${f.name}_${f.size}`));
+      return [...prev, ...fresh];
+    });
+
+    // 2. Incorporar al pool de comprobantes disponibles
+    setUploadedAttachmentsPool((prev) => {
+      const existingKeys = new Set(prev.map((f) => f.id || `${f.name}_${f.size}`));
+      const fresh = newAttachments.filter((f) => !existingKeys.has(f.id || `${f.name}_${f.size}`));
+      return [...prev, ...fresh];
+    });
+
+    // 3. NO alterar la matriz de comprobación de gastos (items).
+    // Las partidas contables se definen exclusivamente mediante la importación del Reporte Excel oficial o captura manual.
+    setShowBulkUploaderModal(false);
+    setActionSuccess(
+      `¡${newAttachments.length} documento(s) (PDF, XML o capturas) resguardado(s) exitosamente en el expediente! Disponibles para consulta y descarga tanto por el colaborador como por Finanzas.`
+    );
+  }
+
+  function handleRemoveSupportFile(fileId: string) {
+    setSupportFiles((prev) => prev.filter((f) => f.id !== fileId));
+    setUploadedAttachmentsPool((prev) => prev.filter((f) => f.id !== fileId));
+    setActionSuccess('Documento retirado del expediente.');
+  }
+
+  // Asociar un XML pendiente a una partida de gasto existente (sin modificar su importe)
+  function handleAssociatePendingXmlToRow(xml: ExpenseFileAttachment, rowId: string) {
+    const updated = items.map((it) => {
+      if (it.id !== rowId) return it;
+      return {
+        ...it,
+        xmlFile: xml,
+        type: 'FACTURA' as ExpenseType,
+      };
+    });
+    setItems(updated);
+    setPendingFiscalXmls((prev) => prev.filter((x) => x.id !== xml.id));
+    const targetItem = items.find((i) => i.id === rowId);
+    setActionSuccess(
+      `Complemento fiscal "${xml.name}" asociado exitosamente a "${targetItem?.concept || 'Gasto'}". El importe permanece sin alteraciones.`
+    );
+  }
+
+  // Crear una nueva partida vacía a partir de un XML pendiente (el usuario capturará el importe)
+  function handleCreateRowFromPendingXml(xml: ExpenseFileAttachment) {
+    const defaultDate = loadedRequest?.startDate
+      ? new Date(loadedRequest.startDate).toISOString().split('T')[0]
+      : new Date().toISOString().split('T')[0];
+
+    const newRow: ExpenseItem = {
+      id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      concept: xml.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' '),
+      amount: 0, // Capturado por el usuario
+      type: 'FACTURA',
+      expenseDate: defaultDate,
+      category: 'HOSPEDAJE',
+      paymentMethod: 'ANTICIPO',
+      createdAt: new Date().toISOString(),
+      xmlFile: xml,
+    };
+
+    setItems((prev) => [...prev, newRow]);
+    setPendingFiscalXmls((prev) => prev.filter((x) => x.id !== xml.id));
+    setActionSuccess(
+      `Partida creada para el complemento fiscal "${xml.name}". Captura el importe del gasto y adjunta el PDF correspondiente.`
+    );
+  }
+
+  function handleRemovePendingXml(xmlId: string) {
+    if (confirm('¿Deseas descartar este complemento fiscal XML de la lista de pendientes?')) {
+      setPendingFiscalXmls((prev) => prev.filter((x) => x.id !== xmlId));
+      setActionSuccess('Complemento fiscal XML retirado de pendientes.');
+    }
+  }
+
+  function handleUnassignXml(removedXml: ExpenseFileAttachment) {
+    setPendingFiscalXmls((prev) => {
+      if (prev.some((x) => x.id === removedXml.id)) return prev;
+      return [...prev, removedXml];
+    });
+    setActionSuccess(`Complemento fiscal "${removedXml.name}" regresó a la bandeja de pendientes.`);
+  }
+
+  // Confirmación de importación masiva desde Reporte de Gastos Excel (.xlsx)
+  function handleExcelImportConfirmed(
+    newItems: ExpenseItem[],
+    originalFile: ExpenseFileAttachment,
+    summary: ExcelAuditSummary
+  ) {
+    setOriginalExcelFile(originalFile);
+    setExcelAuditSummary(summary);
+    setUploadedAttachmentsPool((prev) => {
+      if (prev.some((a) => a.id === originalFile.id)) return prev;
+      return [...prev, originalFile];
+    });
+
+    // Control anti-duplicados:
+    // Evita duplicar partidas si ya existían exactamente con la misma fecha, concepto e importe
+    setItems((prev) => {
+      const existingSignatures = new Set(
+        prev.map((it) => `${it.expenseDate}_${it.concept.trim().toLowerCase()}_${it.amount}`)
+      );
+      const nonDuplicates = newItems.filter(
+        (it) => !existingSignatures.has(`${it.expenseDate}_${it.concept.trim().toLowerCase()}_${it.amount}`)
+      );
+
+      return [...prev, ...nonDuplicates];
+    });
+
+    setActionSuccess(
+      `¡Reporte de Gastos Excel "${originalFile.name}" importado con éxito! Se cargaron ${newItems.length} partidas al expediente y se conservó el archivo original para Finanzas.`
+    );
+  }
+
+  // Handle Finanzas Accounting Closure
+  async function handleFinalizeAccounting() {
+    if (!loadedRequest) return;
+    setFinalizingAccounting(true);
+    setActionSuccess(null);
+    setActionError(null);
+
+    try {
+      const res = await authFetch(`/api/requests/${loadedRequest.id}/finalize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notes: finalizeAccountingNotes.trim() || 'Facturas fiscales SAT y comprobantes validados al 100%. Expediente cerrado.',
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Error al realizar el cierre contable del folio.');
+      }
+
+      setLoadedRequest(data.request);
+      setShowFinalizeAccountingModal(false);
+      setStatusNotice('Solicitud de viáticos finalizada y expediente cerrado contablemente por Finanzas.');
+      setActionSuccess(`¡Folio ${loadedRequest.folio} cerrado contablemente con éxito por Finanzas!`);
+      await loadData();
+    } catch (e: any) {
+      setActionError(e.message || 'Error al cerrar contablemente el folio.');
+    } finally {
+      setFinalizingAccounting(false);
+    }
+  }
 
   // Save draft
   async function handleSaveDraft() {
@@ -544,6 +734,10 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         body: JSON.stringify({
           folio: loadedRequest.folio,
           items,
+          supportFiles,
+          pendingFiscalXmls,
+          originalExcelFile: originalExcelFile || undefined,
+          excelAuditSummary: excelAuditSummary || undefined,
           notes,
           refund: refund || undefined,
         }),
@@ -553,6 +747,10 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         throw new Error(data.error || 'Error al guardar el borrador.');
       }
       setVerification(data.verification);
+      setPendingFiscalXmls(data.verification.pendingFiscalXmls || []);
+      setSupportFiles(data.verification.supportFiles || []);
+      setOriginalExcelFile(data.verification.originalExcelFile || null);
+      setExcelAuditSummary(data.verification.excelAuditSummary || null);
       setActionSuccess('Borrador guardado exitosamente. Puedes continuar capturando en cualquier momento.');
       // Refresh list so partial progress is updated
       loadData();
@@ -587,6 +785,10 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         body: JSON.stringify({
           folio: loadedRequest.folio,
           items,
+          supportFiles,
+          pendingFiscalXmls,
+          originalExcelFile: originalExcelFile || undefined,
+          excelAuditSummary: excelAuditSummary || undefined,
           notes,
           refund: refund || undefined,
         }),
@@ -598,6 +800,10 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
       setLoadedRequest(data.request);
       setVerification(data.verification);
+      setPendingFiscalXmls(data.verification.pendingFiscalXmls || []);
+      setSupportFiles(data.verification.supportFiles || []);
+      setOriginalExcelFile(data.verification.originalExcelFile || null);
+      setExcelAuditSummary(data.verification.excelAuditSummary || null);
       setCanEdit(false);
       setShowConfirmFinalModal(false);
       setStatusNotice('Comprobación finalizada y enviada con éxito a Finanzas.');
@@ -623,20 +829,90 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     document.body.removeChild(link);
   }
 
-  function downloadAllFiles(v: ExpenseVerification) {
-    v.items.forEach((item, index) => {
-      setTimeout(() => {
-        if (item.xmlFile) downloadAttachment(item.xmlFile);
-        if (item.pdfFile) downloadAttachment(item.pdfFile);
-        if (item.ticketFile) downloadAttachment(item.ticketFile);
-      }, index * 250);
+  function downloadAllCurrentFiles() {
+    let delayCounter = 0;
+    // Partidas
+    items.forEach((item) => {
+      if (item.xmlFile) {
+        setTimeout(() => downloadAttachment(item.xmlFile!), delayCounter * 250);
+        delayCounter++;
+      }
+      if (item.pdfFile) {
+        setTimeout(() => downloadAttachment(item.pdfFile!), delayCounter * 250);
+        delayCounter++;
+      }
+      if (item.ticketFile) {
+        setTimeout(() => downloadAttachment(item.ticketFile!), delayCounter * 250);
+        delayCounter++;
+      }
     });
+    // Documentos adjuntos de soporte (PDF, XML, Capturas)
+    supportFiles.forEach((sf) => {
+      setTimeout(() => downloadAttachment(sf), delayCounter * 250);
+      delayCounter++;
+    });
+    // Complementos fiscales XML pendientes
+    pendingFiscalXmls.forEach((px) => {
+      setTimeout(() => downloadAttachment(px), delayCounter * 250);
+      delayCounter++;
+    });
+    // Reporte Excel original
+    if (originalExcelFile) {
+      setTimeout(() => downloadAttachment(originalExcelFile), delayCounter * 250);
+      delayCounter++;
+    }
+    // Ficha de reintegro
+    if (refund?.receiptFile) {
+      setTimeout(() => downloadAttachment(refund.receiptFile!), delayCounter * 250);
+      delayCounter++;
+    }
+  }
+
+  function downloadAllFiles(v: ExpenseVerification) {
+    let delayCounter = 0;
+    v.items.forEach((item) => {
+      if (item.xmlFile) {
+        setTimeout(() => downloadAttachment(item.xmlFile!), delayCounter * 250);
+        delayCounter++;
+      }
+      if (item.pdfFile) {
+        setTimeout(() => downloadAttachment(item.pdfFile!), delayCounter * 250);
+        delayCounter++;
+      }
+      if (item.ticketFile) {
+        setTimeout(() => downloadAttachment(item.ticketFile!), delayCounter * 250);
+        delayCounter++;
+      }
+    });
+    if (v.supportFiles && v.supportFiles.length > 0) {
+      v.supportFiles.forEach((sf) => {
+        setTimeout(() => downloadAttachment(sf), delayCounter * 250);
+        delayCounter++;
+      });
+    }
+    if (v.pendingFiscalXmls && v.pendingFiscalXmls.length > 0) {
+      v.pendingFiscalXmls.forEach((px) => {
+        setTimeout(() => downloadAttachment(px), delayCounter * 250);
+        delayCounter++;
+      });
+    }
+    if (v.originalExcelFile) {
+      setTimeout(() => downloadAttachment(v.originalExcelFile!), delayCounter * 250);
+      delayCounter++;
+    }
     if (v.refund?.receiptFile) {
       setTimeout(() => {
         downloadAttachment(v.refund!.receiptFile!);
-      }, (v.items.length || 1) * 250);
+      }, delayCounter * 250);
     }
   }
+
+  const formatFileSize = (bytes?: number) => {
+    if (!bytes || bytes <= 0) return '0 B';
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+  };
 
   const formatCurrency = (val: number) =>
     new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(val);
@@ -1201,6 +1477,38 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
               </span>
             </div>
 
+            {/* Finanzas Contextual Review Banner */}
+            {loadedRequest.status === 'COMPROBADA' && (
+              <div className="bg-gradient-to-r from-teal-900 via-teal-800 to-indigo-950 text-white rounded-xl p-5 shadow-sm border border-teal-700 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                <div className="space-y-1">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-teal-400/20 text-teal-200 border border-teal-400/30 text-[10px] font-bold uppercase tracking-wider">
+                    <ShieldCheck className="w-3.5 h-3.5 text-teal-300" />
+                    EXPEDIENTE RECIBIDO PARA REVISIÓN DE FINANZAS
+                  </div>
+                  <h2 className="text-base font-black">
+                    Revisión y Cierre Contable de Comprobación
+                  </h2>
+                  <p className="text-xs text-teal-100 max-w-xl">
+                    El colaborador ha finalizado la entrega de facturas y tickets. Finanzas puede revisar cada comprobante SAT, verificar saldos y efectuar el cierre contable definitivo.
+                  </p>
+                </div>
+
+                {isPrivileged && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setFinalizeAccountingNotes('Facturas y tickets SAT validados al 100%. Cierre contable concluido.');
+                      setShowFinalizeAccountingModal(true);
+                    }}
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 rounded-lg text-xs font-black shadow-md transition cursor-pointer shrink-0"
+                  >
+                    <CheckCircle className="w-4 h-4 text-emerald-950" />
+                    <span>Proceder al Cierre Contable del Folio</span>
+                  </button>
+                )}
+              </div>
+            )}
+
             {statusNotice && (
               <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg text-blue-900 text-xs flex items-center gap-2 font-medium">
                 <Info className="w-4 h-4 text-blue-600 shrink-0" />
@@ -1255,52 +1563,86 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
             </div>
 
             {/* Financial Balance Summary Card */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
               <div className="bg-white p-4 rounded-xl shadow-xs border border-slate-200">
-                <span className="block font-bold text-slate-400 uppercase text-[10px]">Anticipo Otorgado</span>
+                <span className="block font-bold text-slate-400 uppercase text-[10px]">Importe Depositado al Colaborador</span>
                 <div className="text-xl font-black text-slate-900 font-mono mt-1">
                   {formatCurrency(totalAmountPaid)}
                 </div>
-                <p className="text-[11px] text-slate-500 mt-0.5">Dispersado por Tesorería</p>
+                <p className="text-[11px] text-teal-700 font-medium mt-0.5">
+                  Autorizado: {formatCurrency(loadedRequest.amountAuthorized || loadedRequest.amountRequested)}
+                </p>
               </div>
 
               <div className="bg-white p-4 rounded-xl shadow-xs border border-slate-200">
-                <span className="block font-bold text-slate-400 uppercase text-[10px]">Gastos Comprobados</span>
+                <span className="block font-bold text-slate-400 uppercase text-[10px]">Total de Gastos Comprobados</span>
                 <div className="text-xl font-black text-teal-700 font-mono mt-1">
                   {formatCurrency(totalExpenses)}
                 </div>
-                <p className="text-[11px] text-slate-500 mt-0.5">{items.length} comprobante(s) registrado(s)</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">
+                  {items.length} partida(s) registradas
+                </p>
               </div>
 
-              <div
-                className={`p-4 rounded-xl shadow-xs border transition-colors ${
-                  isFavorEmpresa
-                    ? 'bg-amber-50/60 border-amber-300'
-                    : isFavorColaborador
-                    ? 'bg-blue-50/60 border-blue-300'
-                    : 'bg-emerald-50/60 border-emerald-300'
-                }`}
-              >
+              <div className={`p-4 rounded-xl shadow-xs border transition-colors ${
+                saldoNoUtilizado > 0 ? 'bg-amber-50/70 border-amber-300' : 'bg-slate-50/70 border-slate-200'
+              }`}>
                 <span className="block font-bold uppercase text-[10px] text-slate-500">
-                  Diferencia / Balance
+                  Saldo no Utilizado
                 </span>
-                <div
-                  className={`text-xl font-black font-mono mt-1 ${
-                    isFavorEmpresa ? 'text-amber-800' : isFavorColaborador ? 'text-blue-800' : 'text-emerald-800'
-                  }`}
-                >
-                  {isFavorEmpresa ? `+${formatCurrency(difference)}` : isFavorColaborador ? `-${formatCurrency(Math.abs(difference))}` : '$0.00 MXN'}
+                <div className={`text-xl font-black font-mono mt-1 ${
+                  saldoNoUtilizado > 0 ? 'text-amber-800' : 'text-slate-700'
+                }`}>
+                  {formatCurrency(saldoNoUtilizado)}
                 </div>
-                <p
-                  className={`text-[11px] font-bold mt-0.5 ${
-                    isFavorEmpresa ? 'text-amber-800' : isFavorColaborador ? 'text-blue-800' : 'text-emerald-800'
-                  }`}
-                >
-                  {isFavorEmpresa
-                    ? 'Sobrante a devolver a Finanzas'
-                    : isFavorColaborador
-                    ? 'Faltante a favor del colaborador'
-                    : 'Comprobación exacta al 100%'}
+                <p className={`text-[11px] font-medium mt-0.5 ${
+                  saldoNoUtilizado > 0 ? 'text-amber-700 font-bold' : 'text-slate-400'
+                }`}>
+                  {saldoNoUtilizado > 0
+                    ? `Importe a devolver a DIMER: ${formatCurrency(saldoPendienteDevolucion)}`
+                    : 'Sin excedente no utilizado'}
+                </p>
+              </div>
+
+              <div className={`p-4 rounded-xl shadow-xs border transition-colors ${
+                saldoFavorColaborador > 0
+                  ? 'bg-blue-50/70 border-blue-300'
+                  : saldoPendienteDevolucion > 0
+                  ? 'bg-amber-50/70 border-amber-300'
+                  : 'bg-emerald-50/70 border-emerald-300'
+              }`}>
+                <span className="block font-bold uppercase text-[10px] text-slate-500">
+                  {saldoFavorColaborador > 0
+                    ? 'Importe Adicional a Reembolsar'
+                    : saldoPendienteDevolucion > 0
+                    ? 'Importe a Devolver a DIMER'
+                    : 'Liquidación de Cuentas'}
+                </span>
+                <div className={`text-xl font-black font-mono mt-1 ${
+                  saldoFavorColaborador > 0
+                    ? 'text-blue-800'
+                    : saldoPendienteDevolucion > 0
+                    ? 'text-amber-800'
+                    : 'text-emerald-800'
+                }`}>
+                  {saldoFavorColaborador > 0
+                    ? formatCurrency(saldoFavorColaborador)
+                    : saldoPendienteDevolucion > 0
+                    ? formatCurrency(saldoPendienteDevolucion)
+                    : '$0.00 MXN'}
+                </div>
+                <p className={`text-[11px] font-bold mt-0.5 ${
+                  saldoFavorColaborador > 0
+                    ? 'text-blue-800'
+                    : saldoPendienteDevolucion > 0
+                    ? 'text-amber-800'
+                    : 'text-emerald-800'
+                }`}>
+                  {saldoFavorColaborador > 0
+                    ? 'Saldo a favor del colaborador (reembolso pendiente)'
+                    : saldoPendienteDevolucion > 0
+                    ? 'Devolución requerida a Tesorería DIMER'
+                    : 'Cuentas saldadas (cierre limpio)'}
                 </p>
               </div>
             </div>
@@ -1323,35 +1665,14 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                 </div>
 
                 {canEdit && (
-                  <div className="flex flex-wrap items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={handleOpenRefundModal}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer"
-                    >
-                      <Banknote className="w-3.5 h-3.5" />
-                      <span>{refund ? 'Modificar Reembolso' : '+ Registrar Reembolso de Sobrante'}</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const amount = Number(refundAmount || refund?.amount || difference || 0);
-                        if (isNaN(amount) || amount <= 0) {
-                          setRefundFormError('Primero captura o calcula un monto de reembolso mayor a $0.00 MXN.');
-                          return;
-                        }
-
-                        setRefundAmount(String(amount.toFixed(2)));
-                        setRefundFormError(null);
-                        setShowRefundReceipt(true);
-                      }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer"
-                    >
-                      <Printer className="w-3.5 h-3.5" />
-                      <span>Imprimir Recibo</span>
-                    </button>
-                  </div>
+                  <button
+                    type="button"
+                    onClick={handleOpenRefundModal}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer"
+                  >
+                    <Banknote className="w-3.5 h-3.5" />
+                    <span>{refund ? 'Modificar Reembolso' : '+ Registrar Reembolso de Sobrante'}</span>
+                  </button>
                 )}
               </div>
 
@@ -1392,35 +1713,19 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
                       <div>
                         <span className="text-[10px] text-emerald-700 font-bold uppercase block">Ficha / Comprobante</span>
-                        {refund.receiptFile || refund.signedReceiptFile ? (
+                        {refund.receiptFile ? (
                           <button
                             type="button"
-                            onClick={() => downloadAttachment((refund.receiptFile || refund.signedReceiptFile)!)}
+                            onClick={() => downloadAttachment(refund.receiptFile!)}
                             className="inline-flex items-center gap-1 text-emerald-800 hover:text-emerald-950 font-bold underline text-xs cursor-pointer"
-                            title={refund.receiptFile ? 'Descargar ficha / comprobante del reintegro' : 'Descargar el PDF adjunto del reembolso'}
                           >
                             <Download className="w-3.5 h-3.5 text-emerald-700" />
-                            <span className="truncate max-w-[130px]">
-                              {(refund.receiptFile || refund.signedReceiptFile)!.name}
-                            </span>
+                            <span className="truncate max-w-[130px]">{refund.receiptFile.name}</span>
                           </button>
                         ) : (
                           <span className="text-slate-400 italic">Sin archivo adjunto</span>
                         )}
                       </div>
-                    </div>
-
-                    <div className="mt-2 flex flex-wrap items-center gap-2">
-                      {refund.signedReceiptFile && (
-                        <button
-                          type="button"
-                          onClick={() => downloadAttachment(refund.signedReceiptFile!)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 text-[10px] font-bold cursor-pointer"
-                        >
-                          <Download className="w-3 h-3" />
-                          Ver recibo firmado
-                        </button>
-                      )}
                     </div>
 
                     {refund.notes && (
@@ -1444,12 +1749,15 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                 ) : (
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs">
                     <div className="space-y-0.5">
-                    {!isFavorEmpresa && (
                       <p className="font-bold text-slate-800">
-                        No se ha registrado ningún reembolso de dinero sobrante a Finanzas.
+                        {isFavorEmpresa
+                          ? `Tienes un sobrante a devolver a Finanzas de ${formatCurrency(difference)} MXN.`
+                          : 'No se ha registrado ningún reembolso de dinero sobrante a Finanzas.'}
                       </p>
-                    )}
-                  </div>
+                      <p className="text-[11px] text-slate-500">
+                        Cuenta bancaria oficial BBVA: <strong>0123456789</strong> &bull; CLABE: <strong>012180001234567890</strong> &bull; Titular: <strong>Dimer Corporativo S.A. de C.V.</strong>
+                      </p>
+                    </div>
 
                     {canEdit && (
                       <button
@@ -1465,173 +1773,322 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
               </div>
             </div>
 
-            {/* Expense Items List & Add Button */}
-            <div className="bg-white rounded-xl shadow-xs border border-slate-200 overflow-hidden">
-              <div className="p-4 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-slate-50/80">
-                <div>
-                  <h3 className="font-bold text-slate-900 text-xs flex items-center gap-2">
-                    <FileText className="w-4 h-4 text-teal-600" />
-                    Comprobantes de Gastos Registrados
-                  </h3>
-                  <p className="text-[11px] text-slate-500 mt-0.5">
-                    Facturas fiscales con archivo XML y PDF, o tickets de compra con fotografía/PDF.
-                  </p>
+            {/* IMPORTADOR DE REPORTE DE GASTOS EXCEL (.XLSX) */}
+            <ExcelExpensesImporter
+              folio={loadedRequest.folio}
+              tripStartDate={loadedRequest.startDate}
+              tripEndDate={loadedRequest.endDate}
+              canEdit={canEdit}
+              existingOriginalFile={originalExcelFile || undefined}
+              existingAuditSummary={excelAuditSummary || undefined}
+              onImportConfirmed={handleExcelImportConfirmed}
+              onDownloadOriginalFile={downloadAttachment}
+            />
+
+            {/* BANDEJA: Comprobantes Fiscales (XML CFDI) Pendientes de Asociar */}
+            {pendingFiscalXmls.length > 0 && (
+              <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 space-y-3 shadow-2xs">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 bg-amber-100 text-amber-800 rounded-lg">
+                      <FileCode className="w-5 h-5" />
+                    </div>
+                    <div>
+                      <h4 className="font-bold text-xs text-amber-950 flex items-center gap-2">
+                        <span>Comprobantes Fiscales (XML CFDI) Pendientes de Asociar</span>
+                        <span className="px-2 py-0.5 rounded-full bg-amber-200/80 text-amber-900 font-mono text-[10px] font-bold">
+                          {pendingFiscalXmls.length}
+                        </span>
+                      </h4>
+                      <p className="text-[11px] text-amber-800">
+                        Los archivos <strong>.xml</strong> son complementos fiscales del comprobante y <strong>no representan un gasto por sí mismos (Importe: N/A)</strong>. Asócialos a una partida de gasto existente o crea una nueva partida.
+                      </p>
+                    </div>
+                  </div>
                 </div>
 
-                {canEdit && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      resetItemModal();
-                      setShowItemModal(true);
-                    }}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold rounded-lg shadow-xs transition cursor-pointer"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    <span>Agregar Comprobante</span>
-                  </button>
-                )}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                  {pendingFiscalXmls.map((xml) => (
+                    <div
+                      key={xml.id}
+                      className="bg-white border border-amber-200 rounded-lg p-3 text-xs shadow-2xs flex flex-col justify-between gap-2.5"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex items-start gap-2 min-w-0">
+                          <FileCode className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                          <div className="min-w-0 space-y-0.5">
+                            <p className="font-bold text-slate-800 truncate" title={xml.name}>
+                              {xml.name}
+                            </p>
+                            <div className="flex flex-wrap items-center gap-1.5 text-[10px]">
+                              <span className="px-1.5 py-0.2 bg-purple-50 text-purple-800 border border-purple-200 rounded font-bold font-mono">
+                                XML CFDI
+                              </span>
+                              <span className="px-1.5 py-0.2 bg-amber-100 text-amber-900 rounded font-semibold">
+                                Estado: Pendiente de asociar a un gasto
+                              </span>
+                            </div>
+                            <div className="text-[10px] text-slate-500 font-mono">
+                              <span>Importe: </span>
+                              <strong className="text-slate-700">N/A</strong>
+                              <span className="text-slate-400"> (No suma a balances)</span>
+                            </div>
+                            {xml.uuid && (
+                              <p className="text-[9px] font-mono text-slate-400 truncate max-w-xs" title={`UUID: ${xml.uuid}`}>
+                                UUID: {xml.uuid}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            type="button"
+                            onClick={() => downloadAttachment(xml)}
+                            className="p-1 text-slate-400 hover:text-amber-800 rounded transition"
+                            title="Descargar XML CFDI"
+                          >
+                            <Download className="w-3.5 h-3.5" />
+                          </button>
+                          {canEdit && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemovePendingXml(xml.id)}
+                              className="p-1 text-slate-400 hover:text-rose-600 rounded transition"
+                              title="Descartar este XML pendiente"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      {canEdit && (
+                        <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-1.5">
+                          {items.length > 0 ? (
+                            <div className="flex items-center gap-1.5 w-full sm:w-auto">
+                              <select
+                                className="text-[11px] py-1 px-2 border border-slate-300 rounded bg-slate-50 font-medium focus:ring-1 focus:ring-amber-500 focus:outline-none max-w-[170px] truncate"
+                                defaultValue=""
+                                onChange={(e) => {
+                                  if (e.target.value) {
+                                    handleAssociatePendingXmlToRow(xml, e.target.value);
+                                    e.target.value = '';
+                                  }
+                                }}
+                              >
+                                <option value="" disabled>
+                                  Asociar a gasto existente...
+                                </option>
+                                {items.map((it, idx) => (
+                                  <option key={it.id} value={it.id}>
+                                    #{idx + 1} {it.concept || 'Sin concepto'} ({formatCurrency(it.amount)}) {it.xmlFile ? '✓ Ya tiene XML' : ''}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          ) : null}
+
+                          <button
+                            type="button"
+                            onClick={() => handleCreateRowFromPendingXml(xml)}
+                            className="inline-flex items-center gap-1 text-[11px] font-bold px-2 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded transition shadow-2xs cursor-pointer ml-auto"
+                          >
+                            <Plus className="w-3 h-3" />
+                            <span>+ Crear nuevo gasto con este XML</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* EXPEDIENTE: Documentos y Comprobantes Adjuntos (PDF, XML, Capturas) */}
+            <div className="bg-white rounded-xl shadow-2xs border border-slate-200 overflow-hidden">
+              <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-2.5">
+                  <div className="p-2 bg-indigo-50 border border-indigo-200 text-indigo-700 rounded-lg">
+                    <Archive className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-xs text-slate-900 flex items-center gap-2">
+                      <span>Expediente de Documentos Adjuntos (PDF, XML, Capturas)</span>
+                      <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 font-mono text-[10px] font-bold">
+                        {supportFiles.length} archivo(s)
+                      </span>
+                    </h4>
+                    <p className="text-[11px] text-slate-500">
+                      Comprobantes y soportes documentales del viaje (facturas PDF, complementos fiscales XML, fotos/capturas de ticket). Se conservan en el expediente para consulta y descarga por Finanzas o el usuario sin registrarse como partidas de gasto en la tabla.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 shrink-0">
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={() => setShowBulkUploaderModal(true)}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold shadow-2xs transition cursor-pointer"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>+ Subir Documentos</span>
+                    </button>
+                  )}
+
+                  {supportFiles.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={downloadAllCurrentFiles}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 rounded-lg text-xs font-bold shadow-2xs transition cursor-pointer"
+                      title="Descargar todos los documentos adjuntos en este folio"
+                    >
+                      <FolderDown className="w-3.5 h-3.5 text-slate-600" />
+                      <span>Descargar Todos ({supportFiles.length})</span>
+                    </button>
+                  )}
+                </div>
               </div>
 
-              {items.length === 0 ? (
-                <div className="p-10 text-center">
-                  <FileText className="w-8 h-8 text-slate-300 mx-auto mb-2" />
-                  <p className="text-xs font-bold text-slate-700">Sin comprobantes registrados</p>
-                  <p className="text-[11px] text-slate-400 mt-0.5 max-w-md mx-auto">
-                    {canEdit
-                      ? 'Haz clic en "Agregar Comprobante" para adjuntar tus facturas (XML + PDF) o tickets.'
-                      : 'No se encontraron comprobantes registrados para esta solicitud.'}
-                  </p>
-                </div>
-              ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead className="bg-slate-50 border-b border-slate-200 text-[10px] uppercase font-black tracking-wider text-slate-500">
-                      <tr>
-                        <th className="px-3 py-2.5">#</th>
-                        <th className="px-3 py-2.5">Concepto</th>
-                        <th className="px-3 py-2.5">Fecha</th>
-                        <th className="px-3 py-2.5">Tipo</th>
-                        <th className="px-3 py-2.5 text-right">Importe</th>
-                        <th className="px-3 py-2.5">Archivos Adjuntos</th>
-                        <th className="px-3 py-2.5 text-right">Acciones</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200">
-                      {items.map((item, index) => {
-                        const isFactura = item.type === 'FACTURA';
-                        const hasXml = Boolean(item.xmlFile);
-                        const hasPdf = Boolean(item.pdfFile);
-                        const hasTicket = Boolean(item.ticketFile);
+              <div className="p-4">
+                {supportFiles.length === 0 ? (
+                  <div className="text-center py-6 px-4 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
+                    <Archive className="w-8 h-8 text-slate-300 mx-auto mb-1.5" />
+                    <p className="text-xs font-bold text-slate-700">No hay documentos adjuntos aún en este expediente</p>
+                    <p className="text-[11px] text-slate-500 mt-0.5 max-w-md mx-auto">
+                      Sube tus facturas PDF, XML o capturas/fotos de tickets para que queden disponibles para Finanzas y para tu consulta.
+                    </p>
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => setShowBulkUploaderModal(true)}
+                        className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-lg shadow-2xs transition cursor-pointer"
+                      >
+                        <Upload className="w-3.5 h-3.5" />
+                        <span>Subir Documentos (PDF, XML, Capturas)</span>
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2.5">
+                    {supportFiles.map((file) => {
+                      const lower = file.name.toLowerCase();
+                      const isPdf = lower.endsWith('.pdf');
+                      const isXml = lower.endsWith('.xml') || file.role === 'COMPLEMENTO_FISCAL';
+                      const isImg =
+                        lower.endsWith('.jpg') ||
+                        lower.endsWith('.jpeg') ||
+                        lower.endsWith('.png') ||
+                        lower.endsWith('.webp') ||
+                        Boolean(file.type && file.type.startsWith('image/'));
 
-                        return (
-                          <tr key={item.id} className="hover:bg-slate-50/80 transition-colors">
-                            <td className="px-3 py-2.5 font-mono font-bold text-slate-400">
-                              {index + 1}
-                            </td>
-                            <td className="px-3 py-2.5 font-bold text-slate-900">
-                              <div>{item.concept}</div>
-                              {item.notes && (
-                                <div className="text-[10px] text-slate-400 font-normal">{item.notes}</div>
-                              )}
-                            </td>
-                            <td className="px-3 py-2.5 text-slate-600 whitespace-nowrap">
-                              {item.expenseDate}
-                            </td>
-                            <td className="px-3 py-2.5 whitespace-nowrap">
-                              <span
-                                className={`inline-flex items-center px-2 py-0.5 rounded text-[10px] font-bold ${
-                                  isFactura
-                                    ? 'bg-blue-100 text-blue-800 border border-blue-200'
-                                    : 'bg-amber-100 text-amber-800 border border-amber-200'
-                                }`}
-                              >
-                                {isFactura ? 'Factura Fiscal' : 'Ticket'}
-                              </span>
-                            </td>
-                            <td className="px-3 py-2.5 text-right font-mono font-black text-slate-900 whitespace-nowrap">
-                              {formatCurrency(item.amount)}
-                            </td>
-                            <td className="px-3 py-2.5">
+                      return (
+                        <div
+                          key={file.id}
+                          className="p-3 rounded-lg border border-slate-200 bg-white hover:border-indigo-300 hover:shadow-2xs transition flex flex-col justify-between gap-2.5"
+                        >
+                          <div className="flex items-start gap-2.5 min-w-0">
+                            <div
+                              className={`p-2 rounded-lg shrink-0 ${
+                                isPdf
+                                  ? 'bg-rose-50 text-rose-600 border border-rose-100'
+                                  : isXml
+                                  ? 'bg-amber-50 text-amber-600 border border-amber-100'
+                                  : 'bg-teal-50 text-teal-600 border border-teal-100'
+                              }`}
+                            >
+                              {isPdf && <FileText className="w-4 h-4" />}
+                              {isXml && <FileCode className="w-4 h-4" />}
+                              {isImg && <ImageIcon className="w-4 h-4" />}
+                              {!isPdf && !isXml && !isImg && <Paperclip className="w-4 h-4" />}
+                            </div>
+
+                            <div className="min-w-0 flex-1 space-y-1">
+                              <p className="text-xs font-bold text-slate-800 truncate" title={file.name}>
+                                {file.name}
+                              </p>
                               <div className="flex flex-wrap items-center gap-1.5">
-                                {isFactura ? (
-                                  <>
-                                    {hasXml ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => downloadAttachment(item.xmlFile!)}
-                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-teal-50 hover:bg-teal-100 text-teal-800 text-[10px] font-bold border border-teal-200 cursor-pointer"
-                                        title={`Descargar ${item.xmlFile!.name}`}
-                                      >
-                                        <FileCode className="w-3 h-3 text-teal-600" />
-                                        XML
-                                        <Download className="w-2.5 h-2.5" />
-                                      </button>
-                                    ) : (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-50 text-rose-700 text-[10px] font-bold border border-rose-200">
-                                        Falta XML
-                                      </span>
-                                    )}
-
-                                    {hasPdf ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => downloadAttachment(item.pdfFile!)}
-                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 hover:bg-blue-100 text-blue-800 text-[10px] font-bold border border-blue-200 cursor-pointer"
-                                        title={`Descargar ${item.pdfFile!.name}`}
-                                      >
-                                        <FileText className="w-3 h-3 text-blue-600" />
-                                        PDF
-                                        <Download className="w-2.5 h-2.5" />
-                                      </button>
-                                    ) : (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-50 text-rose-700 text-[10px] font-bold border border-rose-200">
-                                        Falta PDF
-                                      </span>
-                                    )}
-                                  </>
-                                ) : (
-                                  <>
-                                    {hasTicket ? (
-                                      <button
-                                        type="button"
-                                        onClick={() => downloadAttachment(item.ticketFile!)}
-                                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-50 hover:bg-amber-100 text-amber-800 text-[10px] font-bold border border-amber-200 cursor-pointer"
-                                        title={`Descargar ${item.ticketFile!.name}`}
-                                      >
-                                        <FileText className="w-3 h-3 text-amber-600" />
-                                        Ticket
-                                        <Download className="w-2.5 h-2.5" />
-                                      </button>
-                                    ) : (
-                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-50 text-rose-700 text-[10px] font-bold border border-rose-200">
-                                        Sin comprobante
-                                      </span>
-                                    )}
-                                  </>
-                                )}
+                                <span
+                                  className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
+                                    isPdf
+                                      ? 'bg-rose-50 text-rose-700 border border-rose-200'
+                                      : isXml
+                                      ? 'bg-amber-50 text-amber-800 border border-amber-200'
+                                      : 'bg-teal-50 text-teal-800 border border-teal-200'
+                                  }`}
+                                >
+                                  {isPdf ? 'Factura PDF' : isXml ? 'Fiscal XML CFDI' : 'Captura / Ticket'}
+                                </span>
+                                <span className="text-[10px] font-mono text-slate-400">
+                                  {formatFileSize(file.size)}
+                                </span>
                               </div>
-                            </td>
-                            <td className="px-3 py-2.5 text-right whitespace-nowrap">
+                              {file.uuid && (
+                                <p className="text-[9px] font-mono text-slate-400 truncate" title={`UUID: ${file.uuid}`}>
+                                  UUID: {file.uuid}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Action Buttons: Descargar & Ver & Eliminar */}
+                          <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1">
+                            <button
+                              type="button"
+                              onClick={() => downloadAttachment(file)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-slate-700 text-[11px] font-bold transition cursor-pointer"
+                              title="Descargar este archivo"
+                            >
+                              <Download className="w-3.5 h-3.5 text-slate-500 hover:text-indigo-600" />
+                              <span>Descargar</span>
+                            </button>
+
+                            <div className="flex items-center gap-1">
+                              {isImg && (
+                                <button
+                                  type="button"
+                                  onClick={() => setPreviewModalFile(file)}
+                                  className="p-1 rounded text-slate-400 hover:text-teal-700 hover:bg-slate-100 transition cursor-pointer"
+                                  title="Vista previa de captura"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
+                              )}
                               {canEdit && (
                                 <button
                                   type="button"
-                                  onClick={() => handleRemoveItem(item.id)}
-                                  className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer"
-                                  title="Eliminar comprobante"
+                                  onClick={() => handleRemoveSupportFile(file.id)}
+                                  className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
+                                  title="Eliminar este archivo del expediente"
                                 >
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
                               )}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
-              )}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
+
+            {/* Excel Expenses Matrix Table (Captura Rápida) */}
+            <ExcelExpensesTable
+              items={items}
+              startDate={loadedRequest.startDate}
+              endDate={loadedRequest.endDate}
+              canEdit={canEdit}
+              availableAttachments={uploadedAttachmentsPool}
+              pendingFiscalXmls={pendingFiscalXmls}
+              onChangeItems={setItems}
+              onOpenBulkUploader={() => setShowBulkUploaderModal(true)}
+              onPreviewAttachment={downloadAttachment}
+              onAssignPendingXml={handleAssociatePendingXmlToRow}
+              onUnassignXml={handleUnassignXml}
+            />
 
             {/* Solicitante Notes */}
             <div className="bg-white rounded-xl shadow-xs border border-slate-200 p-4">
@@ -1711,11 +2168,24 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                   </>
                 )}
 
-                {verification && (
+                {originalExcelFile && (
                   <button
                     type="button"
-                    onClick={() => downloadAllFiles(verification)}
+                    onClick={() => downloadAttachment(originalExcelFile)}
+                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 text-white text-xs font-bold shadow-2xs transition cursor-pointer"
+                    title="Descargar exactamente el archivo Excel original subido por el colaborador"
+                  >
+                    <FileSpreadsheet className="w-3.5 h-3.5" />
+                    Descargar Reporte Excel Original
+                  </button>
+                )}
+
+                {(verification || supportFiles.length > 0 || items.some(i => i.xmlFile || i.pdfFile || i.ticketFile) || pendingFiscalXmls.length > 0 || originalExcelFile) && (
+                  <button
+                    type="button"
+                    onClick={downloadAllCurrentFiles}
                     className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-bold shadow-2xs transition cursor-pointer"
+                    title="Descargar todos los archivos y comprobantes de este folio"
                   >
                     <Download className="w-3.5 h-3.5" />
                     Descargar Comprobantes
@@ -1922,50 +2392,6 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                 </div>
               </div>
 
-              {/* Recibo de reembolso firmado */}
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">
-                  Recibo de Reembolso Firmado por el Empleado (PDF)
-                </label>
-                <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <FileText className="w-4 h-4 text-blue-600 shrink-0" />
-                    <div className="min-w-0">
-                      {signedRefundFile ? (
-                        <div className="text-[11px] font-bold text-blue-900 truncate">
-                          {signedRefundFile.name} ({(signedRefundFile.size / 1024).toFixed(1)} KB)
-                        </div>
-                      ) : (
-                        <div className="text-[11px] text-blue-800">
-                          Imprime el recibo, recaba la firma, escanéalo y súbelo aquí.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                  {signedRefundFile ? (
-                    <div className="flex items-center gap-2 shrink-0">
-                      <button type="button" onClick={() => downloadAttachment(signedRefundFile)} className="text-[10px] text-blue-700 font-bold hover:underline cursor-pointer">
-                        Ver
-                      </button>
-                      <button type="button" onClick={() => setSignedRefundFile(null)} className="text-[10px] text-rose-600 font-bold hover:underline cursor-pointer">
-                        Quitar
-                      </button>
-                    </div>
-                  ) : (
-                    <label htmlFor={`${fileRefundId}-signed`} className="px-2.5 py-1 bg-white border border-blue-300 hover:bg-blue-100 rounded text-[11px] font-bold text-blue-800 cursor-pointer shadow-2xs whitespace-nowrap">
-                      Subir PDF firmado
-                      <input
-                        id={`${fileRefundId}-signed`}
-                        type="file"
-                        accept=".pdf,application/pdf"
-                        onChange={handleSignedRefundFileUpload}
-                        className="hidden"
-                      />
-                    </label>
-                  )}
-                </div>
-              </div>
-
               {/* Observaciones */}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Notas u observaciones (opcional)</label>
@@ -1996,20 +2422,6 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
             </form>
           </div>
         </div>
-      )}
-
-      {showRefundReceipt && loadedRequest && (
-        <RefundReceiptModal
-          folio={loadedRequest.folio}
-          employeeName={loadedRequest.requesterName || loadedRequest.user?.name || currentUser.name}
-          department={loadedRequest.department || currentUser.department}
-          destination={loadedRequest.destination}
-          amount={Number(refundAmount || 0)}
-          refundDate={refundDate}
-          method={refundMethod}
-          reference={refundReference.trim()}
-          onClose={() => setShowRefundReceipt(false)}
-        />
       )}
 
       {/* Modal to Add New Expense Item */}
@@ -2389,29 +2801,35 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
               {/* Financial Balance Summary Card */}
               <div className="bg-white border border-teal-200 rounded-lg p-3 space-y-2">
                 <div className="flex justify-between text-xs">
-                  <span className="text-slate-600">Anticipo Otorgado:</span>
+                  <span className="text-slate-600">Importe Depositado al Colaborador:</span>
                   <span className="font-mono font-bold text-slate-800">{formatCurrency(totalAmountPaid)}</span>
                 </div>
                 <div className="flex justify-between text-xs">
-                  <span className="text-slate-600">Total Comprobado:</span>
+                  <span className="text-slate-600">Total de Gastos Comprobados:</span>
                   <span className="font-mono font-bold text-teal-700">{formatCurrency(totalExpenses)}</span>
                 </div>
                 <div className="flex justify-between text-xs pt-1 border-t border-slate-100">
-                  <span className="font-bold text-slate-700">Balance:</span>
-                  <div>
-                    {isFavorEmpresa ? (
-                      <span className="font-bold text-amber-800">
-                        Sobrante Empresa: {formatCurrency(difference)}
-                      </span>
-                    ) : isFavorColaborador ? (
-                      <span className="font-bold text-blue-800">
-                        Faltante Reembolsar: {formatCurrency(Math.abs(difference))}
-                      </span>
-                    ) : (
-                      <span className="font-bold text-emerald-800">Exacto ($0.00)</span>
-                    )}
-                  </div>
+                  <span className="text-slate-600">Saldo no Utilizado:</span>
+                  <span className="font-mono font-bold text-slate-800">{formatCurrency(saldoNoUtilizado)}</span>
                 </div>
+                {saldoPendienteDevolucion > 0 && (
+                  <div className="flex justify-between text-xs">
+                    <span className="font-bold text-amber-800">Importe a Devolver a DIMER:</span>
+                    <span className="font-mono font-bold text-amber-800">{formatCurrency(saldoPendienteDevolucion)}</span>
+                  </div>
+                )}
+                {saldoFavorColaborador > 0 && (
+                  <div className="flex justify-between text-xs">
+                    <span className="font-bold text-blue-800">Importe Adicional a Reembolsar:</span>
+                    <span className="font-mono font-bold text-blue-800">{formatCurrency(saldoFavorColaborador)}</span>
+                  </div>
+                )}
+                {saldoPendienteDevolucion === 0 && saldoFavorColaborador === 0 && (
+                  <div className="flex justify-between text-xs">
+                    <span className="font-bold text-emerald-800">Estado de Liquidación:</span>
+                    <span className="font-bold text-emerald-800">Cuentas Saldadas ($0.00 MXN)</span>
+                  </div>
+                )}
               </div>
 
               {/* Refund confirmation item */}
@@ -2427,7 +2845,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                 </div>
               ) : isFavorEmpresa ? (
                 <div className="p-2.5 bg-amber-50 border border-amber-300 rounded-lg text-[11px] text-amber-900">
-                  <strong>Aviso:</strong> Tienes un saldo a favor de la empresa por {formatCurrency(difference)}. Si ya realizaste el depósito o transferencia, puedes adjuntar el comprobante de reintegro antes de enviar.
+                  <strong>Aviso:</strong> Cuentas con un importe a devolver a DIMER de {formatCurrency(saldoPendienteDevolucion)}. Si ya realizaste el depósito o transferencia de reintegro, puedes adjuntar el comprobante antes de enviar.
                 </div>
               ) : null}
 
@@ -2472,6 +2890,139 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                   </>
                 )}
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Carga Masiva de Comprobantes */}
+      {showBulkUploaderModal && loadedRequest && (
+        <div className="fixed inset-0 z-[550] bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="w-full max-w-2xl my-6">
+            <BulkExpensesUploader
+              folio={loadedRequest.folio}
+              existingFileSignatures={new Set(uploadedAttachmentsPool.map(a => `${a.name}_${a.size}`))}
+              onAttachmentsUploaded={handleAttachmentsUploaded}
+              onClose={() => setShowBulkUploaderModal(false)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Cierre Contable por Finanzas */}
+      {showFinalizeAccountingModal && loadedRequest && (
+        <div className="fixed inset-0 z-[550] bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-md overflow-hidden">
+            <div className="p-4 bg-purple-900 text-white flex items-center justify-between">
+              <h4 className="font-bold text-sm flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-purple-300" />
+                Cierre Contable del Expediente
+              </h4>
+              <button
+                type="button"
+                onClick={() => setShowFinalizeAccountingModal(false)}
+                className="text-slate-400 hover:text-white p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 text-xs">
+              <p className="text-slate-600">
+                ¿Confirmas el cierre contable del folio <strong>{loadedRequest.folio}</strong>? Esta acción marcará la solicitud como <strong>FINALIZADA</strong> en Tesorería y cerrará formalmente el expediente.
+              </p>
+
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Notas de revisión contable para auditoría:
+                </label>
+                <textarea
+                  value={finalizeAccountingNotes}
+                  onChange={(e) => setFinalizeAccountingNotes(e.target.value)}
+                  rows={3}
+                  placeholder="Facturas fiscales SAT y comprobantes validados al 100%..."
+                  className="w-full border border-slate-300 rounded-lg p-2 text-xs focus:ring-1 focus:ring-purple-500 focus:outline-none"
+                />
+              </div>
+
+              <div className="pt-2 flex items-center justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowFinalizeAccountingModal(false)}
+                  disabled={finalizingAccounting}
+                  className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-semibold"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={handleFinalizeAccounting}
+                  disabled={finalizingAccounting}
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-purple-700 hover:bg-purple-800 text-white rounded-lg font-bold shadow-xs transition cursor-pointer disabled:opacity-50"
+                >
+                  {finalizingAccounting ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Procesando Cierre...</span>
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-3.5 h-3.5" />
+                      <span>Confirmar Cierre Contable</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Vista Previa de Captura / Ticket / Evidencia */}
+      {previewModalFile && (
+        <div className="fixed inset-0 z-[600] bg-slate-950/80 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl shadow-2xl border border-slate-200 max-w-3xl w-full max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="p-3 bg-slate-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2 min-w-0">
+                <Eye className="w-4 h-4 text-teal-400 shrink-0" />
+                <span className="font-bold text-xs truncate">{previewModalFile.name}</span>
+                <span className="text-[10px] text-slate-400 font-mono">
+                  ({formatFileSize(previewModalFile.size)})
+                </span>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => downloadAttachment(previewModalFile)}
+                  className="inline-flex items-center gap-1 px-2.5 py-1 bg-teal-600 hover:bg-teal-700 text-white rounded text-xs font-bold transition cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Descargar</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPreviewModalFile(null)}
+                  className="p-1 text-slate-400 hover:text-white rounded transition cursor-pointer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+            <div className="p-4 overflow-auto flex items-center justify-center bg-slate-950/10 min-h-[300px]">
+              {previewModalFile.type.startsWith('image/') ||
+              previewModalFile.name.match(/\.(jpg|jpeg|png|webp)$/i) ? (
+                <img
+                  src={previewModalFile.dataUrl}
+                  alt={previewModalFile.name}
+                  className="max-h-[70vh] max-w-full object-contain rounded shadow-md"
+                />
+              ) : (
+                <iframe
+                  src={previewModalFile.dataUrl}
+                  title={previewModalFile.name}
+                  className="w-full h-[70vh] rounded border border-slate-300"
+                />
+              )}
             </div>
           </div>
         </div>

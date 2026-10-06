@@ -3,7 +3,7 @@ import type { Request, Response } from 'express';
 import { getUserById, listRoles, listUsers, sanitizeUser, hasPermission, validateApprovalToken, processApprovalTokenAction, getRequest, recordAuditLog } from './db.js';
 import { buildSystemsApprovedEmailHtml, buildTokenApprovalResultPageHtml, buildTokenApprovalDecisionPageHtml, buildRejectionEmailHtml, sendEmail } from './mailService.js';
 
-const PUBLIC_EXACT = new Set(['/api/health','/health','/api/diagnostic','/diagnostic','/api/auth/login','/auth/login','/api/login','/login','/api/switch-user','/api/auth/register-init','/api/auth/verify-code','/api/auth/resend-code','/api/departments','/api/bosses','/api/requests']);
+const PUBLIC_EXACT = new Set(['/api/health','/health','/api/diagnostic','/diagnostic','/api/auth/login','/auth/login','/api/login','/login','/api/switch-user','/api/auth/register-init','/api/auth/verify-code','/api/auth/resend-code','/api/departments','/api/bosses','/api/requests','/api/expenses/download-template']);
 const ADMIN_EXACT = new Set(['/api/outbox','/api/stats','/api/code-artifacts','/api/permissions','/api/roles']);
 const CONFIG_EXACT = new Set(['/api/smtp/status','/api/smtp/test','/api/audit-logs']);
 const PROTECTED_REQUEST_FIELDS = new Set(['id','folio','userId','status','approvalToken','approvedBy','approvedAt','rejectedBy','rejectedAt','rejectionReason','createdAt','updatedAt']);

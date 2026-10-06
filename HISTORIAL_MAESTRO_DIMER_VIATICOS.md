@@ -145,4 +145,9 @@ Cuando se retome el proyecto, entregar este archivo a Google AI Studio y solicit
 - actualizar este historial después de cada cambio.
 
 ## Última actualización
-`2026-09-06` — Se actualizó el flujo de tesorería y finanzas para registro de pago permitiendo selección explícita entre SPEI y Efectivo. Se validó compilación limpia y ausencia de errores de tipos.
+`2026-10-01` — Se implementó la Etapa 2 de Comprobación y Rendición de Gastos en entorno de prueba local (sin tocar producción):
+1. **Acceso contextual de Finanzas:** Al abrir un folio COMPROBADA desde correo o URL directa (`/?tab=comprobar&folio=...`), la vista lo localiza de inmediato, conmuta automáticamente a la pestaña de comprobadas, despliega el banner de revisión contable de Finanzas y permite ejecutar el Cierre Contable oficial (`/api/requests/:id/finalize`).
+2. **Corrección de fórmulas financieras (Bug 2):** Motor unificado `computeExpenseBalances` entre cliente y servidor. El reintegro de sobrante devuelto a Finanzas descuenta de inmediato y en tiempo real el saldo pendiente de devolución sin duplicar gastos.
+3. **Carga masiva de comprobantes:** Componente `BulkExpensesUploader` con soporte individual por archivo (PDF, XML, JPG, PNG, máx. 10 MB), progreso independiente, detección de duplicados y reintentos unitarios.
+4. **Matriz tipo Excel interactiva:** Componente `ExcelExpensesTable` con fechas dinámicas acotadas al viaje, categorías contables estrictas, formas de pago (Anticipo, TC Empresa, Personal) y compatibilidad total con registros históricos ("Sin clasificación histórica").
+5. **Cero modificaciones a producción:** Vercel producción, GitHub, datos de producción y Supabase permanecen 100% aislados e intactos.

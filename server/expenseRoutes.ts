@@ -6,6 +6,7 @@ import { sendEmail, buildExpenseVerificationSubmittedEmailHtml } from './mailSer
 import { resolveBaseUrl } from './baseUrl.js';
 import type { User, ExpenseItem, ExpenseVerification } from '../src/types.js';
 import { computeExpenseBalances } from '../src/utils/expenseCalculations.js';
+import { parseDimerExpenseExcel } from './excelImport.js';
 
 function parseCookies(req: Request) {
   const raw = String(req.headers.cookie || '');
@@ -108,6 +109,47 @@ function validateRefund(difference: number, refund: any): string | null {
 }
 
 export function registerExpenseRoutes(app: Express) {
+  app.post('/api/expenses/import-excel', async (req: Request, res: Response) => {
+    try {
+      const user = await getRequestUser(req);
+      if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
+      const folio = String(req.body.folio || '').trim().toUpperCase();
+      const file = req.body.file || {};
+      if (!folio) return res.status(400).json({ success: false, error: 'Folio requerido' });
+      if (!file.name || !String(file.name).toLowerCase().endsWith('.xlsx')) return res.status(400).json({ success: false, error: 'Solo se permite el formato oficial Excel (.xlsx).' });
+      const request = await getRequest(folio);
+      if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
+      const privileged = userIsAdminOrFinanzas(user);
+      if (!privileged && !isOwner(request, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para importar el Excel en este folio' });
+      if (request.status !== 'PAGADA' && request.status !== 'COMPROBADA') return res.status(400).json({ success: false, error: `Solo se puede importar el reporte en solicitudes pagadas. Estado actual: ${request.status}` });
+      const parsed = parseDimerExpenseExcel({ fileName: String(file.name), fileSize: Number(file.size) || 0, fileType: String(file.type || ''), dataUrl: String(file.dataUrl || ''), uploadedBy: user.email });
+      const existing = await getVerificationByFolio(folio);
+      const existingOriginal = existing?.originalExcelFile;
+      const isDuplicate = Boolean(existingOriginal && existingOriginal.name === parsed.originalExcelFile.name && existingOriginal.size === parsed.originalExcelFile.size);
+      return res.json({ success: true, folio, ...parsed, isDuplicate });
+    } catch (e: any) {
+      console.error('[EXPENSE-EXCEL-IMPORT-ERROR]', e);
+      return res.status(400).json({ success: false, error: e.message || 'Error al procesar el archivo Excel.' });
+    }
+  });
+
+  app.get('/api/expenses/download-template', async (req: Request, res: Response) => {
+    try {
+      const user = await getRequestUser(req);
+      if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
+      const base64 = String(process.env.DIMER_EXCEL_TEMPLATE_BASE64 || '');
+      if (!base64) return res.status(503).json({ success: false, error: 'La plantilla oficial Excel aún no está configurada en el servidor.' });
+      const buffer = Buffer.from(base64.replace(/^data:[^;]+;base64,/, ''), 'base64');
+      if (!buffer.length) return res.status(503).json({ success: false, error: 'La plantilla oficial Excel configurada está vacía.' });
+      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+      res.setHeader('Content-Disposition', 'attachment; filename="Reporte de Gastos DIMER.xlsx"');
+      res.setHeader('Content-Length', buffer.length);
+      return res.send(buffer);
+    } catch (e: any) {
+      console.error('[EXPENSE-EXCEL-TEMPLATE-ERROR]', e);
+      return res.status(500).json({ success: false, error: e.message || 'Error al descargar la plantilla.' });
+    }
+  });
   app.get('/api/expenses/search', async (req: Request, res: Response) => {
     try {
       const user = await getRequestUser(req);

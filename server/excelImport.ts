@@ -13,7 +13,7 @@ function norm(v: unknown) {
 }
 
 function num(v: unknown) {
-  const n = typeof v === 'number' ? v : Number(String(v ?? '').replace(/[$,\\s]/g, ''));
+  const n = typeof v === 'number' ? v : Number(String(v ?? '').replace(/[$,\s]/g, ''));
   return Number.isFinite(n) ? n : 0;
 }
 

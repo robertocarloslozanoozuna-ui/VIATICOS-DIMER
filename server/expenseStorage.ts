@@ -39,6 +39,10 @@ function extractVerification(details: any, row: any): ExpenseVerification | null
     status: source.status || (row.action === 'COMPROBACION_GASTOS_FINALIZADA' ? 'ENVIADA' : 'BORRADOR'), items: source.items,
     totalAmountPaid: Number(source.totalAmountPaid || 0), totalExpenses: Number(source.totalExpenses || 0), difference: Number(source.difference || 0),
     balanceType: source.balanceType || 'EXACTO', balanceAmount: Number(source.balanceAmount || 0), notes: source.notes || '', refund: source.refund,
+    supportFiles: Array.isArray(source.supportFiles) ? source.supportFiles : [],
+    pendingFiscalXmls: Array.isArray(source.pendingFiscalXmls) ? source.pendingFiscalXmls : [],
+    originalExcelFile: source.originalExcelFile,
+    excelAuditSummary: source.excelAuditSummary,
     submittedAt: source.submittedAt, updatedAt: source.updatedAt || row.created_at, createdAt: source.createdAt || row.created_at,
   } as ExpenseVerification;
 }
@@ -87,6 +91,11 @@ export async function findFileById(fileId: string): Promise<{ file: ExpenseFileA
       if (item.pdfFile?.id === key) return { file: item.pdfFile, folio: v.folio, concept: item.concept };
       if (item.ticketFile?.id === key) return { file: item.ticketFile, folio: v.folio, concept: item.concept };
     }
+    const support = (v.supportFiles || []).find(f => f?.id === key);
+    if (support) return { file: support, folio: v.folio, concept: 'Soporte documental' };
+    const pendingXml = (v.pendingFiscalXmls || []).find(f => f?.id === key);
+    if (pendingXml) return { file: pendingXml, folio: v.folio, concept: 'Complemento fiscal XML' };
+    if (v.originalExcelFile?.id === key) return { file: v.originalExcelFile, folio: v.folio, concept: 'Reporte de gastos Excel' };
     if (v.refund?.receiptFile?.id === key) return { file: v.refund.receiptFile, folio: v.folio, concept: 'Comprobante de Reembolso a Finanzas' };
     if (v.refund?.signedReceiptFile?.id === key) return { file: v.refund.signedReceiptFile, folio: v.folio, concept: 'Recibo de Reembolso Firmado' };
   }

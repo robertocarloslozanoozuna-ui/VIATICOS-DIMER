@@ -109,6 +109,71 @@ function validateRefund(difference: number, refund: any): string | null {
 }
 
 export function registerExpenseRoutes(app: Express) {
+  app.post('/api/expenses/upload-file', async (req: Request, res: Response) => {
+    try {
+      const user = await getRequestUser(req);
+      if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
+
+      const folio = String(req.body?.folio || '').trim().toUpperCase();
+      const name = String(req.body?.name || '').trim();
+      const dataUrl = String(req.body?.dataUrl || '');
+      const declaredSize = Number(req.body?.size) || 0;
+      const declaredType = String(req.body?.type || '').trim().toLowerCase();
+
+      if (!folio) return res.status(400).json({ success: false, error: 'Folio requerido' });
+      if (!name) return res.status(400).json({ success: false, error: 'Nombre de archivo requerido' });
+      if (!dataUrl.startsWith('data:') || !dataUrl.includes(';base64,')) {
+        return res.status(400).json({ success: false, error: 'Contenido de archivo inválido.' });
+      }
+
+      const request = await getRequest(folio);
+      if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
+      const privileged = userIsAdminOrFinanzas(user);
+      if (!privileged && !isOwner(request, user)) {
+        return res.status(403).json({ success: false, error: 'No tienes permiso para adjuntar archivos en este folio' });
+      }
+      if (request.status !== 'PAGADA' && request.status !== 'COMPROBADA') {
+        return res.status(400).json({ success: false, error: `Solo se pueden adjuntar documentos en solicitudes pagadas. Estado actual: ${request.status}` });
+      }
+
+      const ext = name.toLowerCase().split('.').pop() || '';
+      const allowed = new Set(['pdf', 'xml', 'jpg', 'jpeg', 'png', 'webp']);
+      if (!allowed.has(ext)) {
+        return res.status(400).json({ success: false, error: 'Formato no admitido. Formatos válidos: PDF, XML (CFDI), JPG, JPEG, PNG y WEBP.' });
+      }
+
+      const MAX_FILE_SIZE = 10 * 1024 * 1024;
+      const payload = dataUrl.split(';base64,')[1] || '';
+      const estimatedBytes = Math.floor((payload.length * 3) / 4) - (payload.endsWith('==') ? 2 : payload.endsWith('=') ? 1 : 0);
+      const effectiveSize = declaredSize > 0 ? declaredSize : estimatedBytes;
+      if (effectiveSize <= 0 || effectiveSize > MAX_FILE_SIZE) {
+        return res.status(400).json({ success: false, error: `El archivo debe tener entre 1 byte y 10 MB. Tamaño detectado: ${(Math.max(effectiveSize, 0) / (1024 * 1024)).toFixed(1)} MB.` });
+      }
+
+      const mimeByExt: Record<string, string> = {
+        pdf: 'application/pdf',
+        xml: 'application/xml',
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        png: 'image/png',
+        webp: 'image/webp',
+      };
+      const type = declaredType || mimeByExt[ext];
+      const attachment: any = {
+        id: `att_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
+        name,
+        size: effectiveSize,
+        type,
+        dataUrl,
+        uploadedAt: new Date().toISOString(),
+      };
+
+      return res.json({ success: true, file: attachment });
+    } catch (e: any) {
+      console.error('[EXPENSE-UPLOAD-FILE-ERROR]', e);
+      return res.status(500).json({ success: false, error: e.message || 'Error al validar el archivo.' });
+    }
+  });
   app.post('/api/expenses/import-excel', async (req: Request, res: Response) => {
     try {
       const user = await getRequestUser(req);
@@ -217,6 +282,10 @@ export function registerExpenseRoutes(app: Express) {
         userEmail: existing?.userEmail || request.user?.email || user.email,
         department: request.department || user.department, destination: request.destination,
         status: 'BORRADOR', items, ...totals, notes,
+        supportFiles: Array.isArray(req.body.supportFiles) ? req.body.supportFiles : (existing?.supportFiles || []),
+        pendingFiscalXmls: Array.isArray(req.body.pendingFiscalXmls) ? req.body.pendingFiscalXmls : (existing?.pendingFiscalXmls || []),
+        originalExcelFile: req.body.originalExcelFile || existing?.originalExcelFile,
+        excelAuditSummary: req.body.excelAuditSummary || existing?.excelAuditSummary,
         refund: refund !== undefined ? refund : existing?.refund,
         submittedAt: existing?.submittedAt, updatedAt: now, createdAt: existing?.createdAt || now,
       };
@@ -278,6 +347,10 @@ export function registerExpenseRoutes(app: Express) {
         userEmail: existing?.userEmail || request.user?.email || user.email,
         department: request.department || user.department, destination: request.destination,
         status: 'ENVIADA', items, ...totals, notes,
+        supportFiles: Array.isArray(req.body.supportFiles) ? req.body.supportFiles : (existing?.supportFiles || []),
+        pendingFiscalXmls: Array.isArray(req.body.pendingFiscalXmls) ? req.body.pendingFiscalXmls : (existing?.pendingFiscalXmls || []),
+        originalExcelFile: req.body.originalExcelFile || existing?.originalExcelFile,
+        excelAuditSummary: req.body.excelAuditSummary || existing?.excelAuditSummary,
         refund: refund !== undefined ? refund : existing?.refund,
         submittedAt: now, updatedAt: now, createdAt: existing?.createdAt || now,
       };

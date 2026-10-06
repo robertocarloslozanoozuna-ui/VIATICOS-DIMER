@@ -2632,7 +2632,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         />
       )}
 
-      {/* Modal to Add New Expense Item */
+      {/* Modal to Add New Expense Item */}
       {showItemModal && (
         <div className="fixed inset-0 z-[500] bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden my-6">

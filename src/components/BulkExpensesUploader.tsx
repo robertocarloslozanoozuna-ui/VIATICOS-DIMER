@@ -14,7 +14,7 @@ import {
   ArrowRight,
   Plus
 } from 'lucide-react';
-import type { ExpenseFileAttachment } from '../types.js';
+import type { ExpenseDocumentAnalysis, ExpenseFileAttachment } from '../types.js';
 import { authFetch } from '../utils/apiHelper.js';
 
 export interface FileQueueItem {
@@ -168,7 +168,55 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
             throw new Error(data.error || 'Fallo en la validación del servidor.');
           }
 
-          const attachment: ExpenseFileAttachment = data.file;
+          let attachment: ExpenseFileAttachment = data.file;
+
+          // Lectura automática del importe y tipo del comprobante.
+          // Si el análisis falla, el archivo sigue guardándose como soporte.
+          setQueue((prev) =>
+            prev.map((q) => (q.id === item.id ? { ...q, progress: 82 } : q))
+          );
+          try {
+            const analysisRes = await authFetch('/api/expenses/analyze-document', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                folio,
+                name: item.name,
+                size: item.size,
+                type: item.type,
+                dataUrl,
+              }),
+            });
+            const analysisData = await analysisRes.json();
+            if (analysisRes.ok && analysisData?.success && analysisData?.analysis) {
+              attachment = {
+                ...attachment,
+                analysis: analysisData.analysis as ExpenseDocumentAnalysis,
+              };
+            } else {
+              attachment = {
+                ...attachment,
+                analysis: {
+                  status: 'ERROR',
+                  source: 'NINGUNO',
+                  includedInTotal: false,
+                  analyzedAt: new Date().toISOString(),
+                  error: analysisData?.error || 'No fue posible analizar el importe.',
+                },
+              };
+            }
+          } catch (analysisError: any) {
+            attachment = {
+              ...attachment,
+              analysis: {
+                status: 'ERROR',
+                source: 'NINGUNO',
+                includedInTotal: false,
+                analyzedAt: new Date().toISOString(),
+                error: analysisError?.message || 'No fue posible analizar el importe.',
+              },
+            };
+          }
 
           setQueue((prev) =>
             prev.map((q) =>
@@ -430,6 +478,16 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
                         XML CFDI &bull; Complemento Fiscal (Importe: N/A)
                       </span>
                     )}
+                    {item.attachment?.analysis?.status === 'DETECTADO' && item.attachment.analysis.amount ? (
+                      <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
+                        {item.attachment.analysis.documentType === 'FACTURA' ? 'Factura' : item.attachment.analysis.documentType === 'TICKET' ? 'Ticket' : 'Documento'} &bull; Total: ${item.attachment.analysis.amount.toFixed(2)}
+                      </span>
+                    ) : item.attachment?.analysis?.status === 'SIN_TOTAL' ? (
+                      <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
+                        Sin total detectable
+                      </span>
+                    ) : null}
+
                     {item.isDuplicate && (
                       <span className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[9px] font-bold bg-amber-100 text-amber-800 border border-amber-200">
                         <AlertTriangle className="w-2.5 h-2.5" /> Posible duplicado

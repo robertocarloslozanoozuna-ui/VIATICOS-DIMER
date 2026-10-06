@@ -737,8 +737,8 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
           items,
           supportFiles,
           pendingFiscalXmls,
-          originalExcelFile: originalExcelFile || undefined,
-          excelAuditSummary: excelAuditSummary || undefined,
+          originalExcelFile: originalExcelFile || null,
+          excelAuditSummary: excelAuditSummary || null,
           notes,
           refund: refund || undefined,
         }),
@@ -801,8 +801,8 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
           items,
           supportFiles,
           pendingFiscalXmls,
-          originalExcelFile: originalExcelFile || undefined,
-          excelAuditSummary: excelAuditSummary || undefined,
+          originalExcelFile: originalExcelFile || null,
+          excelAuditSummary: excelAuditSummary || null,
           notes,
           refund: refund || undefined,
         }),
@@ -852,8 +852,8 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
           items,
           supportFiles,
           pendingFiscalXmls,
-          originalExcelFile: originalExcelFile || undefined,
-          excelAuditSummary: excelAuditSummary || undefined,
+          originalExcelFile: originalExcelFile || null,
+          excelAuditSummary: excelAuditSummary || null,
           notes,
           refund: refund || undefined,
         }),
@@ -1817,6 +1817,10 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
               existingAuditSummary={excelAuditSummary || undefined}
               onImportConfirmed={handleExcelImportConfirmed}
               onDownloadOriginalFile={downloadAttachment}
+              onOriginalFileRemoved={() => {
+                setOriginalExcelFile(null);
+                setExcelAuditSummary(null);
+              }}
             />
 
             {/* BANDEJA: Comprobantes Fiscales (XML CFDI) Pendientes de Asociar */}

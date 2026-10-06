@@ -38,7 +38,8 @@ import {
   FileSpreadsheet,
   Image as ImageIcon,
   Paperclip,
-  FileCheck
+  FileCheck,
+  Printer
 } from 'lucide-react';
 import type {
   User as UserType,
@@ -55,6 +56,7 @@ import { computeExpenseBalances } from '../utils/expenseCalculations';
 import { BulkExpensesUploader } from './BulkExpensesUploader';
 import { ExcelExpensesTable } from './ExcelExpensesTable';
 import { ExcelExpensesImporter } from './ExcelExpensesImporter';
+import RefundReceiptModal from './RefundReceiptModal';
 
 interface ComprobarGastosViewProps {
   currentUser: UserType;
@@ -98,11 +100,13 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   // Refund state (Opción para reembolsar dinero a finanzas que les sobró)
   const [refund, setRefund] = useState<ExpenseRefund | null>(null);
   const [showRefundModal, setShowRefundModal] = useState<boolean>(false);
+  const [showRefundReceipt, setShowRefundReceipt] = useState<boolean>(false);
   const [refundAmount, setRefundAmount] = useState<string>('');
   const [refundMethod, setRefundMethod] = useState<'SPEI' | 'EFECTIVO'>('SPEI');
   const [refundReference, setRefundReference] = useState<string>('');
   const [refundDate, setRefundDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [refundFile, setRefundFile] = useState<ExpenseFileAttachment | null>(null);
+  const [signedRefundFile, setSignedRefundFile] = useState<ExpenseFileAttachment | null>(null);
   const [refundNotes, setRefundNotes] = useState<string>('');
   const [refundFormError, setRefundFormError] = useState<string | null>(null);
 
@@ -276,8 +280,22 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         setNotes(data.verification.notes || '');
         if (data.verification.refund) {
           setRefund(data.verification.refund);
+          setRefundAmount(String(data.verification.refund.amount ?? ''));
+          setRefundMethod(data.verification.refund.method || 'SPEI');
+          setRefundReference(data.verification.refund.reference || '');
+          setRefundDate(data.verification.refund.refundDate || new Date().toISOString().split('T')[0]);
+          setRefundFile(data.verification.refund.receiptFile || null);
+          setSignedRefundFile(data.verification.refund.signedReceiptFile || null);
+          setRefundNotes(data.verification.refund.notes || '');
         } else {
           setRefund(null);
+          setRefundAmount('');
+          setRefundMethod('SPEI');
+          setRefundReference('');
+          setRefundDate(new Date().toISOString().split('T')[0]);
+          setRefundFile(null);
+          setSignedRefundFile(null);
+          setRefundNotes('');
         }
 
         // Collect existing attachments to pool
@@ -305,6 +323,13 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         setExcelAuditSummary(null);
         setNotes('');
         setRefund(null);
+        setRefundAmount('');
+        setRefundMethod('SPEI');
+        setRefundReference('');
+        setRefundDate(new Date().toISOString().split('T')[0]);
+        setRefundFile(null);
+        setSignedRefundFile(null);
+        setRefundNotes('');
         setUploadedAttachmentsPool([]);
       }
 
@@ -508,6 +533,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       reference: refundReference.trim(),
       refundDate,
       receiptFile: refundFile || undefined,
+      signedReceiptFile: signedRefundFile || undefined,
       notes: refundNotes.trim() || undefined,
       registeredAt: refund?.registeredAt || new Date().toISOString(),
     };
@@ -517,9 +543,41 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     setActionSuccess('Comprobante de reembolso de sobrante registrado. Recuerda guardar el borrador o finalizar.');
   }
 
+  function handleSignedRefundFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 10 * 1024 * 1024) {
+      setRefundFormError(`El recibo firmado "${file.name}" supera el límite de 10 MB.`);
+      return;
+    }
+
+    if (!file.name.toLowerCase().endsWith('.pdf') && !file.type.includes('pdf')) {
+      setRefundFormError('El recibo firmado debe ser un archivo PDF.');
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      setSignedRefundFile({
+        id: `signed_refund_att_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
+        name: file.name,
+        size: file.size,
+        type: file.type || 'application/pdf',
+        dataUrl: reader.result as string,
+        uploadedAt: new Date().toISOString(),
+      });
+      setRefundFormError(null);
+    };
+    reader.onerror = () => setRefundFormError('Error al leer el recibo firmado.');
+    reader.readAsDataURL(file);
+  }
+
   function handleRemoveRefund() {
     if (confirm('¿Deseas eliminar el comprobante de reembolso registrado?')) {
       setRefund(null);
+      setRefundFile(null);
+      setSignedRefundFile(null);
       setActionSuccess('Reembolso eliminado.');
     }
   }
@@ -1710,14 +1768,35 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                 </div>
 
                 {canEdit && (
-                  <button
-                    type="button"
-                    onClick={handleOpenRefundModal}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer"
-                  >
-                    <Banknote className="w-3.5 h-3.5" />
-                    <span>{refund ? 'Modificar Reembolso' : '+ Registrar Reembolso de Sobrante'}</span>
-                  </button>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={handleOpenRefundModal}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer"
+                    >
+                      <Banknote className="w-3.5 h-3.5" />
+                      <span>{refund ? 'Modificar Reembolso' : '+ Registrar Reembolso de Sobrante'}</span>
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const amount = Number(refundAmount || refund?.amount || difference || 0);
+                        if (isNaN(amount) || amount <= 0) {
+                          setRefundFormError('Primero captura o calcula un monto de reembolso mayor a $0.00 MXN.');
+                          return;
+                        }
+
+                        setRefundAmount(String(amount.toFixed(2)));
+                        setRefundFormError(null);
+                        setShowRefundReceipt(true);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      <span>Imprimir / Guardar Recibo</span>
+                    </button>
+                  </div>
                 )}
               </div>
 
@@ -1773,6 +1852,19 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                       </div>
                     </div>
 
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      {refund.signedReceiptFile && (
+                        <button
+                          type="button"
+                          onClick={() => downloadAttachment(refund.signedReceiptFile!)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-200 text-[10px] font-bold cursor-pointer"
+                        >
+                          <Download className="w-3 h-3" />
+                          Ver recibo firmado
+                        </button>
+                      )}
+                    </div>
+
                     {refund.notes && (
                       <div className="text-[11px] text-emerald-900 bg-white/70 p-2 rounded border border-emerald-200">
                         <strong>Observaciones:</strong> {refund.notes}
@@ -1793,13 +1885,33 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                   </div>
                 ) : (
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs">
+                    <div className="space-y-0.5">
+                      <p className="font-bold text-slate-800">
+                        {isFavorEmpresa
+                          ? `Tienes un sobrante a devolver a Finanzas de ${formatCurrency(difference)} MXN.`
+                          : 'No se ha registrado ningún reembolso de dinero sobrante a Finanzas.'}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        Imprime el recibo, recaba la firma correspondiente y posteriormente súbelo en "Registrar Reembolso de Sobrante".
+                      </p>
+                    </div>
                     {canEdit && (
                       <button
                         type="button"
-                        onClick={handleOpenRefundModal}
-                        className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-md font-bold text-xs shadow-2xs whitespace-nowrap cursor-pointer"
+                        onClick={() => {
+                          const amount = Number(refundAmount || difference || 0);
+                          if (isNaN(amount) || amount <= 0) {
+                            setRefundFormError('Primero captura un monto de reembolso mayor a $0.00 MXN.');
+                            return;
+                          }
+                          setRefundAmount(String(amount.toFixed(2)));
+                          setRefundFormError(null);
+                          setShowRefundReceipt(true);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-md font-bold text-xs shadow-2xs whitespace-nowrap cursor-pointer"
                       >
-                        + Adjuntar Reembolso
+                        <Printer className="w-3.5 h-3.5" />
+                        Imprimir / Guardar Recibo
                       </button>
                     )}
                   </div>
@@ -2430,6 +2542,50 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                 </div>
               </div>
 
+              {/* Recibo de reembolso firmado */}
+              <div>
+                <label className="block font-bold text-slate-700 mb-1">
+                  Recibo de Reembolso Firmado por el Empleado (PDF)
+                </label>
+                <div className="p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FileText className="w-4 h-4 text-blue-600 shrink-0" />
+                    <div className="min-w-0">
+                      {signedRefundFile ? (
+                        <div className="text-[11px] font-bold text-blue-900 truncate">
+                          {signedRefundFile.name} ({(signedRefundFile.size / 1024).toFixed(1)} KB)
+                        </div>
+                      ) : (
+                        <div className="text-[11px] text-blue-800">
+                          Imprime el recibo, recaba la firma, escanéalo y súbelo aquí.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                  {signedRefundFile ? (
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button type="button" onClick={() => downloadAttachment(signedRefundFile)} className="text-[10px] text-blue-700 font-bold hover:underline cursor-pointer">
+                        Ver
+                      </button>
+                      <button type="button" onClick={() => setSignedRefundFile(null)} className="text-[10px] text-rose-600 font-bold hover:underline cursor-pointer">
+                        Quitar
+                      </button>
+                    </div>
+                  ) : (
+                    <label htmlFor={`${fileRefundId}-signed`} className="px-2.5 py-1 bg-white border border-blue-300 hover:bg-blue-100 rounded text-[11px] font-bold text-blue-800 cursor-pointer shadow-2xs whitespace-nowrap">
+                      Subir PDF firmado
+                      <input
+                        id={`${fileRefundId}-signed`}
+                        type="file"
+                        accept=".pdf,application/pdf"
+                        onChange={handleSignedRefundFileUpload}
+                        className="hidden"
+                      />
+                    </label>
+                  )}
+                </div>
+              </div>
+
               {/* Observaciones */}
               <div>
                 <label className="block font-bold text-slate-700 mb-1">Notas u observaciones (opcional)</label>
@@ -2462,7 +2618,21 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         </div>
       )}
 
-      {/* Modal to Add New Expense Item */}
+      {showRefundReceipt && loadedRequest && (
+        <RefundReceiptModal
+          folio={loadedRequest.folio}
+          employeeName={loadedRequest.requesterName || loadedRequest.user?.name || currentUser.name}
+          department={loadedRequest.department || currentUser.department}
+          destination={loadedRequest.destination}
+          amount={Number(refundAmount || 0)}
+          refundDate={refundDate}
+          method={refundMethod}
+          reference={refundReference.trim()}
+          onClose={() => setShowRefundReceipt(false)}
+        />
+      )}
+
+      {/* Modal to Add New Expense Item */
       {showItemModal && (
         <div className="fixed inset-0 z-[500] bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white rounded-xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden my-6">

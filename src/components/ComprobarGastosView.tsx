@@ -1585,26 +1585,6 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
               </div>
 
               <div className={`p-4 rounded-xl shadow-xs border transition-colors ${
-                saldoNoUtilizado > 0 ? 'bg-amber-50/70 border-amber-300' : 'bg-slate-50/70 border-slate-200'
-              }`}>
-                <span className="block font-bold uppercase text-[10px] text-slate-500">
-                  Saldo no Utilizado
-                </span>
-                <div className={`text-xl font-black font-mono mt-1 ${
-                  saldoNoUtilizado > 0 ? 'text-amber-800' : 'text-slate-700'
-                }`}>
-                  {formatCurrency(saldoNoUtilizado)}
-                </div>
-                <p className={`text-[11px] font-medium mt-0.5 ${
-                  saldoNoUtilizado > 0 ? 'text-amber-700 font-bold' : 'text-slate-400'
-                }`}>
-                  {saldoNoUtilizado > 0
-                    ? `Importe a devolver a DIMER: ${formatCurrency(saldoPendienteDevolucion)}`
-                    : 'Sin excedente no utilizado'}
-                </p>
-              </div>
-
-              <div className={`p-4 rounded-xl shadow-xs border transition-colors ${
                 saldoFavorColaborador > 0
                   ? 'bg-blue-50/70 border-blue-300'
                   : saldoPendienteDevolucion > 0
@@ -1748,17 +1728,6 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                   </div>
                 ) : (
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs">
-                    <div className="space-y-0.5">
-                      <p className="font-bold text-slate-800">
-                        {isFavorEmpresa
-                          ? `Tienes un sobrante a devolver a Finanzas de ${formatCurrency(difference)} MXN.`
-                          : 'No se ha registrado ningún reembolso de dinero sobrante a Finanzas.'}
-                      </p>
-                      <p className="text-[11px] text-slate-500">
-                        Cuenta bancaria oficial BBVA: <strong>0123456789</strong> &bull; CLABE: <strong>012180001234567890</strong> &bull; Titular: <strong>Dimer Corporativo S.A. de C.V.</strong>
-                      </p>
-                    </div>
-
                     {canEdit && (
                       <button
                         type="button"

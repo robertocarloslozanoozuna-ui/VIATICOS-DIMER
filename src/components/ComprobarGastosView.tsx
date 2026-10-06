@@ -57,6 +57,7 @@ import { BulkExpensesUploader } from './BulkExpensesUploader';
 import { ExcelExpensesTable } from './ExcelExpensesTable';
 import { ExcelExpensesImporter } from './ExcelExpensesImporter';
 import RefundReceiptModal from './RefundReceiptModal';
+import { downloadRefundReceiptPdf } from '../utils/refundReceiptPdf';
 
 interface ComprobarGastosViewProps {
   currentUser: UserType;
@@ -1781,20 +1782,44 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                     <button
                       type="button"
                       onClick={() => {
-                        const amount = Number(refundAmount || refund?.amount || difference || 0);
+                        const amount = Number(refund?.amount || refundAmount || difference || 0);
                         if (isNaN(amount) || amount <= 0) {
                           setRefundFormError('Primero captura o calcula un monto de reembolso mayor a $0.00 MXN.');
                           return;
                         }
 
+                        downloadRefundReceiptPdf({
+                          folio: loadedRequest.folio,
+                          employeeName: loadedRequest.requesterName || loadedRequest.user?.name || currentUser.name,
+                          department: loadedRequest.department || currentUser.department,
+                          destination: loadedRequest.destination,
+                          amount,
+                          refundDate: refund?.refundDate || refundDate,
+                          method: refund?.method || refundMethod,
+                          reference: (refund?.reference || refundReference).trim(),
+                        });
+                      }}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Descargar Recibo PDF</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const amount = Number(refund?.amount || refundAmount || difference || 0);
+                        if (isNaN(amount) || amount <= 0) {
+                          setRefundFormError('Primero captura o calcula un monto de reembolso mayor a $0.00 MXN.');
+                          return;
+                        }
                         setRefundAmount(String(amount.toFixed(2)));
                         setRefundFormError(null);
                         setShowRefundReceipt(true);
                       }}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-800 border border-slate-300 rounded-lg text-xs font-bold shadow-xs transition cursor-pointer"
                     >
                       <Printer className="w-3.5 h-3.5" />
-                      <span>Imprimir / Guardar Recibo</span>
+                      <span>Vista previa / Imprimir</span>
                     </button>
                   </div>
                 )}

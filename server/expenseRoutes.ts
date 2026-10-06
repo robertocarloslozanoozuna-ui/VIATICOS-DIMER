@@ -28,67 +28,61 @@ function crc32Buffer(input: Buffer) {
 
 function zeroWorksheetAmounts(xml: Buffer) {
   const text = xml.toString('utf8');
-  const expenseRows = new Set<number>();
-  for (let row = 11; row <= 43; row += 1) expenseRows.add(row);
-
-  return Buffer.from(text.replace(/<c\\b([^>]*)\\br="([A-Z]+)(\\d+)"([^>]*)>([\\s\\S]*?)<\\/c>/g, (full, before, col, rowText, after, inner) => {
+  return Buffer.from(text.replace(/<c\b([^>]*)\br="([A-Z]+)(\d+)"([^>]*)>([\s\S]*?)<\/c>/g, (full, before, col, rowText, after, inner) => {
     const row = Number(rowText);
-    if (!expenseRows.has(row)) return full;
     const normalizedCol = String(col).toUpperCase();
-    if (!/^[C-J]$/.test(normalizedCol)) return full;
-    if (!/<v\\b[^>]*>[\\s\\S]*?<\\/v>/.test(inner)) return full;
-    const patchedInner = inner.replace(/(<v\\b[^>]*>)[\\s\\S]*?(<\\/v>)/, '$10$2');
+    // Hoja principal: C:I son importes y J es la columna de totales/control.
+    if (row < 11 || row > 43 || !/^[C-J]$/.test(normalizedCol)) return full;
+    if (!/<v\b[^>]*>[\s\S]*?<\/v>/.test(inner)) return full;
+    const patchedInner = String(inner).replace(/(<v\b[^>]*>)[\s\S]*?(<\/v>)/, '$10$2');
     return '<c ' + before + 'r="' + col + rowText + '"' + after + '>' + patchedInner + '</c>';
   }), 'utf8');
 }
 
 function zeroOfficialTemplateAmounts(input: Buffer) {
-  const localParts: Buffer[] = [];
-  const centralParts: Buffer[] = [];
-  let cursor = 0;
-  let centralOffset = 0;
+  type ZipEntry = {
+    name: string;
+    localHeader: Buffer;
+    data: Buffer;
+    compressed: Buffer;
+  };
 
+  const entries: ZipEntry[] = [];
+  let cursor = 0;
+
+  // Leer las entradas locales del ZIP y modificar solamente sheet1.xml.
   while (cursor + 30 <= input.length && readUInt32(input, cursor) === 0x04034b50) {
-    const nameLength = readUInt16(input, cursor + 26);
-    const extraLength = readUInt16(input, cursor + 28);
-    const method = readUInt16(input, cursor + 8);
     const flags = readUInt16(input, cursor + 6);
+    const method = readUInt16(input, cursor + 8);
     const compressedSize = readUInt32(input, cursor + 18);
     const uncompressedSize = readUInt32(input, cursor + 22);
-    const nameStart = cursor + 30;
-    const dataStart = nameStart + nameLength + extraLength;
+    const nameLength = readUInt16(input, cursor + 26);
+    const extraLength = readUInt16(input, cursor + 28);
+    if (flags & 0x0008) throw new Error('El XLSX original usa un descriptor ZIP no soportado.');
+    const dataStart = cursor + 30 + nameLength + extraLength;
     const dataEnd = dataStart + compressedSize;
     if (dataEnd > input.length) throw new Error('El XLSX original tiene una estructura ZIP incompleta.');
-    const name = input.subarray(nameStart, nameStart + nameLength).toString('utf8');
-    const originalCompressed = input.subarray(dataStart, dataEnd);
 
+    const name = input.subarray(cursor + 30, cursor + 30 + nameLength).toString('utf8');
+    const localHeader = Buffer.from(input.subarray(cursor, dataStart));
+    const originalCompressed = input.subarray(dataStart, dataEnd);
     let data = method === 8 ? inflateRawSync(originalCompressed) : Buffer.from(originalCompressed);
+    if (data.length !== uncompressedSize) throw new Error('No se pudo validar una entrada interna del XLSX original.');
+
     if (name === 'xl/worksheets/sheet1.xml') data = zeroWorksheetAmounts(data);
-    if (flags & 0x0008) throw new Error('El XLSX original usa un descriptor ZIP no soportado para la plantilla oficial.');
-    if (data.length !== uncompressedSize && name !== 'xl/worksheets/sheet1.xml') {
-      throw new Error('No se pudo validar una entrada interna del XLSX original.');
-    }
 
     const compressed = method === 8 ? deflateRawSync(data) : data;
-    const localHeader = Buffer.from(input.subarray(cursor, dataStart));
-    writeUInt32(localHeader, 14, crc32Buffer(data));
-    writeUInt32(localHeader, 18, compressed.length);
-    writeUInt32(localHeader, 22, data.length);
-    const localRecord = Buffer.concat([localHeader, compressed]);
-    localParts.push(localRecord);
-
-    const centralHeaderOffsetPlaceholder = centralOffset;
-    centralOffset += localRecord.length;
-    centralParts.push(Buffer.from([0]));
-    (centralParts as any)[centralParts.length - 1] = { name, originalOffset: cursor, data, compressed, method, localHeader, centralHeaderOffsetPlaceholder };
+    entries.push({ name, localHeader, data, compressed });
     cursor = dataEnd;
   }
 
-  if (cursor + 46 > input.length || readUInt32(input, cursor) !== 0x02014b50) throw new Error('No se encontró el directorio central del XLSX original.');
-  const centralStart = cursor;
-  const localEntries = centralParts as any[];
-  const centralByName = new Map<string, any>();
-  let centralCursor = centralStart;
+  if (!entries.length || cursor + 46 > input.length || readUInt32(input, cursor) !== 0x02014b50) {
+    throw new Error('No se encontró el directorio central del XLSX original.');
+  }
+
+  // Leer el directorio central original para conservar todos sus metadatos.
+  const centralEntries: Array<{ name: string; header: Buffer; originalLocalOffset: number }> = [];
+  let centralCursor = cursor;
   while (centralCursor + 46 <= input.length && readUInt32(input, centralCursor) === 0x02014b50) {
     const nameLength = readUInt16(input, centralCursor + 28);
     const extraLength = readUInt16(input, centralCursor + 30);
@@ -96,45 +90,51 @@ function zeroOfficialTemplateAmounts(input: Buffer) {
     const entryEnd = centralCursor + 46 + nameLength + extraLength + commentLength;
     if (entryEnd > input.length) throw new Error('El directorio central del XLSX original está incompleto.');
     const name = input.subarray(centralCursor + 46, centralCursor + 46 + nameLength).toString('utf8');
-    centralByName.set(name, input.subarray(centralCursor, entryEnd));
+    const header = Buffer.from(input.subarray(centralCursor, entryEnd));
+    centralEntries.push({ name, header, originalLocalOffset: readUInt32(header, 42) });
     centralCursor = entryEnd;
   }
 
-  if (localEntries.length !== centralByName.size) throw new Error('No se pudo reconstruir la estructura interna de la plantilla Excel.');
+  if (centralEntries.length !== entries.length) throw new Error('La estructura interna del XLSX original no pudo ser reconstruida.');
 
-  let localOffset = 0;
-  let centralSize = 0;
+  const entryByName = new Map(entries.map((entry) => [entry.name, entry]));
+  const locals: Buffer[] = [];
   const rebuiltCentral: Buffer[] = [];
-  for (const entry of localEntries) {
-    const central = Buffer.from(centralByName.get(entry.name));
-    writeUInt32(central, 16, crc32Buffer(entry.data));
-    writeUInt32(central, 20, entry.compressed.length);
-    writeUInt32(central, 24, entry.data.length);
-    writeUInt32(central, 42, localOffset);
-    rebuiltCentral.push(central);
-    centralSize += central.length;
-    localOffset += localParts.shift()!.length;
-  }
+  const newOffsets = new Map<string, number>();
+  let localOffset = 0;
 
-  const localDirectory = Buffer.concat((centralParts as any[]).map(() => Buffer.alloc(0)));
-  const rebuiltLocals: Buffer[] = [];
-  // localParts was consumed above for offsets; rebuild deterministically from stored entry data.
-  for (const entry of localEntries) {
-    const header = Buffer.from(input.subarray(entry.originalOffset, entry.originalOffset + 30 + readUInt16(input, entry.originalOffset + 26) + readUInt16(input, entry.originalOffset + 28)));
+  for (const entry of entries) {
+    const header = Buffer.from(entry.localHeader);
     writeUInt32(header, 14, crc32Buffer(entry.data));
     writeUInt32(header, 18, entry.compressed.length);
     writeUInt32(header, 22, entry.data.length);
-    rebuiltLocals.push(Buffer.concat([header, entry.compressed]));
+    const record = Buffer.concat([header, entry.compressed]);
+    locals.push(record);
+    newOffsets.set(entry.name, localOffset);
+    localOffset += record.length;
   }
-  void localDirectory;
-  const locals = Buffer.concat(rebuiltLocals);
+
+  for (const central of centralEntries) {
+    const entry = entryByName.get(central.name);
+    if (!entry) throw new Error('Falta una entrada ZIP al reconstruir la plantilla oficial.');
+    const header = Buffer.from(central.header);
+    writeUInt32(header, 16, crc32Buffer(entry.data));
+    writeUInt32(header, 20, entry.compressed.length);
+    writeUInt32(header, 24, entry.data.length);
+    writeUInt32(header, 42, newOffsets.get(central.name) || 0);
+    rebuiltCentral.push(header);
+  }
+
+  const localDirectory = Buffer.concat(locals);
   const centralDirectory = Buffer.concat(rebuiltCentral);
   const end = Buffer.alloc(22);
   writeUInt32(end, 0, 0x06054b50);
   end.writeUInt16LE(0, 4); end.writeUInt16LE(0, 6);
-  end.writeUInt16LE(localEntries.length, 8); end.writeUInt16LE(localEntries.length, 10);
-  writeUInt32(end, 12, centralDirectory.length); writeUInt32(end, 16, locals.length); end.writeUInt16LE(0, 20);
-  return Buffer.concat([locals, centralDirectory, end]);
+  end.writeUInt16LE(entries.length, 8); end.writeUInt16LE(entries.length, 10);
+  writeUInt32(end, 12, centralDirectory.length);
+  writeUInt32(end, 16, localDirectory.length);
+  end.writeUInt16LE(0, 20);
+  return Buffer.concat([localDirectory, centralDirectory, end]);
 }
 
 async function getOfficialTemplateFromFolio() {

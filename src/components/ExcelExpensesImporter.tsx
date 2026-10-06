@@ -39,6 +39,7 @@ interface ExcelExpensesImporterProps {
     summary: ExcelAuditSummary
   ) => void;
   onDownloadOriginalFile: (file: ExpenseFileAttachment) => void;
+  onOriginalFileRemoved?: () => void;
 }
 
 export const ExcelExpensesImporter: React.FC<ExcelExpensesImporterProps> = ({
@@ -50,6 +51,7 @@ export const ExcelExpensesImporter: React.FC<ExcelExpensesImporterProps> = ({
   existingAuditSummary,
   onImportConfirmed,
   onDownloadOriginalFile,
+  onOriginalFileRemoved,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -244,17 +246,32 @@ export const ExcelExpensesImporter: React.FC<ExcelExpensesImporterProps> = ({
             <span>Descargar Plantilla Oficial (.xlsx)</span>
           </a>
 
-          {/* Botón de descarga de Excel original si ya existe uno cargado */}
+          {/* Acciones sobre el Excel original ya cargado */}
           {existingOriginalFile && (
-            <button
-              type="button"
-              onClick={() => onDownloadOriginalFile(existingOriginalFile)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer shrink-0"
-              title="Descargar exactamente el archivo Excel original subido para este folio"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Descargar Reporte Subido</span>
-            </button>
+            <>
+              <button type="button" onClick={() => onDownloadOriginalFile(existingOriginalFile)} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer shrink-0" title="Descargar exactamente el archivo Excel original subido para este folio">
+                <Download className="w-3.5 h-3.5" />
+                <span>Descargar Reporte Subido</span>
+              </button>
+              {canEdit && (
+                <button type="button" onClick={async () => {
+                  if (!window.confirm('¿Deseas eliminar el reporte Excel original de este expediente? Las partidas ya importadas NO se eliminarán.')) return;
+                  setProcessing(true); setImportError(null);
+                  try {
+                    const res = await authFetch('/api/expenses/excel/' + encodeURIComponent(folio), { method: 'DELETE' });
+                    const data = await res.json();
+                    if (!res.ok || !data.success) throw new Error(data.error || 'No se pudo eliminar el reporte Excel.');
+                    setOriginalExcelFile(null); setAuditSummary(null); setParsedItems([]); setParseWarnings([]); setExcelTotal(0); setDuplicateWarning(null);
+                    onOriginalFileRemoved?.();
+                  } catch (err: any) {
+                    setImportError(err.message || 'No se pudo eliminar el reporte Excel.');
+                  } finally { setProcessing(false); }
+                }} className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer shrink-0" title="Eliminar el Excel original del expediente; no elimina las partidas importadas">
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Eliminar Reporte</span>
+                </button>
+              )}
+            </>
           )}
         </div>
       </div>

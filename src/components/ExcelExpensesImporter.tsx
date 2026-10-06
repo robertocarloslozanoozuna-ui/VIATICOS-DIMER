@@ -190,7 +190,7 @@ export const ExcelExpensesImporter: React.FC<ExcelExpensesImporterProps> = ({
       type: 'TICKET', // Tipo inicial; el colaborador podrá adjuntar PDF o XML complementario
       expenseDate: p.expenseDate,
       category: p.category,
-      paymentMethod: p.paymentMethod || 'ANTICIPO',
+      paymentMethod: p.paymentMethod,
       importedFromExcel: true,
       excelRowIndex: idx + 1,
       createdAt: new Date().toISOString(),
@@ -636,7 +636,7 @@ export const ExcelExpensesImporter: React.FC<ExcelExpensesImporterProps> = ({
                 <button
                   type="button"
                   onClick={handleConfirmImport}
-                  disabled={parsedItems.length === 0}
+                  disabled={parsedItems.length === 0 || parsedItems.some((p) => !p.category || !p.paymentMethod)}
                   className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold shadow-xs cursor-pointer transition"
                 >
                   <Check className="w-3.5 h-3.5" />

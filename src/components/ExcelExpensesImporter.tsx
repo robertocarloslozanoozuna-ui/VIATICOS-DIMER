@@ -192,7 +192,7 @@ export const ExcelExpensesImporter: React.FC<ExcelExpensesImporterProps> = ({
       concept: p.concept,
       sourceCategory: p.sourceCategory,
       amount: Number(p.amount) || 0,
-      type: 'TICKET', // Tipo inicial; el colaborador podrá adjuntar PDF o XML complementario
+      type: 'PENDIENTE', // El Excel no determina por sí mismo si la partida es factura o ticket
       expenseDate: p.expenseDate,
       category: p.category,
       paymentMethod: p.paymentMethod || 'ANTICIPO',

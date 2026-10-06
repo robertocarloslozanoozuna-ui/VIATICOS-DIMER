@@ -138,15 +138,8 @@ function zeroOfficialTemplateAmounts(input: Buffer) {
 }
 
 async function getOfficialTemplateFromFolio() {
-  const { data, error } = await supabase.from('audit_logs').select('details,created_at')
-    .in('action', ['COMPROBACION_GASTOS_BORRADOR','COMPROBACION_GASTOS_FINALIZADA','CORRECCION_COMPROBACION_BORRADOR'])
-    .order('created_at', { ascending: false }).limit(100);
-  if (error) throw error;
-  const row = (data || []).find((item: any) =>
-    item?.details?.verification?.folio === OFFICIAL_TEMPLATE_SOURCE_FOLIO &&
-    item?.details?.verification?.originalExcelFile?.dataUrl
-  );
-  const dataUrl = String(row?.details?.verification?.originalExcelFile?.dataUrl || '');
+  const verification = await getVerificationByFolio(OFFICIAL_TEMPLATE_SOURCE_FOLIO);
+  const dataUrl = String(verification?.originalExcelFile?.dataUrl || '');
   const match = dataUrl.match(/^data:[^;]+;base64,(.+)$/);
   if (!match) throw new Error('No se encontró el Excel original del folio VIAT-2026-000002.');
   const buffer = Buffer.from(match[1], 'base64');

@@ -121,7 +121,7 @@ export const ExcelExpensesImporter: React.FC<ExcelExpensesImporterProps> = ({
         throw new Error(data.error || 'Error al procesar el archivo Excel.');
       }
 
-      setParsedItems(data.items || []);
+      setParsedItems((data.items || []).map((item: ExcelParsedExpense) => ({\n        ...item,\n        paymentMethod: item.paymentMethod || 'ANTICIPO',\n      })));
       setOriginalExcelFile(data.originalExcelFile);
       setAuditSummary(data.excelAuditSummary);
       setParseWarnings(data.warnings || []);

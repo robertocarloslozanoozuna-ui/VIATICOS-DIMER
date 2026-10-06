@@ -190,7 +190,7 @@ export const ExcelExpensesImporter: React.FC<ExcelExpensesImporterProps> = ({
       type: 'TICKET', // Tipo inicial; el colaborador podrá adjuntar PDF o XML complementario
       expenseDate: p.expenseDate,
       category: p.category,
-      paymentMethod: p.paymentMethod,
+      paymentMethod: p.paymentMethod || 'ANTICIPO',
       importedFromExcel: true,
       excelRowIndex: idx + 1,
       createdAt: new Date().toISOString(),
@@ -559,7 +559,7 @@ export const ExcelExpensesImporter: React.FC<ExcelExpensesImporterProps> = ({
                           {/* Forma de Pago */}
                           <td className="py-1.5 px-2.5">
                             <select
-                              value={item.paymentMethod || ''}
+                              value={item.paymentMethod || 'ANTICIPO'}
                               onChange={(e) =>
                                 handleUpdatePreviewItem(
                                   idx,
@@ -569,7 +569,7 @@ export const ExcelExpensesImporter: React.FC<ExcelExpensesImporterProps> = ({
                               }
                               className="w-full text-xs py-0.5 px-1.5 border border-slate-300 rounded bg-white focus:ring-1 focus:ring-emerald-500 focus:outline-none"
                             >
-                              <option value="">Pendiente de forma de pago...</option>
+                              
                               {PAYMENT_METHOD_OPTIONS.map((p) => (
                                 <option key={p.value} value={p.value}>
                                   {p.label}

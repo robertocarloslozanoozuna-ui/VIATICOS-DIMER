@@ -39,29 +39,31 @@ const WIN_ANSI_MAP: Record<string, number> = {
   'Ÿ': 0x9f,
 };
 
-const LATIN1_CHARS = 'áéíóúÁÉÍÓÚñÑüÜ¿¡ªº°';
-
 function toWinAnsi(value: string): number[] {
   const bytes: number[] = [];
   for (const ch of value) {
     const code = ch.charCodeAt(0);
-    if (code >= 0x20 && code <= 0x7e) {
+
+    if (code === 0x0a || code === 0x0d) {
+      bytes.push(0x0a);
+      continue;
+    }
+
+    if (code === 0x20 || (code >= 0x21 && code <= 0x7e)) {
       bytes.push(code);
       continue;
     }
+
     if (code >= 0xa0 && code <= 0xff) {
       bytes.push(code);
       continue;
     }
+
     if (WIN_ANSI_MAP[ch] !== undefined) {
       bytes.push(WIN_ANSI_MAP[ch]);
       continue;
     }
-    if (ch === '\\n') {
-      bytes.push(0x20);
-      continue;
-    }
-    // Sustituir caracteres que no soporta Helvetica/WinAnsi por espacio.
+
     bytes.push(0x20);
   }
   return bytes;
@@ -87,16 +89,14 @@ function lineCommand(x1: number, y1: number, x2: number, y2: number) {
   return `q ${x1} ${y1} m ${x2} ${y2} l S Q`;
 }
 
-function rectCommand(x: number, y: number, w: number, h: number) {
-  return `q ${x} ${y} ${w} ${h} re S Q`;
-}
-
-function wrapText(text: string, maxChars: number): string[] {
-  const normalized = String(text || '').trim();
+function wrapText(value: string, maxChars: number): string[] {
+  const normalized = String(value || '').trim();
   if (!normalized) return [];
-  const words = normalized.split(/\\s+/);
+
+  const words = normalized.split(/\s+/);
   const lines: string[] = [];
   let current = '';
+
   for (const word of words) {
     const next = current ? `${current} ${word}` : word;
     if (next.length <= maxChars) {
@@ -106,6 +106,7 @@ function wrapText(text: string, maxChars: number): string[] {
       current = word;
     }
   }
+
   if (current) lines.push(current);
   return lines;
 }
@@ -122,10 +123,11 @@ function money(value: number) {
 function buildPdfBytes(data: RefundReceiptPdfData): Uint8Array {
   const pageW = 595;
   const pageH = 842;
+  const NL = String.fromCharCode(10);
+
   const content: string[] = [
     'q 0.85 G 1 w',
-    rectCommand(36, 36, pageW - 72, pageH - 72),
-    'Q',
+    'q 36 36 523 770 re S Q',
     textCommand('DIMER', 54, 786, 22, true),
     textCommand('RECIBO DE REEMBOLSO DE VIÁTICOS', 54, 760, 12, true),
     lineCommand(54, 748, 541, 748),
@@ -153,15 +155,18 @@ function buildPdfBytes(data: RefundReceiptPdfData): Uint8Array {
   });
 
   const refY = 470;
-  content.push(lineCommand(54, refY + 22, 541, refY + 22));
-  content.push(textCommand('Referencia / Clave de rastreo', 54, refY, 8));
-  content.push(textCommand(data.reference || 'Pendiente de capturar', 220, refY - 2, 10, true));
+  content.push(
+    lineCommand(54, refY + 22, 541, refY + 22),
+    textCommand('Referencia / Clave de rastreo', 54, refY, 8),
+    textCommand(data.reference || 'Pendiente de capturar', 220, refY - 2, 10, true),
+  );
 
   const declarationY = 414;
   content.push(
-    `q 0.96 g 1 G 54 ${declarationY - 55} 487 72 re S Q`,
+    'q 0.96 g 1 G 54 359 487 72 re S Q',
     textCommand('DECLARACIÓN', 70, declarationY, 9, true),
   );
+
   wrapText(
     'Declaro que entregué o reintegré a DIMER el importe señalado en este recibo correspondiente al sobrante del anticipo de viáticos del folio indicado.',
     78,
@@ -182,32 +187,35 @@ function buildPdfBytes(data: RefundReceiptPdfData): Uint8Array {
     textCommand(`Folio ${data.folio}`, 455, 160, 8),
   );
 
-  const stream = content.join('\\n') + '\\n';
+  const stream = content.join(NL) + NL;
+
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
     `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageW} ${pageH}] /Resources << /Font << /F1 4 0 R /F2 5 0 R >> >> /Contents 6 0 R >>`,
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>',
     '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>',
-    `<< /Length ${toWinAnsi(stream).length} >>\\nstream\\n${stream}endstream`,
+    `<< /Length ${toWinAnsi(stream).length} >>${NL}stream${NL}${stream}endstream`,
   ];
 
-  const header = '%PDF-1.4\\n%\xE2\xE3\xCF\xD3\\n';
+  const header = '%PDF-1.4' + NL + String.fromCharCode(37, 226, 227, 207, 211) + NL;
   let pdf = header;
   const offsets: number[] = [0];
 
   for (let i = 0; i < objects.length; i += 1) {
     offsets.push(pdf.length);
-    pdf += `${i + 1} 0 obj\\n${objects[i]}\\nendobj\\n`;
+    pdf += `${i + 1} 0 obj${NL}${objects[i]}${NL}endobj${NL}`;
   }
 
   const xrefOffset = pdf.length;
-  pdf += `xref\\n0 ${objects.length + 1}\\n`;
-  pdf += '0000000000 65535 f \\n';
+  pdf += `xref${NL}0 ${objects.length + 1}${NL}`;
+  pdf += '0000000000 65535 f ' + NL;
+
   for (let i = 1; i <= objects.length; i += 1) {
-    pdf += String(offsets[i]).padStart(10, '0') + ' 00000 n \\n';
+    pdf += String(offsets[i]).padStart(10, '0') + ' 00000 n ' + NL;
   }
-  pdf += `trailer\\n<< /Size ${objects.length + 1} /Root 1 0 R >>\\nstartxref\\n${xrefOffset}\\n%%EOF`;
+
+  pdf += `trailer${NL}<< /Size ${objects.length + 1} /Root 1 0 R >>${NL}startxref${NL}${xrefOffset}${NL}%%EOF`;
 
   return new Uint8Array(toWinAnsi(pdf));
 }
@@ -222,5 +230,6 @@ export function downloadRefundReceiptPdf(data: RefundReceiptPdfData) {
   document.body.appendChild(link);
   link.click();
   link.remove();
+
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

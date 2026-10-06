@@ -113,7 +113,11 @@ export const ExcelExpensesTable: React.FC<ExcelExpensesTableProps> = ({
 
   function handleAddRow(initialFile?: ExpenseFileAttachment) {
     const defaultDate = travelDates.length > 0 ? travelDates[0] : new Date().toISOString().split('T')[0];
-    const isFactura = initialFile ? (initialFile.name.toLowerCase().endsWith('.xml') || initialFile.name.toLowerCase().endsWith('.pdf')) : false;
+    const detectedType = initialFile?.analysis?.documentType;
+    const isFactura = initialFile
+      ? detectedType === 'FACTURA' || initialFile.name.toLowerCase().endsWith('.xml')
+      : false;
+    const isTicket = initialFile ? detectedType === 'TICKET' || (!isFactura && !initialFile.name.toLowerCase().endsWith('.xml')) : false;
 
     // Regla de Oro: El importe siempre inicia en 0 y es capturado por el usuario.
     // El XML CFDI nunca sobreescribe ni impone un importe.
@@ -121,12 +125,12 @@ export const ExcelExpensesTable: React.FC<ExcelExpensesTableProps> = ({
       id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       concept: initialFile ? initialFile.name.replace(/\.[^/.]+$/, '').replace(/_/g, ' ') : '',
       amount: 0,
-      type: isFactura ? 'FACTURA' : 'TICKET',
+      type: isFactura ? 'FACTURA' : isTicket ? 'TICKET' : 'PENDIENTE',
       expenseDate: defaultDate,
       category: 'ALIMENTOS',
       paymentMethod: 'ANTICIPO',
       createdAt: new Date().toISOString(),
-      ticketFile: (!isFactura && initialFile) ? initialFile : undefined,
+      ticketFile: (isTicket && initialFile) ? initialFile : undefined,
       pdfFile: (isFactura && initialFile && initialFile.name.toLowerCase().endsWith('.pdf')) ? initialFile : undefined,
       xmlFile: (isFactura && initialFile && initialFile.name.toLowerCase().endsWith('.xml')) ? initialFile : undefined,
     };
@@ -149,11 +153,26 @@ export const ExcelExpensesTable: React.FC<ExcelExpensesTableProps> = ({
         // Asocia el XML como complemento fiscal sin tocar el importe de la partida
         return { ...it, xmlFile: file, type: 'FACTURA' as ExpenseType };
       }
+      if (file.analysis?.documentType === 'FACTURA') {
+        return {
+          ...it,
+          pdfFile: lower.endsWith('.pdf') ? file : it.pdfFile,
+          ticketFile: undefined,
+          type: 'FACTURA' as ExpenseType,
+        };
+      }
+      if (file.analysis?.documentType === 'TICKET') {
+        return {
+          ...it,
+          ticketFile: file,
+          type: 'TICKET' as ExpenseType,
+        };
+      }
       if (lower.endsWith('.pdf')) {
         return { ...it, pdfFile: file, type: it.xmlFile ? ('FACTURA' as ExpenseType) : it.type };
       }
-      // Image or other ticket
-      return { ...it, ticketFile: file, type: 'TICKET' as ExpenseType };
+      // Imagen u otro comprobante: si no hubo lectura automática, conserva la clasificación existente.
+      return { ...it, ticketFile: file, type: it.type === 'PENDIENTE' ? ('TICKET' as ExpenseType) : it.type };
     });
 
     onChangeItems(updated);
@@ -330,6 +349,12 @@ export const ExcelExpensesTable: React.FC<ExcelExpensesTableProps> = ({
                         <div className="space-y-1">
                           {/* Attached files badges */}
                           <div className="flex flex-wrap items-center gap-1.5">
+                            {item.type === 'PENDIENTE' && (
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200">
+                                <AlertCircle className="w-3 h-3" />
+                                Por clasificar
+                              </span>
+                            )}
                             {hasXml && (
                               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-bold bg-purple-50 text-purple-900 border border-purple-200">
                                 <FileCode className="w-3 h-3 text-purple-700" />

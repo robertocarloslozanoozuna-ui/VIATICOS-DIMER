@@ -48,6 +48,7 @@ import type {
   ExpenseVerification,
   ExpenseType,
   ExpenseFileAttachment,
+  ExpenseDocumentAnalysis,
   ExpenseRefund,
   ExcelAuditSummary,
 } from '../types';
@@ -58,6 +59,7 @@ import { ExcelExpensesTable } from './ExcelExpensesTable';
 import { ExcelExpensesImporter } from './ExcelExpensesImporter';
 import RefundReceiptModal from './RefundReceiptModal';
 import { downloadRefundReceiptPdf } from '../utils/refundReceiptPdf';
+import { summarizeDocumentTotals } from '../utils/documentTotals';
 
 interface ComprobarGastosViewProps {
   currentUser: UserType;
@@ -346,6 +348,41 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   }
 
   // File to base64 converter helper for expense items
+  async function analyzeAttachment(attachment: ExpenseFileAttachment): Promise<ExpenseDocumentAnalysis | undefined> {
+    try {
+      const res = await authFetch('/api/expenses/analyze-document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folio: loadedRequest?.folio,
+          name: attachment.name,
+          size: attachment.size,
+          type: attachment.type,
+          dataUrl: attachment.dataUrl,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data?.success && data?.analysis) {
+        return data.analysis as ExpenseDocumentAnalysis;
+      }
+      return {
+        status: 'ERROR',
+        source: 'NINGUNO',
+        includedInTotal: false,
+        analyzedAt: new Date().toISOString(),
+        error: data?.error || 'No fue posible analizar el documento.',
+      };
+    } catch (error: any) {
+      return {
+        status: 'ERROR',
+        source: 'NINGUNO',
+        includedInTotal: false,
+        analyzedAt: new Date().toISOString(),
+        error: error?.message || 'No fue posible analizar el documento.',
+      };
+    }
+  }
+
   function handleFileUpload(
     e: React.ChangeEvent<HTMLInputElement>,
     field: 'xml' | 'pdf' | 'ticket'
@@ -369,7 +406,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     }
 
     const reader = new FileReader();
-    reader.onload = () => {
+    reader.onload = async () => {
       const attachment: ExpenseFileAttachment = {
         id: `att_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
         name: file.name,
@@ -379,10 +416,15 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         uploadedAt: new Date().toISOString(),
       };
 
-      if (field === 'xml') setItemXmlFile(attachment);
-      if (field === 'pdf') setItemPdfFile(attachment);
-      if (field === 'ticket') setItemTicketFile(attachment);
       setItemFormError(null);
+      const analysis = await analyzeAttachment(attachment);
+      const analyzedAttachment: ExpenseFileAttachment = analysis
+        ? { ...attachment, analysis }
+        : attachment;
+
+      if (field === 'xml') setItemXmlFile(analyzedAttachment);
+      if (field === 'pdf') setItemPdfFile(analyzedAttachment);
+      if (field === 'ticket') setItemTicketFile(analyzedAttachment);
     };
     reader.onerror = () => {
       setItemFormError('Error al leer el archivo. Intenta de nuevo.');
@@ -615,6 +657,11 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   const isFavorEmpresa = financialStatus === 'SOBRANTE_PENDIENTE';
   const isFavorColaborador = financialStatus === 'FAVOR_COLABORADOR';
   const isExacto = financialStatus === 'CUENTA_SALDADA';
+
+  const documentTotals = useMemo(
+    () => summarizeDocumentTotals(items, supportFiles, pendingFiscalXmls),
+    [items, supportFiles, pendingFiscalXmls]
+  );
 
   // Normaliza el nombre base para detectar parejas (ej. factura_hotel.pdf y factura_hotel.xml)
   function getFileBaseSignature(filename: string): string {
@@ -2048,6 +2095,53 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
               </div>
             )}
 
+            {/* Lectura automática de importes documentales */}
+            <div className="bg-white rounded-xl shadow-2xs border border-indigo-200 overflow-hidden">
+              <div className="p-4 bg-indigo-50/60 border-b border-indigo-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <h4 className="font-bold text-xs text-indigo-950 flex items-center gap-2">
+                    <span>Conciliación Automática de Documentos</span>
+                    <span className="px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-800 font-mono text-[10px] font-bold">
+                      {documentTotals.analyzedDocumentCount}/{documentTotals.primaryDocumentCount} analizados
+                    </span>
+                  </h4>
+                  <p className="text-[11px] text-indigo-800 mt-0.5">
+                    El sistema lee el total de PDF, tickets e imágenes. Los XML CFDI se leen por separado y no se suman para evitar duplicar una factura.
+                  </p>
+                </div>
+                <div className="text-right">
+                  <span className="block text-[10px] uppercase tracking-wider font-bold text-indigo-700">Total detectado en comprobantes</span>
+                  <span className="font-mono text-xl font-black text-indigo-950">{formatCurrency(documentTotals.totalDetected)}</span>
+                </div>
+              </div>
+              <div className="p-3 flex flex-wrap items-center gap-2 text-[10px]">
+                <span className="px-2 py-1 rounded bg-emerald-50 border border-emerald-200 text-emerald-800 font-bold">
+                  Facturas: {documentTotals.invoiceCount}
+                </span>
+                <span className="px-2 py-1 rounded bg-teal-50 border border-teal-200 text-teal-800 font-bold">
+                  Tickets: {documentTotals.ticketCount}
+                </span>
+                <span className="px-2 py-1 rounded bg-amber-50 border border-amber-200 text-amber-800 font-bold">
+                  Por clasificar: {documentTotals.unclassifiedCount}
+                </span>
+                {documentTotals.pendingDocumentCount > 0 && (
+                  <span className="px-2 py-1 rounded bg-slate-50 border border-slate-200 text-slate-700 font-semibold">
+                    Pendientes de lectura: {documentTotals.pendingDocumentCount}
+                  </span>
+                )}
+                {documentTotals.withoutTotalCount > 0 && (
+                  <span className="px-2 py-1 rounded bg-amber-50 border border-amber-200 text-amber-900 font-semibold">
+                    Sin total: {documentTotals.withoutTotalCount}
+                  </span>
+                )}
+                {documentTotals.fiscalXmlTotal > 0 && (
+                  <span className="px-2 py-1 rounded bg-purple-50 border border-purple-200 text-purple-900 font-semibold">
+                    Total CFDI leído: {formatCurrency(documentTotals.fiscalXmlTotal)} (referencia)
+                  </span>
+                )}
+              </div>
+            </div>
+
             {/* EXPEDIENTE: Documentos y Comprobantes Adjuntos (PDF, XML, Capturas) */}
             <div className="bg-white rounded-xl shadow-2xs border border-slate-200 overflow-hidden">
               <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -2994,7 +3088,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                 <div className="flex justify-between">
                   <span className="text-slate-500">Comprobantes:</span>
                   <span className="font-bold text-slate-900">
-                    {items.length} ({items.filter((i) => i.type === 'FACTURA').length} facturas, {items.filter((i) => i.type === 'TICKET').length} tickets)
+                    {items.length} ({items.filter((i) => i.type === 'FACTURA').length} facturas, {items.filter((i) => i.type === 'TICKET').length} tickets, {items.filter((i) => i.type === 'PENDIENTE').length} por clasificar)
                   </span>
                 </div>
               </div>

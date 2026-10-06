@@ -9,7 +9,7 @@ const MAX_FILE_SIZE = 15 * 1024 * 1024;
 type DimerConfig = Map<string, string>;
 
 function norm(v: unknown) {
-  return String(v ?? '').normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').replace(/\\s+/g, ' ').trim().toUpperCase();
+  return String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim().toUpperCase();
 }
 
 function num(v: unknown) {
@@ -65,10 +65,10 @@ function parseCellRef(value: string): { row: number; col: number } {
   return { row: Number(match[2]), col: columnIndex(match[1]) };
 }
 
-function boolConfig(value: string, key: string): boolean {
+function boolConfig(value: unknown, key: string): boolean {
   const normalized = norm(value);
-  if (normalized === 'TRUE' || normalized === 'SI' || normalized === 'SÍ') return true;
-  if (normalized === 'FALSE' || normalized === 'NO') return false;
+  if (normalized === 'TRUE' || normalized === 'VERDADERO' || normalized === 'SI' || normalized === '1') return true;
+  if (normalized === 'FALSE' || normalized === 'FALSO' || normalized === 'NO' || normalized === '0') return false;
   throw new Error(`El parámetro ${key} de DIMER_CONFIG debe ser TRUE/FALSE.`);
 }
 
@@ -100,15 +100,33 @@ function configCatalog(ws: XLSX.WorkSheet): Map<string, ExpenseCategoryType> {
   let inCatalog = false;
   for (const row of rows) {
     const first = norm(row?.[0]);
-    if (first === 'CONCEPTO EXCEL' && norm(row?.[1]) === 'CONCEPTO NORMALIZADO') {
+    const second = norm(row?.[1]);
+    if (first === 'ROW' && second === 'CONCEPTO') {
       inCatalog = true;
       continue;
     }
     if (!inCatalog) continue;
-    const normalized = norm(row?.[1]);
-    const category = String(row?.[2] ?? '').trim() as ExpenseCategoryType;
-    if (first === 'CATEGORIAS OFICIALES DIMER') break;
-    if (normalized && category) map.set(normalized, category);
+    const rowNumber = Number(row?.[0]);
+    const concept = String(row?.[1] ?? '').trim();
+    const section = norm(row?.[2]);
+    if (!Number.isInteger(rowNumber) || !concept) {
+      if (first.startsWith('DIMER_CONFIG')) break;
+      continue;
+    }
+    // Map the official report sections to the application's normalized categories.
+    const category: ExpenseCategoryType =
+      section === 'VIAJES' ? (
+        /GASOLINA/i.test(concept) ? 'GASOLINA' :
+        /CASETA/i.test(concept) ? 'CASETAS' :
+        /ESTACIONAMIENTO/i.test(concept) ? 'ESTACIONAMIENTO' :
+        /HOSPEDAJE|ESTANCIA/i.test(concept) ? 'HOSPEDAJE' :
+        /BOLETO|RENTA|TAXI|UBER|TRANSPORTE/i.test(concept) ? 'TRANSPORTE_FORANEO' :
+        'GASTOS_MENORES'
+      ) :
+      section === 'COMIDAS' ? 'ALIMENTOS' :
+      section === 'GASTOS DE OFICINA' ? 'GASTOS_MENORES' :
+      'GASTOS_MENORES';
+    map.set(norm(concept), category);
   }
   return map;
 }
@@ -149,19 +167,16 @@ export function parseDimerExpenseExcel(input: {
     ['HOJA_PRINCIPAL', mainSheetName],
     ['FECHA_LABEL_CELL', requiredConfig(cfg, 'FECHA_LABEL_CELL')],
     ['FECHA_COLUMNS', requiredConfig(cfg, 'FECHA_COLUMNS')],
-    ['CONCEPTO_COLUMN', requiredConfig(cfg, 'CONCEPTO_COLUMN')],
     ['IMPORTE_COLUMNS', requiredConfig(cfg, 'IMPORTE_COLUMNS')],
     ['ROW_TOTAL_COLUMN', requiredConfig(cfg, 'ROW_TOTAL_COLUMN')],
-    ['TC_EMPRESA_PAYMENT_METHOD', requiredConfig(cfg, 'TC_EMPRESA_PAYMENT_METHOD')],
-    ['PERSONAL_PAYMENT_METHOD', requiredConfig(cfg, 'PERSONAL_PAYMENT_METHOD')],
-    ['REEMBOLSO_LABEL_CELL', requiredConfig(cfg, 'REEMBOLSO_LABEL_CELL')],
     ['TOTAL_GASTOS_LABEL_CELL', requiredConfig(cfg, 'TOTAL_GASTOS_LABEL_CELL')],
+    ['TOTAL_GASTOS_CONTROL_CELL', requiredConfig(cfg, 'TOTAL_GASTOS_CONTROL_CELL')],
     ['ORIGINAL_FILE_REQUIRED', requiredConfig(cfg, 'ORIGINAL_FILE_REQUIRED')],
     ['STRICT_TEMPLATE_CHECK', requiredConfig(cfg, 'STRICT_TEMPLATE_CHECK')],
   ];
   const bad = contractKeys.filter(([key, expected]) => cfg.get(key) !== expected);
   if (bad.length) {
-    throw new Error(`La plantilla DIMER_CONFIG no coincide con el contrato oficial: ${bad.map(([key, expected]) => `${key} esperaba ${expected}`).join('; ')}.`);
+    throw new Error(`La plantilla DIMER_CONFIG no coincide con la estructura oficial: ${bad.map(([key, expected]) => `${key} esperaba ${expected}`).join('; ')}.`);
   }
 
   if (!boolConfig(requiredConfig(cfg, 'STRICT_TEMPLATE_CHECK'), 'STRICT_TEMPLATE_CHECK')) {
@@ -197,32 +212,18 @@ export function parseDimerExpenseExcel(input: {
     throw new Error(`La plantilla no contiene fechas válidas en ${requiredConfig(cfg, 'FECHA_COLUMNS')}${dateHeaderRow}.`);
   }
 
-  const reimbursementLabelCell = requiredConfig(cfg, 'REEMBOLSO_LABEL_CELL');
   const totalLabelCell = requiredConfig(cfg, 'TOTAL_GASTOS_LABEL_CELL');
-  if (norm(cellValue(main, reimbursementLabelCell)) !== 'REEMBOLSO') {
-    throw new Error(`La celda ${reimbursementLabelCell} debe contener REEMBOLSO.`);
-  }
   if (norm(cellValue(main, totalLabelCell)) !== 'TOTAL DE GASTOS') {
     throw new Error(`La celda ${totalLabelCell} debe contener TOTAL DE GASTOS.`);
   }
 
-  const companyRows = parseRowRange(requiredConfig(cfg, 'TC_EMPRESA_DATA_ROWS'));
-  const personalRows = parseRowRange(requiredConfig(cfg, 'PERSONAL_DATA_ROWS'));
+  const dataRows = parseRowRange(requiredConfig(cfg, 'EXPENSE_DATA_ROWS'));
   const controlRows = parseRowRange(requiredConfig(cfg, 'CONTROL_ROWS'));
-  const dataRows = Array.from(new Set([...companyRows, ...personalRows]));
   const overlap = dataRows.filter(row => controlRows.includes(row));
   if (overlap.length) {
     throw new Error(`DIMER_CONFIG es inconsistente: estas filas son datos y controles a la vez: ${overlap.join(', ')}.`);
   }
 
-  const companyPaymentMethod = requiredConfig(cfg, 'TC_EMPRESA_PAYMENT_METHOD') as PaymentMethodType;
-  if (companyPaymentMethod !== 'TARJETA_EMPRESA') {
-    throw new Error(`TC_EMPRESA_PAYMENT_METHOD no coincide con el contrato oficial: ${companyPaymentMethod}.`);
-  }
-  const personalPaymentMethod = requiredConfig(cfg, 'PERSONAL_PAYMENT_METHOD');
-  if (personalPaymentMethod !== 'REQUIERE_REVISION') {
-    throw new Error(`PERSONAL_PAYMENT_METHOD no coincide con el contrato oficial: ${personalPaymentMethod}.`);
-  }
 
   if (!boolConfig(requiredConfig(cfg, 'IGNORE_ZERO_OR_BLANK'), 'IGNORE_ZERO_OR_BLANK') ||
       !boolConfig(requiredConfig(cfg, 'CREATE_ITEM_PER_NONZERO_CELL'), 'CREATE_ITEM_PER_NONZERO_CELL')) {
@@ -268,9 +269,9 @@ export function parseDimerExpenseExcel(input: {
     }
   };
 
-  readRows(companyRows, companyPaymentMethod, 'TC EMPRESARIAL');
-  // The template intentionally does not distinguish ANTICIPO from PERSONAL_REEMBOLSO here.
-  readRows(personalRows, undefined, 'GASTOS EN EFECTIVO o TC PERSONAL');
+  // Esta plantilla ya no maneja tarjeta corporativa/empresarial.
+  // Todos los gastos quedan pendientes de clasificación del método de pago.
+  readRows(dataRows, undefined, 'GASTOS DIMER');
 
   const totalImported = Number(items.reduce((sum, item) => sum + item.amount, 0).toFixed(2));
   const totalExcel = Number(num(cellValue(main, totalControlCell)).toFixed(2));
@@ -279,8 +280,8 @@ export function parseDimerExpenseExcel(input: {
   if (difference > tolerance) {
     warnings.push(`Diferencia de conciliación: Excel ${totalExcel.toFixed(2)} vs partidas ${totalImported.toFixed(2)}.`);
   }
-  if (items.some(item => item.sectionTitle === 'GASTOS EN EFECTIVO o TC PERSONAL')) {
-    warnings.push('El bloque "GASTOS EN EFECTIVO o TC PERSONAL" requiere confirmar ANTICIPO o PERSONAL_REEMBOLSO antes de finalizar.');
+  if (items.length > 0) {
+    warnings.push('La plantilla oficial DIMER no maneja tarjeta corporativa/empresarial. El método de pago de cada partida debe clasificarse durante la comprobación.');
   }
 
   const uploadedAt = new Date().toISOString();

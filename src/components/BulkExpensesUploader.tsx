@@ -320,6 +320,14 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
     (q) => q.attachment?.analysis?.status === 'DETECTADO' && q.attachment.analysis.includedInTotal
   ).length;
 
+  const formatCurrency = (amount: number) =>
+    new Intl.NumberFormat('es-MX', {
+      style: 'currency',
+      currency: 'MXN',
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount);
+
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;

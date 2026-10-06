@@ -202,18 +202,29 @@ export function registerExpenseRoutes(app: Express) {
     try {
       const user = await getRequestUser(req);
       if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
-      const base64 = String(process.env.DIMER_EXCEL_TEMPLATE_BASE64 || '');
-      if (!base64) return res.status(503).json({ success: false, error: 'La plantilla oficial Excel aún no está configurada en el servidor.' });
-      const buffer = Buffer.from(base64.replace(/^data:[^;]+;base64,/, ''), 'base64');
-      if (!buffer.length) return res.status(503).json({ success: false, error: 'La plantilla oficial Excel configurada está vacía.' });
-      res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-      res.setHeader('Content-Disposition', 'attachment; filename="Reporte de Gastos DIMER.xlsx"');
-      res.setHeader('Content-Length', buffer.length);
-      return res.send(buffer);
-    } catch (e: any) {
-      console.error('[EXPENSE-EXCEL-TEMPLATE-ERROR]', e);
-      return res.status(500).json({ success: false, error: e.message || 'Error al descargar la plantilla.' });
-    }
+      const configuredBase64 = String(process.env.DIMER_EXCEL_TEMPLATE_BASE64 || '');
+      let buffer = configuredBase64 ? Buffer.from(configuredBase64.replace(/^data:[^;]+;base64,/, ''), 'base64') : Buffer.alloc(0);
+      if (!buffer.length) {
+        const XLSX = (await import('xlsx')).default;
+        const rows: any[][] = Array.from({ length: 44 }, () => Array(10).fill(''));
+        rows[1][1] = 'NOMBRE'; rows[3][0] = 'MES DE COMPROBACIÓN'; rows[5][1] = 'FECHA';
+        const monday = new Date(); monday.setHours(0,0,0,0); const day = monday.getDay(); monday.setDate(monday.getDate() - ((day + 6) % 7));
+        for (let i=0;i<7;i++){ const d=new Date(monday); d.setDate(monday.getDate()+i); rows[5][2+i]=d; }
+        rows[5][9]='TOTAL SEMANAL'; rows[7][0]='LUGAR DEL VIAJE:';
+        const concepts: Array<[number,number,string,string]> = [
+          [11,1,'Estancia/ Hospedaje','VIAJES'],[12,2,'Boletos de Autobus','VIAJES'],[13,3,'Gasolina','VIAJES'],[14,4,'Estacionamiento','VIAJES'],[15,5,'Casetas','VIAJES'],[16,6,'Rentas de Autos','VIAJES'],[17,7,'Taxi','VIAJES'],[18,8,'Uber or others','VIAJES'],
+          [20,9,'Desayuno','COMIDAS'],[21,10,'Comida','COMIDAS'],[22,11,'Cena','COMIDAS'],[23,12,'Snack / Café','COMIDAS'],[24,13,'Tragos','COMIDAS'],[25,14,'Propina','COMIDAS'],
+          [27,15,'Mantenimiento','GASTOS DE OFICINA'],[28,16,'Teléfono de casa / Celular','GASTOS DE OFICINA'],[29,17,'Papelería','GASTOS DE OFICINA'],[30,18,'Muebles y mmto de equipo','GASTOS DE OFICINA'],[31,19,'Envíos postales','GASTOS DE OFICINA'],
+          [33,20,'Entretenimiento clientes','OTROS GASTOS'],[34,21,'Regalos clientes','OTROS GASTOS'],[35,22,'Comida','OTROS GASTOS'],[36,23,'Propina','OTROS GASTOS'],[37,24,'Estancia/ Hospedaje','OTROS GASTOS'],[38,25,'Otros (lavar ropa)','OTROS GASTOS'],[39,26,'Uber or others','OTROS GASTOS'],[40,27,'Boletos de Avión','OTROS GASTOS']
+        ];
+        rows[9][1]='VIAJES'; rows[18][1]='COMIDAS'; rows[25][1]='GASTOS DE OFICINA'; rows[31][1]='OTROS GASTOS';
+        concepts.forEach(([r,n,c])=>{rows[r][0]=n; rows[r][1]=c;}); rows[41][1]='TOTAL DE GASTOS'; rows[42][0]='FIRMA DEL EMPLEADO'; rows[42][9]='Fecha de Pago';
+        const config: any[][] = [['KEY','VALUE','DESCRIPTION'],['CONFIG_VERSION','2.0','Versión del contrato de plantilla DIMER.'],['PLANTILLA_ID','DIMER_REPORTE_GASTOS','Identificador único de esta plantilla.'],['STRICT_TEMPLATE_CHECK','TRUE','La importación debe validar esta estructura.'],['ORIGINAL_FILE_REQUIRED','TRUE','Debe conservarse el Excel original cargado.'],['HOJA_PRINCIPAL','REPORTE DE GASTOS MENSUAL','Hoja oficial del reporte.'],['NOMBRE_LABEL_CELL','B3','Etiqueta NOMBRE.'],['MES_COMPROBACION_LABEL_CELL','A5','Etiqueta MES DE COMPROBACIÓN.'],['FECHA_LABEL_CELL','B8','Etiqueta FECHA.'],['FECHA_HEADER_ROW','8','Fila que contiene las fechas.'],['FECHA_COLUMNS','C:I','Columnas diarias del reporte.'],['CONCEPTO_COLUMN','B','Columna de concepto.'],['IMPORTE_COLUMNS','C:I','Columnas donde se capturan importes diarios.'],['EXPENSE_DATA_ROWS','13:20,22:27,29:33,35:42','Filas de conceptos que generan partidas.'],['ROW_TOTAL_COLUMN','J','Columna de total por concepto; nunca genera partidas.'],['CONTROL_ROWS','43:44','Filas de control/firma; nunca generan partidas.'],['TOTAL_GASTOS_LABEL_CELL','B43','Etiqueta TOTAL DE GASTOS.'],['TOTAL_GASTOS_CONTROL_CELL','J43','Total general del reporte.'],['TOTAL_GASTOS_FORMULA','SUM(C43:I43)','Control visible de la plantilla.'],['TOTAL_CALCULATION','SUM(EXPENSEITEM.AMOUNT)','Regla de conciliación de importación.'],['REEMBOLSO_CONTROL_RANGE','NOT_PRESENT','Esta versión no contiene fila de reembolso.'],['PAYMENT_METHOD_BY_ROW','REQUIERE_REVISION','El método de pago se clasifica durante la comprobación.'],['IGNORE_ZERO_OR_BLANK','TRUE','Celdas vacías o cero no generan partidas.'],['CREATE_ITEM_PER_NONZERO_CELL','TRUE','Cada importe diario distinto de cero genera una partida.'],['CONCILIATION_TOLERANCE_MXN','0.01','Tolerancia de conciliación en MXN.'],['MAX_FILE_SIZE_MB','15','Límite de archivo de importación.'],['VALIDATE_FILE_TYPE','TRUE','Validar que el archivo sea XLSX válido.'],['DUPLICATE_FILE_CHECK','TRUE','Detectar archivo ya importado mediante hash.'],['DIMER_CONFIG - CATALOGO DE CONCEPTOS','',''],['ROW','CONCEPTO','SECCION'],...concepts.map(([r,,c,s])=>[r+2,c,s]),['','',''],['DIMER_CONFIG - METODOS DE PAGO','',''],['VALUE','DESCRIPTION',''],['ANTICIPO','Gasto cubierto con anticipo.',''],['REQUIERE_REVISION','El reporte no identifica automáticamente el método de pago; el usuario debe clasificarlo.',''],['REEMBOLSO','Importe que corresponde reembolsar al empleado, cuando aplique.',''],['NOTA','Esta hoja DIMER_CONFIG es la fuente de verdad para la importación.','']];
+        const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(rows),'REPORTE DE GASTOS MENSUAL'); XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet([]),'Hoja1'); XLSX.utils.book_append_sheet(wb,XLSX.utils.aoa_to_sheet(config),'DIMER_CONFIG'); buffer=XLSX.write(wb,{type:'buffer',bookType:'xlsx'});
+      }
+      if (!buffer.length) return res.status(503).json({ success: false, error: 'No fue posible generar la plantilla oficial Excel.' });
+      res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'); res.setHeader('Content-Disposition','attachment; filename="Reporte de Gastos DIMER.xlsx"'); res.setHeader('Content-Length',buffer.length); return res.send(buffer);
+    } catch (e: any) { console.error('[EXPENSE-EXCEL-TEMPLATE-ERROR]',e); return res.status(500).json({ success:false,error:e.message || 'Error al descargar la plantilla.' }); }
   });
   app.get('/api/expenses/search', async (req: Request, res: Response) => {
     try {
@@ -251,6 +262,29 @@ export function registerExpenseRoutes(app: Express) {
     }
   });
 
+  app.delete('/api/expenses/excel/:folio', async (req: Request, res: Response) => {
+    try {
+      const user = await getRequestUser(req);
+      if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
+      const folio = String(req.params.folio || '').trim().toUpperCase();
+      if (!folio) return res.status(400).json({ success: false, error: 'Folio requerido' });
+      const request = await getRequest(folio);
+      if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
+      const privileged = userIsAdminOrFinanzas(user);
+      if (!privileged && !isOwner(request, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para modificar este expediente' });
+      if (request.status !== 'PAGADA' && !(request.status === 'COMPROBADA' && privileged)) return res.status(409).json({ success: false, error: 'El expediente no permite eliminar el reporte Excel en su estado actual.' });
+      const existing = await getVerificationByFolio(folio);
+      if (!existing?.originalExcelFile) return res.status(404).json({ success: false, error: 'No existe un reporte Excel original en este expediente.' });
+      const now = new Date().toISOString();
+      const saved = await saveVerification({ ...existing, originalExcelFile: undefined, excelAuditSummary: undefined, updatedAt: now });
+      await recordAuditLog({ requestId: request.id, userId: user.id, action: 'COMPROBACION_EXCEL_ORIGINAL_ELIMINADO', details: { folio, filename: existing.originalExcelFile.name, deletedAt: now } });
+      return res.json({ success: true, verification: saved, message: 'Reporte Excel original eliminado. Las partidas importadas se conservaron.' });
+    } catch (e: any) {
+      console.error('[EXPENSE-EXCEL-DELETE-ERROR]', e);
+      return res.status(500).json({ success: false, error: e.message || 'Error al eliminar el reporte Excel.' });
+    }
+  });
+
   app.post('/api/expenses/draft', async (req: Request, res: Response) => {
     try {
       const user = await getRequestUser(req);
@@ -284,8 +318,8 @@ export function registerExpenseRoutes(app: Express) {
         status: 'BORRADOR', items, ...totals, notes,
         supportFiles: Array.isArray(req.body.supportFiles) ? req.body.supportFiles : (existing?.supportFiles || []),
         pendingFiscalXmls: Array.isArray(req.body.pendingFiscalXmls) ? req.body.pendingFiscalXmls : (existing?.pendingFiscalXmls || []),
-        originalExcelFile: req.body.originalExcelFile || existing?.originalExcelFile,
-        excelAuditSummary: req.body.excelAuditSummary || existing?.excelAuditSummary,
+        originalExcelFile: Object.prototype.hasOwnProperty.call(req.body, 'originalExcelFile') ? (req.body.originalExcelFile || undefined) : existing?.originalExcelFile,
+        excelAuditSummary: Object.prototype.hasOwnProperty.call(req.body, 'excelAuditSummary') ? (req.body.excelAuditSummary || undefined) : existing?.excelAuditSummary,
         refund: refund !== undefined ? refund : existing?.refund,
         submittedAt: existing?.submittedAt, updatedAt: now, createdAt: existing?.createdAt || now,
       };

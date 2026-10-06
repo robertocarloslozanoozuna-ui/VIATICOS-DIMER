@@ -572,7 +572,6 @@ export const ExcelExpensesImporter: React.FC<ExcelExpensesImporterProps> = ({
                               }
                               className="w-full text-xs py-0.5 px-1.5 border border-slate-300 rounded bg-white focus:ring-1 focus:ring-emerald-500 focus:outline-none"
                             >
-                              
                               {PAYMENT_METHOD_OPTIONS.map((p) => (
                                 <option key={p.value} value={p.value}>
                                   {p.label}

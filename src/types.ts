@@ -41,7 +41,7 @@ export interface AuditLog { id:string; requestId?:string|null; userId:string; us
 export interface EmailLog { id:string; requestId?:string; folio?:string; to:string; subject:string; html:string; status:'ENVIADO'|'SIMULADO'|'FALLIDO'; error?:string; createdAt:string; }
 export interface SystemStats { totalRequests:number; pendingApproval:number; approved:number; paid:number; rejected:number; correctionRequested:number; totalAmountRequested:number; totalAmountAuthorized:number; totalUsers?:number; totalDepartments?:number; totalBosses?:number; totalRoles?:number; }
 
-export type ExpenseType = 'FACTURA' | 'TICKET';
+export type ExpenseType = 'FACTURA' | 'TICKET' | 'PENDIENTE';
 
 export type PaymentMethodType =
   | 'ANTICIPO'
@@ -58,6 +58,17 @@ export type ExpenseCategoryType =
   | 'ESTACIONAMIENTO'
   | 'GASTOS_MENORES';
 
+export interface ExpenseDocumentAnalysis {
+  status: 'DETECTADO' | 'SIN_TOTAL' | 'NO_DISPONIBLE' | 'ERROR';
+  amount?: number;
+  documentType?: 'FACTURA' | 'TICKET' | 'OTRO';
+  confidence?: 'ALTA' | 'MEDIA' | 'BAJA';
+  source: 'XML' | 'GEMINI' | 'NINGUNO';
+  includedInTotal: boolean;
+  analyzedAt: string;
+  error?: string;
+}
+
 export interface ExpenseFileAttachment {
   id: string;
   name: string;
@@ -67,6 +78,7 @@ export interface ExpenseFileAttachment {
   uploadedAt: string;
   uuid?: string;
   role?: 'COMPROBANTE_PRINCIPAL' | 'COMPLEMENTO_FISCAL' | 'DOCUMENTO_ORIGINAL_EXCEL';
+  analysis?: ExpenseDocumentAnalysis;
 }
 
 export interface ExpenseItem {

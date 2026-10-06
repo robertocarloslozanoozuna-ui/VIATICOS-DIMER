@@ -117,7 +117,7 @@ export const ExcelExpensesTable: React.FC<ExcelExpensesTableProps> = ({
     const isFactura = initialFile
       ? detectedType === 'FACTURA' || initialFile.name.toLowerCase().endsWith('.xml')
       : false;
-    const isTicket = initialFile ? detectedType === 'TICKET' || (!isFactura && !initialFile.name.toLowerCase().endsWith('.xml')) : false;
+    const isTicket = initialFile ? detectedType === 'TICKET' : false;
 
     // Regla de Oro: El importe siempre inicia en 0 y es capturado por el usuario.
     // El XML CFDI nunca sobreescribe ni impone un importe.

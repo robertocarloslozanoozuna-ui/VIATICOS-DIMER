@@ -228,7 +228,9 @@ export default function App() {
           setActiveTab(tab);
           window.location.hash = tab;
           if (tab !== 'aprobar') setSelectedRequestIdForApproval(null);
-          if (tab !== 'comprobar') setSelectedFolioForComprobacion(null);
+          // Conservamos el folio de comprobación al cambiar de menú para poder
+          // reanudar el mismo expediente al regresar a Comprobar Gastos.
+          // El cambio de usuario sigue limpiándolo en handleUserChanged().
         }}
         onSwitchUser={handleSwitchUser}
         onOpenAuthModal={(mode) => { setAuthModalMode(mode); setAuthModalOpen(true); }}

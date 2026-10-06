@@ -301,6 +301,25 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
   const errorCount = queue.filter((q) => q.status === 'ERROR').length;
   const uploadedCount = queue.filter((q) => q.status === 'SUBIDO').length;
 
+  // Suma únicamente los importes finales detectados en documentos principales.
+  // Los XML CFDI no se suman aquí porque son complemento fiscal y podrían duplicar una factura.
+  const detectedDocumentsTotal = Number(
+    queue.reduce((sum, q) => {
+      const analysis = q.attachment?.analysis;
+      return sum + (
+        analysis?.status === 'DETECTADO' &&
+        analysis.includedInTotal &&
+        Number.isFinite(Number(analysis.amount))
+          ? Number(analysis.amount)
+          : 0
+      );
+    }, 0).toFixed(2)
+  );
+
+  const detectedDocumentsCount = queue.filter(
+    (q) => q.attachment?.analysis?.status === 'DETECTADO' && q.attachment.analysis.includedInTotal
+  ).length;
+
   const formatFileSize = (bytes: number) => {
     if (bytes < 1024) return `${bytes} B`;
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -393,6 +412,34 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
           <div className="p-3 bg-teal-50 border border-teal-200 text-teal-900 rounded-lg text-xs font-medium flex items-center gap-2">
             <CheckCircle className="w-4 h-4 text-teal-600 shrink-0" />
             <span>{globalNotice}</span>
+          </div>
+        )}
+
+        {/* Resumen de importes detectados */}
+        {queue.length > 0 && (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="p-3 rounded-lg border border-indigo-200 bg-indigo-50/60">
+              <span className="block text-[10px] uppercase tracking-wider font-bold text-indigo-700">
+                Suma de totales detectados
+              </span>
+              <span className="block mt-0.5 text-2xl font-mono font-black text-indigo-950">
+                {formatCurrency(detectedDocumentsTotal)}
+              </span>
+              <span className="block mt-0.5 text-[10px] text-indigo-800">
+                {detectedDocumentsCount} documento(s) con importe final identificado
+              </span>
+            </div>
+            <div className="p-3 rounded-lg border border-slate-200 bg-slate-50">
+              <span className="block text-[10px] uppercase tracking-wider font-bold text-slate-600">
+                Control de conciliación
+              </span>
+              <span className="block mt-0.5 text-sm font-bold text-slate-800">
+                Se suma cada “Total detectado” una sola vez
+              </span>
+              <span className="block mt-0.5 text-[10px] text-slate-500">
+                Los XML CFDI se excluyen de esta suma para evitar duplicar el importe de su factura.
+              </span>
+            </div>
           </div>
         )}
 

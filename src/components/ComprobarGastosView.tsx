@@ -1826,7 +1826,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
               </div>
 
               <div className="p-4">
-                {refund ? (
+                {refund && (
                   <div className="bg-emerald-50/70 border border-emerald-300 rounded-xl p-4 space-y-3">
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-emerald-200/60 pb-2">
                       <div className="flex items-center gap-2">

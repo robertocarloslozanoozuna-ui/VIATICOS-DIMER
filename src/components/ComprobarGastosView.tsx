@@ -1908,46 +1908,6 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                       </div>
                     )}
                   </div>
-                ) : (
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs">
-                    <div className="space-y-0.5">
-                      <p className="font-bold text-slate-800">
-                        {isFavorEmpresa
-                          ? `Tienes un sobrante a devolver a Finanzas de ${formatCurrency(difference)} MXN.`
-                          : 'No se ha registrado ningún reembolso de dinero sobrante a Finanzas.'}
-                      </p>
-                      <p className="text-[11px] text-slate-500">
-                        Imprime el recibo, recaba la firma correspondiente y posteriormente súbelo en "Registrar Reembolso de Sobrante".
-                      </p>
-                    </div>
-                    {canEdit && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const amount = Number(refund?.amount || refundAmount || difference || 0);
-                          if (isNaN(amount) || amount <= 0) {
-                            setRefundFormError('Primero captura un monto de reembolso mayor a $0.00 MXN.');
-                            return;
-                          }
-
-                          downloadRefundReceiptPdf({
-                            folio: loadedRequest.folio,
-                            employeeName: loadedRequest.requesterName || loadedRequest.user?.name || currentUser.name,
-                            department: loadedRequest.department || currentUser.department,
-                            destination: loadedRequest.destination,
-                            amount,
-                            refundDate: refund?.refundDate || refundDate,
-                            method: refund?.method || refundMethod,
-                            reference: (refund?.reference || refundReference).trim(),
-                          });
-                        }}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-md font-bold text-xs shadow-2xs whitespace-nowrap cursor-pointer"
-                      >
-                        <Download className="w-3.5 h-3.5" />
-                        Descargar Recibo PDF
-                      </button>
-                    )}
-                  </div>
                 )}
               </div>
             </div>

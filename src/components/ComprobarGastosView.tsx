@@ -2261,6 +2261,24 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                                   {formatFileSize(file.size)}
                                 </span>
                               </div>
+                              {file.analysis?.status === 'DETECTADO' && file.analysis.amount ? (
+                                <div className="text-[10px] font-mono font-bold text-indigo-800">
+                                  Total detectado: {formatCurrency(file.analysis.amount)}
+                                  {file.analysis.confidence && (
+                                    <span className="ml-1 text-[9px] font-sans font-semibold text-slate-500">
+                                      ({file.analysis.confidence.toLowerCase()} confianza)
+                                    </span>
+                                  )}
+                                </div>
+                              ) : file.analysis?.status === 'SIN_TOTAL' ? (
+                                <div className="text-[10px] font-semibold text-amber-700">
+                                  No se detectó un total confiable
+                                </div>
+                              ) : file.analysis?.status === 'ERROR' || file.analysis?.status === 'NO_DISPONIBLE' ? (
+                                <div className="text-[10px] font-semibold text-slate-500">
+                                  Lectura automática no disponible
+                                </div>
+                              ) : null}
                               {file.uuid && (
                                 <p className="text-[9px] font-mono text-slate-400 truncate" title={`UUID: ${file.uuid}`}>
                                   UUID: {file.uuid}

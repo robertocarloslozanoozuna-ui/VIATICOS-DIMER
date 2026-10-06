@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useId, useMemo } from 'react';
+import React, { useState, useEffect, useId, useMemo, useRef } from 'react';
 import {
   Receipt,
   Search,
@@ -136,6 +136,8 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
   // Saving / Finalizing states
   const [savingDraft, setSavingDraft] = useState<boolean>(false);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autosaveInFlightRef = useRef(false);
   const [submittingFinal, setSubmittingFinal] = useState<boolean>(false);
   const [showConfirmFinalModal, setShowConfirmFinalModal] = useState<boolean>(false);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
@@ -719,6 +721,69 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       setFinalizingAccounting(false);
     }
   }
+
+  // Persistencia automática del progreso de la comprobación.
+  // Usa el mismo endpoint de borrador existente, pero sin interrumpir al usuario.
+  async function persistDraftSilently() {
+    if (!loadedRequest || !canEdit || submittingFinal || finalizingAccounting || autosaveInFlightRef.current) return;
+
+    autosaveInFlightRef.current = true;
+    try {
+      const res = await authFetch('/api/expenses/draft', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          folio: loadedRequest.folio,
+          items,
+          supportFiles,
+          pendingFiscalXmls,
+          originalExcelFile: originalExcelFile || undefined,
+          excelAuditSummary: excelAuditSummary || undefined,
+          notes,
+          refund: refund || undefined,
+        }),
+      });
+
+      if (!res.ok) {
+        console.warn('[AUTOSAVE-DRAFT] No se pudo guardar el progreso:', res.status);
+      }
+    } catch (e) {
+      console.warn('[AUTOSAVE-DRAFT] Error al guardar progreso:', e);
+    } finally {
+      autosaveInFlightRef.current = false;
+    }
+  }
+
+  // Cada cambio relevante se guarda automáticamente después de una breve pausa.
+  // Evita peticiones por cada tecla y permite salir a otro menú sin perder el avance.
+  useEffect(() => {
+    if (!loadedRequest || !canEdit || searching || submittingFinal || finalizingAccounting) return;
+
+    if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+    autosaveTimerRef.current = setTimeout(() => {
+      void persistDraftSilently();
+    }, 900);
+
+    return () => {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+    };
+  }, [
+    loadedRequest,
+    canEdit,
+    searching,
+    submittingFinal,
+    finalizingAccounting,
+    items,
+    supportFiles,
+    pendingFiscalXmls,
+    originalExcelFile,
+    excelAuditSummary,
+    notes,
+    refund,
+  ]);
 
   // Save draft
   async function handleSaveDraft() {

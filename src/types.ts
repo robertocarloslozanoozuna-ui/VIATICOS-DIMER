@@ -58,6 +58,21 @@ export type ExpenseCategoryType =
   | 'ESTACIONAMIENTO'
   | 'GASTOS_MENORES';
 
+export interface ExpenseDocumentCandidate {
+  method: 'xml' | 'qr' | 'texto_pdf' | 'llm' | 'ocr' | 'pdf_local';
+  total: number | null;
+}
+
+export interface ExpenseDocumentDetail {
+  subtotal?: number | null;
+  iva?: number | null;
+  propina?: number | null;
+  moneda?: string | null;
+  fecha?: string | null;
+  emisor?: string | null;
+  uuid?: string | null;
+}
+
 export interface ExpenseDocumentAnalysis {
   status: 'DETECTADO' | 'SIN_TOTAL' | 'NO_DISPONIBLE' | 'ERROR';
   amount?: number;
@@ -65,6 +80,9 @@ export interface ExpenseDocumentAnalysis {
   confidence?: 'ALTA' | 'MEDIA' | 'BAJA';
   source: 'XML' | 'GEMINI' | 'PDF_LOCAL' | 'NINGUNO';
   includedInTotal: boolean;
+  requiresReview?: boolean;
+  candidates?: ExpenseDocumentCandidate[];
+  detail?: ExpenseDocumentDetail;
   analyzedAt: string;
   error?: string;
 }

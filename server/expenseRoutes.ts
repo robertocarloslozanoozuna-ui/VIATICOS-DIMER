@@ -370,13 +370,11 @@ export function registerExpenseRoutes(app: Express) {
         });
       }
 
-      // El servidor realiza la lectura una sola vez. Esto elimina el segundo
-      // POST /analyze-document que antes duplicaba el payload base64 y la memoria.
-      const analysis = await analyzeDocumentAmount({
-        fileName: name,
-        fileType: type,
-        dataUrl,
-      });
+      // Nueva regla: únicamente los XML CFDI se leen automáticamente.
+      // PDF, JPG, JPEG, PNG y WEBP se almacenan sin OCR/IA y su importe se captura manualmente.
+      const analysis = ext === 'xml'
+        ? await analyzeDocumentAmount({ fileName: name, fileType: type, dataUrl })
+        : undefined;
 
       const attachment: any = {
         id: `att_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
@@ -385,7 +383,8 @@ export function registerExpenseRoutes(app: Express) {
         type,
         dataUrl,
         uploadedAt: new Date().toISOString(),
-        analysis,
+        role: ext === 'xml' ? 'COMPLEMENTO_FISCAL' : 'COMPROBANTE_PRINCIPAL',
+        ...(analysis ? { analysis } : {}),
       };
 
       const totals = existing
@@ -432,7 +431,7 @@ export function registerExpenseRoutes(app: Express) {
       return res.json({
         success: true,
         file: { ...attachment, dataUrl: '' },
-        analysis,
+        ...(analysis ? { analysis } : {}),
       });
     } catch (e: any) {
       console.error('[EXPENSE-UPLOAD-FILE-ERROR]', e);
@@ -456,22 +455,24 @@ export function registerExpenseRoutes(app: Express) {
       const found = await findFileById(fileId);
       if (!found || found.folio !== folio) return res.status(404).json({ success: false, error: 'Archivo no encontrado en este expediente.' });
       const lower = found.file.name.toLowerCase();
-      if (lower.endsWith('.xml') || found.file.role === 'COMPLEMENTO_FISCAL') {
-        return res.status(400).json({ success: false, error: 'Los archivos XML CFDI no se analizan.' });
+      if (!(lower.endsWith('.xml') || found.file.role === 'COMPLEMENTO_FISCAL')) {
+        return res.status(400).json({ success: false, error: 'Solo los archivos XML CFDI pueden leerse automáticamente. PDF e imágenes requieren captura manual del total.' });
       }
 
-      // Older saves may contain a metadata-only copy (dataUrl: '') because the
-      // browser intentionally stopped carrying large attachment payloads.
-      // Recover the last persisted binary from an earlier audit snapshot before
-      // declaring the document invalid. This is a compatibility/recovery path;
-      // it does not require a database migration.
+      // Los XML sí pueden volver a leerse. Se recupera el binario histórico si el navegador
+      // guardó previamente una copia metadata-only.
       let fileForAnalysis = found.file;
       if (!fileForAnalysis.dataUrl) {
         const auditLogs = await listAuditLogs(request.id);
         for (const log of auditLogs) {
           const snapshot = (log.details as any)?.verification;
           const candidate = Array.isArray(snapshot?.supportFiles)
-            ? snapshot.supportFiles.find((file: any) => file?.id === fileId && typeof file?.dataUrl === 'string' && file.dataUrl.startsWith('data:') && file.dataUrl.includes(';base64,'))
+            ? snapshot.supportFiles.find((file: any) =>
+                file?.id === fileId &&
+                typeof file.dataUrl === 'string' &&
+                file.dataUrl.startsWith('data:') &&
+                file.dataUrl.includes(';base64,')
+              )
             : undefined;
           if (candidate) {
             fileForAnalysis = { ...fileForAnalysis, ...candidate };
@@ -483,7 +484,7 @@ export function registerExpenseRoutes(app: Express) {
       if (!fileForAnalysis.dataUrl) {
         return res.status(422).json({
           success: false,
-          error: 'El contenido original de este documento ya no está disponible para lectura automática.',
+          error: 'El contenido original del XML ya no está disponible para lectura automática.',
           requiresReupload: true,
         });
       }
@@ -550,10 +551,9 @@ export function registerExpenseRoutes(app: Express) {
         return res.status(400).json({ success: false, error: 'El archivo debe tener entre 1 byte y 10 MB.' });
       }
 
-      const allowed = new Set(['pdf', 'xml', 'jpg', 'jpeg', 'png', 'webp']);
       const ext = fileName.toLowerCase().split('.').pop() || '';
-      if (!allowed.has(ext)) {
-        return res.status(400).json({ success: false, error: 'Formato no admitido para lectura automática.' });
+      if (ext !== 'xml') {
+        return res.status(400).json({ success: false, error: 'Solo los XML CFDI se leen automáticamente. PDF e imágenes requieren captura manual del total.' });
       }
 
       const analysis = await analyzeDocumentAmount({

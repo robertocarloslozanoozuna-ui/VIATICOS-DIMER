@@ -21,7 +21,7 @@ function decodeXmlEntities(value: string): string {
 
 function xmlAttribute(tag: string, attribute: string): string | null {
   const match = String(tag || '').match(
-    new RegExp(attribute + '=["\\']([^"\\']*)["\\']', 'i')
+    new RegExp(`${attribute}=["']([^"']*)["']`, 'i')
   );
   return match ? decodeXmlEntities(match[1]).trim() || null : null;
 }

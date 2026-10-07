@@ -90,7 +90,7 @@ function decodeXmlEntities(value: string): string {
 
 function xmlAttribute(tag: string, attribute: string): string | null {
   const match = String(tag || '').match(
-    new RegExp('\\\b' + attribute + '=["\\\\\\']([^"\\\\\\']*)["\\\\\\']', 'i')
+    new RegExp(attribute + '=["\\\']([^"\\\']*)["\\\']', 'i')
   );
   return match ? decodeXmlEntities(match[1]).trim() || null : null;
 }
@@ -258,15 +258,16 @@ async function analyzeVisualDocument(
         local.amount
       );
 
+      const localRequiresReview = local.documentType === 'OTRO';
       return {
         status: 'DETECTADO',
         amount: local.amount,
         documentType: local.documentType,
-        confidence: local.confidence,
+        confidence: localRequiresReview ? 'BAJA' : local.confidence,
         source: 'PDF_LOCAL',
-        includedInTotal: true,
-        requiresReview: false,
-        candidates: [{ method: 'pdf_local', total: local.amount }],
+        includedInTotal: !localRequiresReview,
+        requiresReview: localRequiresReview,
+        candidates: [{ method: 'texto_pdf', total: local.amount }],
         analyzedAt,
       };
     }
@@ -441,11 +442,14 @@ async function analyzeVisualDocument(
       };
     }
 
+    const finalConfidence =
+      requiresReview ? 'BAJA' : (modelConfidence === 'BAJA' ? 'BAJA' : 'MEDIA');
+
     return {
       status: 'DETECTADO',
       amount,
       documentType,
-      confidence: requiresReview ? 'BAJA' : modelConfidence,
+      confidence: finalConfidence,
       source: 'GEMINI',
       includedInTotal: documentType === 'FACTURA' || documentType === 'TICKET',
       requiresReview,

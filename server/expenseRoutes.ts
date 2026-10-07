@@ -416,11 +416,20 @@ export function registerExpenseRoutes(app: Express) {
         file?.name === name && Number(file?.size) === effectiveSize
       );
       if (duplicate) {
-        return res.json({
-          success: true,
-          file: { ...duplicate, dataUrl: '' },
-          duplicate: true,
-        });
+        const duplicateHasBinary =
+          typeof duplicate.dataUrl === 'string' &&
+          duplicate.dataUrl.startsWith('data:') &&
+          duplicate.dataUrl.includes(';base64,');
+
+        // Si el registro duplicado quedó metadata-only por un borrador/autoguardado,
+        // NO lo tratamos como duplicado real: permitimos volver a subir el binario.
+        if (duplicateHasBinary) {
+          return res.json({
+            success: true,
+            file: { ...duplicate, dataUrl: '' },
+            duplicate: true,
+          });
+        }
       }
 
       // Nueva regla: únicamente los XML CFDI se leen automáticamente.

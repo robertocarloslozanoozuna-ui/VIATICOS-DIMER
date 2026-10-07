@@ -82,14 +82,14 @@ export function summarizeDocumentTotals(
     }
   }
 
-  for (const file of xmlFiles) {
-    const amount = Number(file.analysis?.amount || 0);
-    if (file.analysis?.status === 'DETECTADO' && amount > 0) fiscalXmlTotal += amount;
-  }
+  // Los XML CFDI son únicamente complementos fiscales.
+  // No se analiza su importe y jamás participan en la conciliación.
+  void xmlFiles;
+
 
   return {
     totalDetected: Number(totalDetected.toFixed(2)),
-    fiscalXmlTotal: Number(fiscalXmlTotal.toFixed(2)),
+    fiscalXmlTotal: 0,
     primaryDocumentCount: primaryFiles.length,
     analyzedDocumentCount,
     pendingDocumentCount,

@@ -107,7 +107,10 @@ async function generateDocumentResponse(
     } catch (error) {
       lastError = error;
       if (!isTransientModelError(error) || attempt === 2) throw error;
-      await new Promise((resolve) => setTimeout(resolve, 700 * attempt));
+      // Los 503 de capacidad de Gemini suelen ser temporales; damos tiempo
+      // suficiente antes de repetir para evitar golpear nuevamente al mismo backend.
+      const delayMs = attempt === 1 ? 3000 : 7000;
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
   throw lastError;
@@ -162,11 +165,13 @@ async function analyzeVisualDocument(name: string, mimeType: string, dataUrl: st
       },
     ];
 
-    const configuredModel = String(process.env.GEMINI_DOCUMENT_MODEL || 'gemini-3.7-flash').trim();
+    const configuredModel = String(process.env.GEMINI_DOCUMENT_MODEL || 'gemini-3.8-flash').trim();
     const modelsToTry = Array.from(new Set([
       configuredModel,
+      'gemini-3.8-flash',
       'gemini-3.7-flash',
       'gemini-3.6-flash',
+      'gemini-3.5-flash',
     ]));
 
     let response: any = null;
@@ -184,7 +189,14 @@ async function analyzeVisualDocument(name: string, mimeType: string, dataUrl: st
       }
     }
 
-    if (!response) throw lastError || new Error('No hubo un modelo disponible para analizar el documento.');
+    if (!response) {
+      const message = String(lastError?.message || lastError || '').trim();
+      throw new Error(
+        message
+          ? `El lector documental no estuvo disponible temporalmente. Detalle: ${message}`
+          : 'No hubo un modelo disponible para analizar el documento.'
+      );
+    }
 
     const rawText = String(response.text || '').trim();
     const parsed = JSON.parse(rawText) as {

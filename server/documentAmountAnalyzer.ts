@@ -90,7 +90,7 @@ function decodeXmlEntities(value: string): string {
 
 function xmlAttribute(tag: string, attribute: string): string | null {
   const match = String(tag || '').match(
-    new RegExp('\\\\b' + attribute + '=["\\\\\\']([^"\\\\\\']*)["\\\\\\']', 'i')
+    new RegExp('\\\b' + attribute + '=["\\\\\\']([^"\\\\\\']*)["\\\\\\']', 'i')
   );
   return match ? decodeXmlEntities(match[1]).trim() || null : null;
 }
@@ -98,9 +98,9 @@ function xmlAttribute(tag: string, attribute: string): string | null {
 function readXmlFiscalDetails(dataUrl: string) {
   try {
     const xml = Buffer.from(base64Payload(dataUrl), 'base64').toString('utf8');
-    const comprobante = xml.match(/<(?:cfdi:)?Comprobante\\b[^>]*>/i)?.[0] || '';
-    const emisor = xml.match(/<(?:cfdi:)?Emisor\\b[^>]*>/i)?.[0] || '';
-    const timbre = xml.match(/<(?:tfd:)?TimbreFiscalDigital\\b[^>]*>/i)?.[0] || '';
+    const comprobante = xml.match(/<(?:cfdi:)?Comprobante\b[^>]*>/i)?.[0] || '';
+    const emisor = xml.match(/<(?:cfdi:)?Emisor\b[^>]*>/i)?.[0] || '';
+    const timbre = xml.match(/<(?:tfd:)?TimbreFiscalDigital\b[^>]*>/i)?.[0] || '';
 
     return {
       moneda: xmlAttribute(comprobante, 'Moneda'),

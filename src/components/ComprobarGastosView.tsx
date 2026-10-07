@@ -131,8 +131,52 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   const [pendingFiscalXmls, setPendingFiscalXmls] = useState<ExpenseFileAttachment[]>([]);
   const [supportFiles, setSupportFiles] = useState<ExpenseFileAttachment[]>([]);
   const [previewModalFile, setPreviewModalFile] = useState<ExpenseFileAttachment | null>(null);
+  const [previewModalUrl, setPreviewModalUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    let objectUrl: string | null = null;
+    let cancelled = false;
+
+    if (!previewModalFile) {
+      setPreviewModalUrl(null);
+      return;
+    }
+
+    if (previewModalFile.dataUrl) {
+      setPreviewModalUrl(previewModalFile.dataUrl);
+      return;
+    }
+
+    (async () => {
+      try {
+        const res = await authFetch(`/api/expenses/file/${encodeURIComponent(previewModalFile.id)}?inline=1`);
+        if (!res.ok) throw new Error('No fue posible cargar la vista previa.');
+        const blob = await res.blob();
+        objectUrl = URL.createObjectURL(blob);
+        if (!cancelled) setPreviewModalUrl(objectUrl);
+      } catch (error: any) {
+        if (!cancelled) {
+          setPreviewModalUrl(null);
+          setActionError(error?.message || 'No fue posible cargar la vista previa.');
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [previewModalFile]);
   const [reanalyzingFileId, setReanalyzingFileId] = useState<string | null>(null);
   const [confirmDocumentReview, setConfirmDocumentReview] = useState(false);
+
+  function lightweightAttachment(file: ExpenseFileAttachment): ExpenseFileAttachment {
+    return { ...file, dataUrl: '' };
+  }
+
+  function lightweightAttachments(files: ExpenseFileAttachment[] | undefined): ExpenseFileAttachment[] {
+    return Array.isArray(files) ? files.map(lightweightAttachment) : [];
+  }
 
   // Original Excel Report File and Audit Summary
   const [originalExcelFile, setOriginalExcelFile] = useState<ExpenseFileAttachment | null>(null);
@@ -279,7 +323,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       if (data.verification) {
         setItems(data.verification.items || []);
         setPendingFiscalXmls(data.verification.pendingFiscalXmls || []);
-        setSupportFiles(data.verification.supportFiles || []);
+        setSupportFiles(lightweightAttachments(data.verification.supportFiles));
         setOriginalExcelFile(data.verification.originalExcelFile || null);
         setExcelAuditSummary(data.verification.excelAuditSummary || null);
         setNotes(data.verification.notes || '');
@@ -319,7 +363,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         if (data.verification.originalExcelFile) {
           existingAtts.push(data.verification.originalExcelFile);
         }
-        setUploadedAttachmentsPool(existingAtts);
+        setUploadedAttachmentsPool(existingAtts.map(lightweightAttachment));
       } else {
         setItems([]);
         setPendingFiscalXmls([]);
@@ -724,26 +768,24 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     setActionSuccess(null);
 
     try {
-      const analysis = await analyzeAttachment(file);
-      const updatedFile: ExpenseFileAttachment = {
-        ...file,
-        analysis: analysis || {
-          status: 'ERROR',
-          source: 'NINGUNO',
-          includedInTotal: false,
-          analyzedAt: new Date().toISOString(),
-          error: 'No fue posible obtener el resultado de lectura.',
-        },
-      };
+      const res = await authFetch('/api/expenses/analyze-stored-document', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folio: loadedRequest.folio, fileId: file.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success || !data.file) {
+        throw new Error(data.error || 'No fue posible volver a leer el documento.');
+      }
+
+      const updatedFile: ExpenseFileAttachment = lightweightAttachment(data.file);
 
       setSupportFiles((prev) =>
         prev.map((current) => current.id === file.id ? updatedFile : current)
       );
-
       setUploadedAttachmentsPool((prev) =>
         prev.map((current) => current.id === file.id ? updatedFile : current)
       );
-
       setItems((prev) =>
         prev.map((item) => ({
           ...item,
@@ -1058,13 +1100,32 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     }
   }
 
-  function downloadAttachment(file: ExpenseFileAttachment) {
-    const link = document.createElement('a');
-    link.href = file.dataUrl;
-    link.download = file.name;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  async function downloadAttachment(file: ExpenseFileAttachment) {
+    try {
+      if (file.dataUrl) {
+        const link = document.createElement('a');
+        link.href = file.dataUrl;
+        link.download = file.name;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        return;
+      }
+
+      const res = await authFetch(`/api/expenses/file/${encodeURIComponent(file.id)}?inline=0`);
+      if (!res.ok) throw new Error('No fue posible descargar el archivo.');
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = file.name;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    } catch (error: any) {
+      setActionError(error?.message || 'No fue posible descargar el archivo.');
+    }
   }
 
   function downloadAllCurrentFiles() {
@@ -3469,7 +3530,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
               {previewModalFile.type.startsWith('image/') ||
               previewModalFile.name.match(/\.(jpg|jpeg|png|webp)$/i) ? (
                 <img
-                  src={previewModalFile.dataUrl}
+                  src={previewModalUrl || ''}
                   alt={previewModalFile.name}
                   className="max-h-[70vh] max-w-full object-contain rounded shadow-md"
                 />

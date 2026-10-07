@@ -28,11 +28,86 @@ function persistToDisk(map: Map<string, ExpenseVerification>) {
   try { ensureDataDir(); fs.writeFileSync(VERIFICATIONS_FILE, JSON.stringify(Array.from(map.values()), null, 2), 'utf-8'); }
   catch (e) { console.warn('[EXPENSE-STORAGE] Local persistence unavailable:', e); }
 }
+function mergeAttachmentBinaryIntoVerification(verification: ExpenseVerification, attachment: any): ExpenseVerification {
+  if (!attachment?.id || !attachment?.dataUrl) return verification;
+
+  const patchList = (files: any[]) =>
+    files.map((file) => file?.id === attachment.id ? { ...file, ...attachment } : file);
+
+  verification.supportFiles = patchList(Array.isArray(verification.supportFiles) ? verification.supportFiles : []);
+  verification.pendingFiscalXmls = patchList(Array.isArray(verification.pendingFiscalXmls) ? verification.pendingFiscalXmls : []);
+
+  verification.items = (verification.items || []).map((item: any) => ({
+    ...item,
+    xmlFile: item.xmlFile?.id === attachment.id ? { ...item.xmlFile, ...attachment } : item.xmlFile,
+    pdfFile: item.pdfFile?.id === attachment.id ? { ...item.pdfFile, ...attachment } : item.pdfFile,
+    ticketFile: item.ticketFile?.id === attachment.id ? { ...item.ticketFile, ...attachment } : item.ticketFile,
+  }));
+
+  if (verification.originalExcelFile?.id === attachment.id) {
+    verification.originalExcelFile = { ...verification.originalExcelFile, ...attachment };
+  }
+  if (verification.refund?.receiptFile?.id === attachment.id) {
+    verification.refund.receiptFile = { ...verification.refund.receiptFile, ...attachment };
+  }
+  if (verification.refund?.signedReceiptFile?.id === attachment.id) {
+    verification.refund.signedReceiptFile = { ...verification.refund.signedReceiptFile, ...attachment };
+  }
+
+  return verification;
+}
+
+function mergeExistingAttachmentBinaries(incoming: ExpenseVerification, existing?: ExpenseVerification | null): ExpenseVerification {
+  if (!existing) return incoming;
+  const existingById = new Map<string, any>();
+
+  const collect = (file: any) => {
+    if (file?.id && file?.dataUrl) existingById.set(file.id, file);
+  };
+
+  for (const file of existing.supportFiles || []) collect(file);
+  for (const file of existing.pendingFiscalXmls || []) collect(file);
+  for (const item of existing.items || []) {
+    collect(item.xmlFile);
+    collect(item.pdfFile);
+    collect(item.ticketFile);
+  }
+  collect(existing.originalExcelFile);
+  collect(existing.refund?.receiptFile);
+  collect(existing.refund?.signedReceiptFile);
+
+  const mergeList = (files: any[]) => files.map((file) => {
+    const binary = existingById.get(file?.id);
+    return binary && !file?.dataUrl ? { ...file, ...binary } : file;
+  });
+
+  incoming.supportFiles = mergeList(incoming.supportFiles || []);
+  incoming.pendingFiscalXmls = mergeList(incoming.pendingFiscalXmls || []);
+  incoming.items = (incoming.items || []).map((item: any) => ({
+    ...item,
+    xmlFile: item.xmlFile && !item.xmlFile.dataUrl && existingById.has(item.xmlFile.id) ? { ...item.xmlFile, ...existingById.get(item.xmlFile.id) } : item.xmlFile,
+    pdfFile: item.pdfFile && !item.pdfFile.dataUrl && existingById.has(item.pdfFile.id) ? { ...item.pdfFile, ...existingById.get(item.pdfFile.id) } : item.pdfFile,
+    ticketFile: item.ticketFile && !item.ticketFile.dataUrl && existingById.has(item.ticketFile.id) ? { ...item.ticketFile, ...existingById.get(item.ticketFile.id) } : item.ticketFile,
+  }));
+
+  if (incoming.originalExcelFile && !incoming.originalExcelFile.dataUrl && existingById.has(incoming.originalExcelFile.id)) {
+    incoming.originalExcelFile = { ...incoming.originalExcelFile, ...existingById.get(incoming.originalExcelFile.id) };
+  }
+  if (incoming.refund?.receiptFile && !incoming.refund.receiptFile.dataUrl && existingById.has(incoming.refund.receiptFile.id)) {
+    incoming.refund.receiptFile = { ...incoming.refund.receiptFile, ...existingById.get(incoming.refund.receiptFile.id) };
+  }
+  if (incoming.refund?.signedReceiptFile && !incoming.refund.signedReceiptFile.dataUrl && existingById.has(incoming.refund.signedReceiptFile.id)) {
+    incoming.refund.signedReceiptFile = { ...incoming.refund.signedReceiptFile, ...existingById.get(incoming.refund.signedReceiptFile.id) };
+  }
+
+  return incoming;
+}
+
 function extractVerification(details: any, row: any): ExpenseVerification | null {
   const source = details?.verification || details;
   if (!source?.folio || !Array.isArray(source.items)) return null;
   const folio = String(source.folio).toUpperCase().trim();
-  return {
+  const verification: ExpenseVerification = {
     id: source.id || `exp_${row.id || Date.now()}`, requestId: source.requestId || row.request_id, folio,
     userId: source.userId || row.user_id, userName: source.userName || row.user_name || '', userEmail: source.userEmail || row.user_email || '',
     department: source.department || '', destination: source.destination || '',
@@ -44,7 +119,8 @@ function extractVerification(details: any, row: any): ExpenseVerification | null
     originalExcelFile: source.originalExcelFile,
     excelAuditSummary: source.excelAuditSummary,
     submittedAt: source.submittedAt, updatedAt: source.updatedAt || row.created_at, createdAt: source.createdAt || row.created_at,
-  } as ExpenseVerification;
+  };
+  return mergeAttachmentBinaryIntoVerification(verification, details?.documentAttachment);
 }
 async function syncWithSupabase(map: Map<string, ExpenseVerification>) {
   try {
@@ -57,7 +133,11 @@ async function syncWithSupabase(map: Map<string, ExpenseVerification>) {
       const existing = map.get(verification.folio);
       const incomingTime = new Date(verification.updatedAt || row.created_at || 0).getTime();
       const existingTime = new Date(existing?.updatedAt || 0).getTime();
-      if (!existing || incomingTime >= existingTime) map.set(verification.folio, verification);
+      if (!existing || incomingTime >= existingTime) {
+        // Los autosaves y cierres guardan metadata-only. Conservamos los
+        // binarios que ya estaban disponibles en la versión anterior.
+        map.set(verification.folio, mergeExistingAttachmentBinaries(verification, existing));
+      }
     }
     persistToDisk(map);
   } catch (e) { console.warn('[EXPENSE-STORAGE] Supabase sync warning:', e); }

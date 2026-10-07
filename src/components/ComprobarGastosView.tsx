@@ -708,13 +708,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     [items, supportFiles, pendingFiscalXmls]
   );
 
-  const documentsRequiringReview = useMemo(
-    () =>
-      items.flatMap((item) => [item.pdfFile, item.ticketFile])
-        .filter((file): file is ExpenseFileAttachment => Boolean(file))
-        .filter((file) => file.analysis?.requiresReview === true),
-    [items]
-  );
+  const documentsRequiringReview = useMemo(() => [], []);
 
   // Normaliza el nombre base para detectar parejas (ej. factura_hotel.pdf y factura_hotel.xml)
   function getFileBaseSignature(filename: string): string {
@@ -1248,7 +1242,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
             </h1>
             <p className="text-xs text-slate-500 max-w-2xl">
               Solo se muestran folios en estado <strong>Pagada</strong> que aún no han sido comprobados.
-              Registra tus facturas fiscales (XML + PDF), tickets y reembolsos de sobrante a Finanzas.
+              Registra facturas fiscales (PDF + XML), tickets/capturas y reembolsos. El total detectado de comprobantes es independiente del total de gastos.
             </p>
           </div>
 

@@ -2358,7 +2358,6 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                         matchingXml?.analysis?.status === 'DETECTADO' &&
                         Number(matchingXml?.analysis?.amount) > 0
                       );
-                      const manualRequired = !isXml && (!isPdf || !xmlHasTotal);
                       const displayedAmount = isXml
                         ? Number(file.analysis?.amount || 0)
                         : xmlHasTotal
@@ -2467,7 +2466,6 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                         </div>
                       );
                     })}
-                  </div>}
                   </div>
                 )}
               </div>

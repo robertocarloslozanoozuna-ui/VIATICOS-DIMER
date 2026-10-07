@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import crypto from 'crypto';
 import { deflateRawSync, inflateRawSync } from 'zlib';
-import { getRequest, updateRequest, recordAuditLog, getUserById, hasPermission } from './db.js';
+import { getRequest, updateRequest, recordAuditLog, listAuditLogs, getUserById, hasPermission } from './db.js';
 import { getVerificationByFolio, saveVerification, listAllVerifications, findFileById } from './expenseStorage.js';
 import { sendEmail, buildExpenseVerificationSubmittedEmailHtml } from './mailService.js';
 import { resolveBaseUrl } from './baseUrl.js';
@@ -460,10 +460,38 @@ export function registerExpenseRoutes(app: Express) {
         return res.status(400).json({ success: false, error: 'Los archivos XML CFDI no se analizan.' });
       }
 
+      // Older saves may contain a metadata-only copy (dataUrl: '') because the
+      // browser intentionally stopped carrying large attachment payloads.
+      // Recover the last persisted binary from an earlier audit snapshot before
+      // declaring the document invalid. This is a compatibility/recovery path;
+      // it does not require a database migration.
+      let fileForAnalysis = found.file;
+      if (!fileForAnalysis.dataUrl) {
+        const auditLogs = await listAuditLogs(request.id);
+        for (const log of auditLogs) {
+          const snapshot = (log.details as any)?.verification;
+          const candidate = Array.isArray(snapshot?.supportFiles)
+            ? snapshot.supportFiles.find((file: any) => file?.id === fileId && typeof file?.dataUrl === 'string' && file.dataUrl.startsWith('data:') && file.dataUrl.includes(';base64,'))
+            : undefined;
+          if (candidate) {
+            fileForAnalysis = { ...fileForAnalysis, ...candidate };
+            break;
+          }
+        }
+      }
+
+      if (!fileForAnalysis.dataUrl) {
+        return res.status(422).json({
+          success: false,
+          error: 'El contenido original de este documento ya no está disponible para lectura automática.',
+          requiresReupload: true,
+        });
+      }
+
       const analysis = await analyzeDocumentAmount({
-        fileName: found.file.name,
-        fileType: found.file.type,
-        dataUrl: found.file.dataUrl,
+        fileName: fileForAnalysis.name,
+        fileType: fileForAnalysis.type,
+        dataUrl: fileForAnalysis.dataUrl,
       });
 
       const existing = await getVerificationByFolio(folio);

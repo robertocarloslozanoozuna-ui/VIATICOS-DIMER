@@ -1144,6 +1144,15 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   const formatCurrency = (val: number) =>
     new Intl.NumberFormat('es-MX', { style: 'currency', currency: 'MXN' }).format(val);
 
+  function getAnalysisMethodLabel(source?: ExpenseDocumentAnalysis['source']): string {
+    switch (source) {
+      case 'XML': return 'XML fiscal';
+      case 'PDF_LOCAL': return 'Texto PDF';
+      case 'GEMINI': return 'IA visual';
+      default: return 'No disponible';
+    }
+  }
+
   return (
     <div className="w-full max-w-7xl mx-auto px-4 py-6 space-y-5">
       {/* Top Header Card */}
@@ -2313,21 +2322,45 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                                 </span>
                               </div>
                               {!isXml && file.analysis?.status === 'DETECTADO' && file.analysis.amount ? (
-                                <div className="text-[10px] font-mono font-bold text-indigo-800">
-                                  Total detectado: {formatCurrency(file.analysis.amount)}
-                                  {file.analysis.confidence && (
-                                    <span className="ml-1 text-[9px] font-sans font-semibold text-slate-500">
-                                      ({file.analysis.confidence.toLowerCase()} confianza)
+                                <div className="space-y-1">
+                                  <div className="text-[10px] font-mono font-black text-indigo-800">
+                                    Total detectado: {formatCurrency(file.analysis.amount)}
+                                  </div>
+                                  <div className="flex flex-wrap items-center gap-1.5 text-[9px]">
+                                    <span className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-bold">
+                                      Método: {getAnalysisMethodLabel(file.analysis.source)}
                                     </span>
-                                  )}
+                                    {file.analysis.confidence && (
+                                      <span className="px-1.5 py-0.5 rounded bg-indigo-50 border border-indigo-100 text-indigo-700 font-semibold">
+                                        Confianza: {file.analysis.confidence.toLowerCase()}
+                                      </span>
+                                    )}
+                                    {file.analysis.requiresReview && (
+                                      <span className="px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800 font-bold">
+                                        Requiere revisión
+                                      </span>
+                                    )}
+                                  </div>
                                 </div>
                               ) : file.analysis?.status === 'SIN_TOTAL' ? (
-                                <div className="text-[10px] font-semibold text-amber-700">
-                                  No se detectó un total confiable
+                                <div className="space-y-1">
+                                  <div className="text-[10px] font-semibold text-amber-700">
+                                    No se detectó un total confiable
+                                  </div>
+                                  <span className="inline-flex px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800 text-[9px] font-bold">
+                                    Requiere captura/revisión manual
+                                  </span>
                                 </div>
                               ) : file.analysis?.status === 'ERROR' || file.analysis?.status === 'NO_DISPONIBLE' ? (
-                                <div className="text-[10px] font-semibold text-slate-500">
-                                  Lectura automática no disponible
+                                <div className="space-y-1">
+                                  <div className="text-[10px] font-semibold text-slate-500">
+                                    Lectura automática no disponible
+                                  </div>
+                                  {file.analysis?.error && (
+                                    <div className="text-[9px] text-rose-600 truncate max-w-[260px]" title={file.analysis.error}>
+                                      {file.analysis.error}
+                                    </div>
+                                  )}
                                 </div>
                               ) : null}
                               {file.uuid && (

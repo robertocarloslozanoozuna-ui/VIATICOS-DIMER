@@ -57,7 +57,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
       return { valid: false, error: 'El archivo está vacío (0 bytes).' };
     }
     if (file.size > MAX_FILE_SIZE) {
-      return { valid: false, error: `Excede el límite de 10 MB (${(file.size / (1024 * 1024)).toFixed(1)} MB).` };
+      return { valid: false, error: `Excede el límite de 3 MB (${(file.size / (1024 * 1024)).toFixed(1)} MB).` };
     }
     const ext = file.name.toLowerCase().split('.').pop() || '';
     if (!ALLOWED_EXTS.includes(ext)) {
@@ -260,7 +260,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
 
     if (processedCount > 0) {
       setGlobalNotice(
-        `¡${processedCount} documento(s) procesado(s) exitosamente, guardado(s) y leídos en el expediente!`
+        `¡${processedCount} documento(s) subido(s) y guardado(s) exitosamente en el expediente!`
       );
     }
 
@@ -323,7 +323,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
           <div>
             <h3 className="font-bold text-sm">Carga de Documentos y Evidencias (PDF, XML, Capturas)</h3>
             <p className="text-[11px] text-teal-200">
-              Sube facturas (PDF, XML) y capturas de ticket (JPG, PNG, WEBP). Se guardan como soporte documental para consulta y descarga por Finanzas o el usuario, sin agregar filas a la tabla.
+              Sube facturas (PDF, XML) y capturas de ticket (JPG, PNG, WEBP). Las facturas se relacionan por nombre base entre PDF y XML. Solo el XML calcula el total; PDF e imágenes no se leen y permiten captura manual.
             </p>
           </div>
         </div>
@@ -373,7 +373,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
           </p>
 
           <div className="mt-3 flex items-center justify-center gap-2 text-[10px] text-slate-400 font-mono">
-            <span className="px-2 py-0.5 bg-white border border-slate-200 rounded">Comprobante / Captura (PDF, JPG, PNG)</span>
+            <span className="px-2 py-0.5 bg-white border border-slate-200 rounded">Factura / Ticket (PDF, JPG, PNG)</span>
             <span className="px-2 py-0.5 bg-purple-50 text-purple-800 border border-purple-200 rounded font-bold">Complemento Fiscal (XML CFDI)</span>
           </div>
         </div>
@@ -416,7 +416,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
                 Se suma cada “Total detectado” una sola vez
               </span>
               <span className="block mt-0.5 text-[10px] text-slate-500">
-                Los XML CFDI no se analizan ni se suman; se conservan únicamente como complemento fiscal de su comprobante.
+                Los XML CFDI se leen automáticamente y su total se usa una sola vez cuando existe el PDF con el mismo nombre base. PDF e imágenes se capturan manualmente.
               </span>
             </div>
           </div>

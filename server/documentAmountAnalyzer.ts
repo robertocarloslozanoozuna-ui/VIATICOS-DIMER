@@ -214,29 +214,19 @@ async function generateDocumentResponse(
   model: string,
   contents: any[],
 ) {
-  let lastError: any;
-
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try {
-      return await ai.models.generateContent({
-        model,
-        contents,
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: RESPONSE_SCHEMA,
-          temperature: 0,
-        },
-      });
-    } catch (error) {
-      lastError = error;
-      if (!isTransientModelError(error) || attempt === 2) throw error;
-
-      const delayMs = attempt === 1 ? 3000 : 7000;
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-    }
-  }
-
-  throw lastError;
+  // Vercel corta las funciones de este proyecto alrededor de 60 s.
+  // Cada intento de Gemini debe tener un límite propio para que un documento
+  // lento nunca bloquee indefinidamente toda la cola.
+  return ai.models.generateContent({
+    model,
+    contents,
+    config: {
+      responseMimeType: 'application/json',
+      responseSchema: RESPONSE_SCHEMA,
+      temperature: 0,
+      httpOptions: { timeout: 20000 },
+    },
+  });
 }
 
 async function analyzeVisualDocument(
@@ -298,7 +288,10 @@ async function analyzeVisualDocument(
   }
 
   try {
-    const ai = new GoogleGenAI({ apiKey });
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: { timeout: 20000 },
+    });
     const data = base64Payload(dataUrl);
     const pdfText = mimeType === 'application/pdf'
       ? extractPdfTextFromDataUrl(dataUrl)
@@ -338,13 +331,13 @@ async function analyzeVisualDocument(
       process.env.GEMINI_DOCUMENT_MODEL || 'gemini-3.8-flash'
     ).trim();
 
+    // Máximo dos modelos y un solo intento por modelo.
+    // Antes se encadenaban hasta 5 modelos x 2 intentos, lo que podía superar
+    // el límite de 60 s de Vercel y dejar la pantalla esperando indefinidamente.
     const modelsToTry = Array.from(new Set([
       configuredModel,
       'gemini-3.8-flash',
-      'gemini-3.7-flash',
-      'gemini-3.6-flash',
-      'gemini-3.5-flash',
-    ]));
+    ])).slice(0, 2);
 
     let response: any = null;
     let lastError: any = null;

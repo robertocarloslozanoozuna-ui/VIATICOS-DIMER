@@ -252,11 +252,9 @@ function validateItems(items: ExpenseItem[]): string | null {
 }
 
 function getDocumentsRequiringReview(items: ExpenseItem[]): ExpenseItem[] {
-  return (items || []).filter((item) =>
-    [item.pdfFile, item.ticketFile]
-      .filter(Boolean)
-      .some((file) => file?.analysis?.requiresReview === true)
-  );
+  // PDF e imágenes ya no pasan por lectura automática, por lo que no generan
+  // bloqueos de "revisión de lectura". Los XML se validan por su propio resultado.
+  return [];
 }
 
 function mergeSupportFiles(

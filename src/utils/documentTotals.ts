@@ -17,6 +17,18 @@ function isXml(file: ExpenseFileAttachment): boolean {
   return lower.endsWith('.xml') || file.role === 'COMPLEMENTO_FISCAL';
 }
 
+function baseSignature(filename: string): string {
+  return filename
+    .replace(/\.[^/.]+$/, '')
+    .toLowerCase()
+    .replace(/[_\s-]+/g, '')
+    .trim();
+}
+
+function isPdf(file: ExpenseFileAttachment): boolean {
+  return /\.pdf$/i.test(file.name);
+}
+
 export function summarizeDocumentTotals(
   items: ExpenseItem[],
   supportFiles: ExpenseFileAttachment[] = [],
@@ -41,6 +53,12 @@ export function summarizeDocumentTotals(
   for (const file of supportFiles || []) pushUnique(file);
   for (const file of pendingFiscalXmls || []) pushUnique(file);
 
+  const xmlByBase = new Map<string, ExpenseFileAttachment>();
+  files.filter(isXml).forEach((xml) => {
+    const key = baseSignature(xml.name);
+    if (key) xmlByBase.set(key, xml);
+  });
+
   const primaryFiles = files.filter((file) => !isXml(file));
   let totalDetected = 0;
   let analyzedDocumentCount = 0;
@@ -52,29 +70,50 @@ export function summarizeDocumentTotals(
   let unclassifiedCount = 0;
 
   for (const file of primaryFiles) {
-    const analysis = file.analysis;
-    if (!analysis) {
-      pendingDocumentCount += 1;
-      unclassifiedCount += 1;
+    const pairedXml = isPdf(file) ? xmlByBase.get(baseSignature(file.name)) : undefined;
+    const xmlAnalysis = pairedXml?.analysis;
+    const hasXmlTotal =
+      Boolean(pairedXml) &&
+      xmlAnalysis?.status === 'DETECTADO' &&
+      Number.isFinite(Number(xmlAnalysis.amount)) &&
+      Number(xmlAnalysis.amount) > 0;
+
+    if (hasXmlTotal) {
+      totalDetected += Number(xmlAnalysis!.amount);
+      analyzedDocumentCount += 1;
+      invoiceCount += 1;
       continue;
     }
 
-    if (analysis.status === 'ERROR' || analysis.status === 'NO_DISPONIBLE') {
-      errorCount += 1;
-    } else {
+    // PDFs without a usable XML and all images/tickets are manual.
+    const manualAmount = Number(file.manualAmount);
+    if (Number.isFinite(manualAmount) && manualAmount > 0) {
+      totalDetected += manualAmount;
       analyzedDocumentCount += 1;
+      if (isPdf(file)) invoiceCount += 1;
+      else if (file.analysis?.documentType === 'TICKET' || file.type.startsWith('image/')) ticketCount += 1;
+      else unclassifiedCount += 1;
+      continue;
     }
 
-    if (analysis.status === 'SIN_TOTAL') {
-      withoutTotalCount += 1;
+    if (isPdf(file)) {
+      invoiceCount += 1;
+      pendingDocumentCount += 1;
+    } else {
+      ticketCount += 1;
+      pendingDocumentCount += 1;
     }
+  }
 
-    if (analysis.documentType === 'FACTURA') invoiceCount += 1;
-    else if (analysis.documentType === 'TICKET') ticketCount += 1;
-    else unclassifiedCount += 1;
-
-    if (analysis.includedInTotal && Number.isFinite(Number(analysis.amount)) && Number(analysis.amount) > 0) {
-      totalDetected += Number(analysis.amount);
+  for (const xml of files.filter(isXml)) {
+    const pairedPdf = primaryFiles.find((file) => isPdf(file) && baseSignature(file.name) === baseSignature(xml.name));
+    if (!pairedPdf) {
+      // XML alone is fiscal support but is not counted until its PDF is related.
+      unclassifiedCount += 1;
+      continue;
+    }
+    if (xml.analysis?.status !== 'DETECTADO') {
+      errorCount += xml.analysis?.status === 'ERROR' ? 1 : 0;
     }
   }
 

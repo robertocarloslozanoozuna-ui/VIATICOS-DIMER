@@ -265,9 +265,28 @@ function mergeSupportFiles(
 ): ExpenseFileAttachment[] {
   const storedById = new Map((stored || []).filter(Boolean).map((file) => [file.id, file]));
   if (!Array.isArray(incoming)) return stored || [];
+
   return incoming.map((file) => {
     const previous = storedById.get(file.id);
-    if (previous && !file.dataUrl) return { ...previous, ...file, dataUrl: previous.dataUrl };
+
+    // The client intentionally keeps large attachments metadata-only (dataUrl: '').
+    // Never let that lightweight representation erase the server-persisted binary.
+    if (previous) {
+      const incomingHasContent = typeof file.dataUrl === 'string' && file.dataUrl.trim().length > 0;
+      const previousHasContent = typeof previous.dataUrl === 'string' && previous.dataUrl.trim().length > 0;
+
+      if (!incomingHasContent && previousHasContent) {
+        return { ...previous, ...file, dataUrl: previous.dataUrl };
+      }
+
+      // If both versions are metadata-only, keep the previous record as the base.
+      // This preserves any server-side fields (including storage metadata/analysis)
+      // that the browser does not send back.
+      if (!incomingHasContent && !previousHasContent) {
+        return { ...previous, ...file, dataUrl: '' };
+      }
+    }
+
     return file;
   });
 }

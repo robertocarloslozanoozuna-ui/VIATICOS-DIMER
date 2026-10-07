@@ -445,7 +445,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
                 Se suma cada “Total detectado” una sola vez
               </span>
               <span className="block mt-0.5 text-[10px] text-slate-500">
-                Los XML CFDI se excluyen de esta suma para evitar duplicar el importe de su factura.
+                Los XML CFDI no se analizan ni se suman; se conservan únicamente como complemento fiscal de su comprobante.
               </span>
             </div>
           </div>
@@ -533,7 +533,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
                         XML CFDI &bull; Complemento Fiscal (Importe: N/A)
                       </span>
                     )}
-                    {item.attachment?.analysis?.status === 'DETECTADO' && item.attachment.analysis.amount ? (
+                    {!item.name.toLowerCase().endsWith('.xml') && item.attachment?.analysis?.status === 'DETECTADO' && item.attachment.analysis.amount ? (
                       <span className="inline-flex items-center px-1.5 py-0.2 rounded text-[9px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">
                         {item.attachment.analysis.documentType === 'FACTURA' ? 'Factura' : item.attachment.analysis.documentType === 'TICKET' ? 'Ticket' : 'Documento'} &bull; Total: {item.attachment.analysis.amount.toFixed(2)}
                       </span>

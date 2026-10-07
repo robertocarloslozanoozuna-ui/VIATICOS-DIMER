@@ -176,24 +176,29 @@ function findAmountNearTotal(text: string): number | undefined {
   return undefined;
 }
 
-export function readPdfTotalFallback(dataUrl: string): PdfAmountFallbackResult | null {
-  if (!/^data:application\/pdf;base64,/i.test(String(dataUrl || ''))) return null;
+export function extractPdfTextFromDataUrl(dataUrl: string): string {
+  if (!/^data:application\/pdf;base64,/i.test(String(dataUrl || ''))) return '';
 
   try {
     const base64 = String(dataUrl).replace(/^data:application\/pdf;base64,/i, '');
     const pdfBuffer = Buffer.from(base64, 'base64');
-    if (!pdfBuffer.length) return null;
-
-    const text = extractTextFromPdf(pdfBuffer);
-    const amount = findAmountNearTotal(text);
-    if (amount === undefined) return null;
-
-    return {
-      amount,
-      documentType: detectDocumentType(text),
-      confidence: 'ALTA',
-    };
+    if (!pdfBuffer.length) return '';
+    return extractTextFromPdf(pdfBuffer);
   } catch {
-    return null;
+    return '';
   }
+}
+
+export function readPdfTotalFallback(dataUrl: string): PdfAmountFallbackResult | null {
+  const text = extractPdfTextFromDataUrl(dataUrl);
+  if (!text) return null;
+
+  const amount = findAmountNearTotal(text);
+  if (amount === undefined) return null;
+
+  return {
+    amount,
+    documentType: detectDocumentType(text),
+    confidence: 'ALTA',
+  };
 }

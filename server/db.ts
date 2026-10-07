@@ -97,7 +97,83 @@ export async function generateNextFolio(){const {data,error}=await supabase.rpc(
 export async function createApprovalToken(requestId:string,bossEmail:string,bossId?:string){const {data,error}=await supabase.from('approval_tokens').insert({id:`apptok_${Date.now()}_${crypto.randomBytes(8).toString('hex')}`,token:`tok_${crypto.randomBytes(32).toString('hex')}`,request_id:requestId,boss_id:bossId||null,boss_email:bossEmail.trim().toLowerCase(),expires_at:new Date(Date.now()+7*86400000).toISOString(),used:false,created_at:new Date().toISOString(),used_at:null,action:null}).select('*').single();if(error)throw error;return toToken(data);}
 export async function validateApprovalToken(token:string){const {data,error}=await supabase.from('approval_tokens').select('*').eq('token',token.trim()).maybeSingle();if(error)throw error;if(!data)return {valid:false as const,error:'Token inválido o no encontrado'};const t=toToken(data);if(t.used)return {valid:false as const,error:`Este enlace ya fue utilizado previamente para ${t.action||'procesar'} la solicitud.`,tokenRecord:t};if(t.expiresAt&&new Date(t.expiresAt).getTime()<Date.now())return {valid:false as const,error:'Este enlace de autorización ha expirado.',tokenRecord:t};const request=await getRequest(t.requestId);if(!request)return {valid:false as const,error:'No se encontró la solicitud asociada al token',tokenRecord:t};return {valid:true as const,tokenRecord:t,request};}
 export async function processApprovalTokenAction(token:string,action:'APROBADA'|'RECHAZADA',amountAuthorized?:number|null,comments?:string|null){const {data,error}=await supabase.rpc('process_approval_token_action',{p_token:token,p_action:action,p_amount_authorized:amountAuthorized??null,p_comments:comments??null});if(error)throw error;if(!data||data.success!==true)throw new Error('PostgreSQL no confirmó la autorización');return data;}
-export async function recordAuditLog(p:{requestId?:string|null;userId:string;action:string;details?:Record<string,unknown>}){const user=await getUserById(p.userId);const {data,error}=await supabase.from('audit_logs').insert({id:`aud_${Date.now()}_${crypto.randomBytes(5).toString('hex')}`,request_id:p.requestId||null,user_id:p.userId,user_name:user?.name||null,user_email:user?.email||null,action:p.action,details:p.details||null,created_at:new Date().toISOString()}).select('*').single();if(error)throw error;return toAudit(data);}
+function attachmentMetadataOnly(file: any) {
+  if (!file || typeof file !== 'object') return file;
+  return { ...file, dataUrl: '' };
+}
+
+function sanitizeVerificationForAudit(verification: any) {
+  if (!verification || typeof verification !== 'object') return verification;
+  const cloned = JSON.parse(JSON.stringify(verification));
+
+  if (Array.isArray(cloned.supportFiles)) {
+    cloned.supportFiles = cloned.supportFiles.map(attachmentMetadataOnly);
+  }
+  if (Array.isArray(cloned.pendingFiscalXmls)) {
+    cloned.pendingFiscalXmls = cloned.pendingFiscalXmls.map(attachmentMetadataOnly);
+  }
+  if (cloned.originalExcelFile) cloned.originalExcelFile = attachmentMetadataOnly(cloned.originalExcelFile);
+  if (cloned.refund?.receiptFile) cloned.refund.receiptFile = attachmentMetadataOnly(cloned.refund.receiptFile);
+  if (cloned.refund?.signedReceiptFile) cloned.refund.signedReceiptFile = attachmentMetadataOnly(cloned.refund.signedReceiptFile);
+
+  if (Array.isArray(cloned.items)) {
+    cloned.items = cloned.items.map((item: any) => ({
+      ...item,
+      xmlFile: item.xmlFile ? attachmentMetadataOnly(item.xmlFile) : item.xmlFile,
+      pdfFile: item.pdfFile ? attachmentMetadataOnly(item.pdfFile) : item.pdfFile,
+      ticketFile: item.ticketFile ? attachmentMetadataOnly(item.ticketFile) : item.ticketFile,
+    }));
+  }
+
+  return cloned;
+}
+
+function findAttachmentById(verification: any, fileId: string): any | undefined {
+  if (!verification || !fileId) return undefined;
+  const all = [
+    ...(Array.isArray(verification.supportFiles) ? verification.supportFiles : []),
+    ...(Array.isArray(verification.pendingFiscalXmls) ? verification.pendingFiscalXmls : []),
+    ...(Array.isArray(verification.items) ? verification.items.flatMap((item: any) => [item.xmlFile, item.pdfFile, item.ticketFile]) : []),
+  ];
+  return all.find((file: any) => file?.id === fileId);
+}
+
+export async function recordAuditLog(p:{requestId?:string|null;userId:string;action:string;details?:Record<string,unknown>}) {
+  const user = await getUserById(p.userId);
+  let details: any = p.details ? JSON.parse(JSON.stringify(p.details)) : null;
+
+  // Nunca guardamos una copia completa de todos los Base64 en cada autosave.
+  // Para el evento de documento, solo ese documento conserva su binario; el
+  // resto del expediente queda metadata-only. Esto evita payloads crecientes
+  // y timeouts de 60s sin perder los archivos necesarios para previsualización.
+  if (details?.verification) {
+    const originalVerification = details.verification;
+    const sanitized = sanitizeVerificationForAudit(originalVerification);
+
+    if (p.action === 'COMPROBACION_GASTOS_DOCUMENTO' && details.documentId) {
+      const document = findAttachmentById(originalVerification, String(details.documentId));
+      if (document?.dataUrl) {
+        details.documentAttachment = document;
+      }
+    }
+
+    details.verification = sanitized;
+  }
+
+  const {data,error}=await supabase.from('audit_logs').insert({
+    id:`aud_${Date.now()}_${crypto.randomBytes(5).toString('hex')}`,
+    request_id:p.requestId||null,
+    user_id:p.userId,
+    user_name:user?.name||null,
+    user_email:user?.email||null,
+    action:p.action,
+    details:details,
+    created_at:new Date().toISOString()
+  }).select('*').single();
+
+  if(error)throw error;
+  return toAudit(data);
+}
 export async function listAuditLogs(requestId?:string){let query=supabase.from('audit_logs').select('*').order('created_at',{ascending:false});if(requestId)query=query.eq('request_id',requestId);const {data,error}=await query;if(error)throw error;return (data||[]).map(toAudit);}
 export async function createVerificationCode(p:{email:string;name:string;department:string;roleId:string;passwordHash:string;salt:string}){const code=crypto.randomInt(100000,1000000).toString();const expiresAt=new Date(Date.now()+15*60*1000).toISOString();const {error}=await supabase.from('verification_codes').upsert({email:p.email.toLowerCase(),code,name:p.name,department:p.department,role_id:p.roleId,password_hash:p.passwordHash,salt:p.salt,expires_at:expiresAt,attempts:0,created_at:new Date().toISOString()},{onConflict:'email'});if(error)throw error;return {code,expiresAt};}
 export async function verifyCodeAndActivateUser(email:string,code:string){const clean=email.trim().toLowerCase();const {data,error}=await supabase.from('verification_codes').select('*').eq('email',clean).maybeSingle();if(error)throw error;if(!data)return {success:false,error:'No hay un código pendiente para este correo.'};if(new Date(data.expires_at).getTime()<Date.now())return {success:false,error:'El código ha expirado.'};if(Number(data.attempts||0)>=5)return {success:false,error:'Demasiados intentos. Solicita un nuevo código.'};if(String(data.code)!==code.trim()){await supabase.from('verification_codes').update({attempts:Number(data.attempts||0)+1}).eq('email',clean);return {success:false,error:'Código de verificación incorrecto.'};}const id=`usr_${Date.now()}_${crypto.randomBytes(5).toString('hex')}`;const {data:user,error:e}=await supabase.from('users').insert({id,name:data.name,email:clean,role:'SOLICITANTE',role_id:data.role_id||'role_solicitante',department:data.department,status:'ACTIVO',is_verified:true,password_hash:data.password_hash,salt:data.salt,created_at:new Date().toISOString()}).select('*').single();if(e)throw e;await supabase.from('user_roles').upsert({user_id:id,role_id:data.role_id||'role_solicitante'},{onConflict:'user_id,role_id'});await supabase.from('verification_codes').delete().eq('email',clean);return {success:true,user:await sanitizeUserFromRecord(toUser(user))};}

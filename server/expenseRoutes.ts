@@ -560,6 +560,7 @@ export function registerExpenseRoutes(app: Express) {
       const items: ExpenseItem[] = Array.isArray(req.body.items) ? req.body.items : [];
       const notes = String(req.body.notes || '').trim();
       const refund = req.body.refund || undefined;
+      const confirmDocumentReview = req.body.confirmDocumentReview === true;
       if (!folio) return res.status(400).json({ success: false, error: 'Folio requerido' });
       if (!items.length) return res.status(400).json({ success: false, error: 'Debes agregar al menos un comprobante de gasto para finalizar.' });
       const request = await getRequest(folio);

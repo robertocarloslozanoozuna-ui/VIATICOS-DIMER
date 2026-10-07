@@ -279,18 +279,41 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
 
     const uploadedList: ExpenseFileAttachment[] = [];
 
-    // Process each file individually and safely
+    // Los documentos se procesan uno por uno para no disparar varias llamadas
+    // simultáneas a Gemini. Cada documento tiene ahora un límite de tiempo propio.
     for (const item of pendingItems) {
       const att = await uploadIndividualFile(item);
-      if (att) {
-        uploadedList.push(att);
-      }
+      if (att) uploadedList.push(att);
     }
 
     setProcessing(false);
 
     if (uploadedList.length > 0) {
+      // Entregar el lote al padre una sola vez evita renders intermedios
+      // y conserva la asociación exacta entre cada documento y su análisis.
       onAttachmentsUploaded(uploadedList);
+
+      // Liberar la referencia al objeto File y al attachment dentro de la cola.
+      // El expediente del padre ya conserva los documentos; la cola solo necesita
+      // mostrar el resultado de lectura. Esto reduce considerablemente el uso de RAM
+      // cuando se cargan muchos PDFs/imágenes grandes.
+      setQueue((prev) =>
+        prev.map((q) =>
+          q.status === 'SUBIDO'
+            ? { ...q, file: new File([], q.name, { type: q.type }), attachment: q.attachment ? {
+                id: q.attachment.id,
+                name: q.attachment.name,
+                size: q.attachment.size,
+                type: q.attachment.type,
+                uploadedAt: q.attachment.uploadedAt,
+                analysis: q.attachment.analysis,
+                role: q.attachment.role,
+                uuid: q.attachment.uuid,
+              } : undefined }
+            : q
+        )
+      );
+
       setGlobalNotice(
         `¡${uploadedList.length} documento(s) procesado(s) exitosamente y guardado(s) en el expediente!`
       );

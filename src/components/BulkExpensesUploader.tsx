@@ -49,7 +49,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
   const [globalNotice, setGlobalNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
+  const MAX_FILE_SIZE = 3 * 1024 * 1024; // 3 MB (margen para el payload JSON/base64 de Vercel)
   const ALLOWED_EXTS = ['pdf', 'xml', 'jpg', 'jpeg', 'png', 'webp'];
 
   function validateFile(file: File): { valid: boolean; error?: string } {
@@ -135,22 +135,22 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
   }
 
   async function uploadIndividualFile(item: FileQueueItem): Promise<ExpenseFileAttachment | null> {
-    // Read file as base64 dataUrl
     return new Promise((resolve) => {
       const reader = new FileReader();
 
-      // Update progress locally to 30%
       setQueue((prev) =>
-        prev.map((q) => (q.id === item.id ? { ...q, status: 'SUBIENDO', progress: 30 } : q))
+        prev.map((q) => (q.id === item.id ? { ...q, status: 'SUBIENDO', progress: 20 } : q))
       );
 
       reader.onload = async () => {
         const dataUrl = reader.result as string;
         try {
           setQueue((prev) =>
-            prev.map((q) => (q.id === item.id ? { ...q, progress: 65 } : q))
+            prev.map((q) => (q.id === item.id ? { ...q, progress: 55 } : q))
           );
 
+          // El servidor valida, analiza y guarda el documento en una sola llamada.
+          // La respuesta ya no devuelve el base64, solo metadata + análisis.
           const res = await authFetch('/api/expenses/upload-file', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -165,59 +165,10 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
 
           const data = await res.json();
           if (!res.ok || !data.success || !data.file) {
-            throw new Error(data.error || 'Fallo en la validación del servidor.');
+            throw new Error(data.error || 'Fallo en la validación o lectura del servidor.');
           }
 
-          let attachment: ExpenseFileAttachment = data.file;
-
-          // Lectura automática del importe y tipo del comprobante.
-          // Si el análisis falla, el archivo sigue guardándose como soporte.
-          setQueue((prev) =>
-            prev.map((q) => (q.id === item.id ? { ...q, progress: 82 } : q))
-          );
-          try {
-            const analysisRes = await authFetch('/api/expenses/analyze-document', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                folio,
-                name: item.name,
-                size: item.size,
-                type: item.type,
-                dataUrl,
-              }),
-            });
-            const analysisData = await analysisRes.json();
-            if (analysisRes.ok && analysisData?.success && analysisData?.analysis) {
-              attachment = {
-                ...attachment,
-                analysis: analysisData.analysis as ExpenseDocumentAnalysis,
-              };
-            } else {
-              attachment = {
-                ...attachment,
-                analysis: {
-                  status: 'ERROR',
-                  source: 'NINGUNO',
-                  includedInTotal: false,
-                  analyzedAt: new Date().toISOString(),
-                  error: analysisData?.error || 'No fue posible analizar el importe.',
-                },
-              };
-            }
-          } catch (analysisError: any) {
-            attachment = {
-              ...attachment,
-              analysis: {
-                status: 'ERROR',
-                source: 'NINGUNO',
-                includedInTotal: false,
-                analyzedAt: new Date().toISOString(),
-                error: analysisError?.message || 'No fue posible analizar el importe.',
-              },
-            };
-          }
-
+          const attachment: ExpenseFileAttachment = data.file;
           setQueue((prev) =>
             prev.map((q) =>
               q.id === item.id
@@ -277,45 +228,39 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
     setProcessing(true);
     setGlobalNotice(null);
 
-    const uploadedList: ExpenseFileAttachment[] = [];
+    let processedCount = 0;
 
-    // Los documentos se procesan uno por uno para no disparar varias llamadas
-    // simultáneas a Gemini. Cada documento tiene ahora un límite de tiempo propio.
     for (const item of pendingItems) {
       const att = await uploadIndividualFile(item);
-      if (att) uploadedList.push(att);
+      if (att) {
+        processedCount += 1;
+
+        // El servidor ya guardó el binario. El padre recibe solo metadata.
+        onAttachmentsUploaded([att]);
+
+        // Liberar inmediatamente la referencia al File y al attachment del estado
+        // del modal. Esto evita que N documentos grandes permanezcan en RAM.
+        setQueue((prev) =>
+          prev.map((q) =>
+            q.id === item.id
+              ? {
+                  ...q,
+                  file: new File([], q.name, { type: q.type }),
+                  attachment: q.attachment
+                    ? { ...q.attachment, dataUrl: '' }
+                    : undefined,
+                }
+              : q
+          )
+        );
+      }
     }
 
     setProcessing(false);
 
-    if (uploadedList.length > 0) {
-      // Entregar el lote al padre una sola vez evita renders intermedios
-      // y conserva la asociación exacta entre cada documento y su análisis.
-      onAttachmentsUploaded(uploadedList);
-
-      // Liberar la referencia al objeto File y al attachment dentro de la cola.
-      // El expediente del padre ya conserva los documentos; la cola solo necesita
-      // mostrar el resultado de lectura. Esto reduce considerablemente el uso de RAM
-      // cuando se cargan muchos PDFs/imágenes grandes.
-      setQueue((prev) =>
-        prev.map((q) =>
-          q.status === 'SUBIDO'
-            ? { ...q, file: new File([], q.name, { type: q.type }), attachment: q.attachment ? {
-                id: q.attachment.id,
-                name: q.attachment.name,
-                size: q.attachment.size,
-                type: q.attachment.type,
-                uploadedAt: q.attachment.uploadedAt,
-                analysis: q.attachment.analysis,
-                role: q.attachment.role,
-                uuid: q.attachment.uuid,
-              } : undefined }
-            : q
-        )
-      );
-
+    if (processedCount > 0) {
       setGlobalNotice(
-        `¡${uploadedList.length} documento(s) procesado(s) exitosamente y guardado(s) en el expediente!`
+        `¡${processedCount} documento(s) procesado(s) exitosamente, guardado(s) y leídos en el expediente!`
       );
     }
   }
@@ -421,7 +366,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
             Haz clic para seleccionar documentos o arrástralos aquí
           </p>
           <p className="text-[11px] text-slate-500 mt-1">
-            Formatos admitidos: <strong>PDF, XML (CFDI), JPG, JPEG, PNG, WEBP</strong> &bull; Límite: 10 MB por archivo
+            Formatos admitidos: <strong>PDF, XML (CFDI), JPG, JPEG, PNG, WEBP</strong> &bull; Límite: 3 MB por archivo
           </p>
 
           <div className="mt-3 flex items-center justify-center gap-2 text-[10px] text-slate-400 font-mono">

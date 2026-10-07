@@ -844,7 +844,8 @@ export function registerExpenseRoutes(app: Express) {
       if (!matches) return res.status(500).json({ success: false, error: 'Formato de archivo inválido' });
       const buffer = Buffer.from(matches[2], 'base64');
       res.setHeader('Content-Type', matches[1]);
-      res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(found.file.name)}"`);
+      const inline = String(req.query.inline || '') === '1';
+      res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(found.file.name)}"`);
       res.setHeader('Content-Length', buffer.length);
       return res.send(buffer);
     } catch (e: any) {

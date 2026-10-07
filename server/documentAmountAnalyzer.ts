@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import { readPdfTotalFallback } from './pdfAmountFallback.js';
+import { extractPdfTextFromDataUrl, readPdfTotalFallback } from './pdfAmountFallback.js';
 
 export type DocumentAnalysisStatus = 'DETECTADO' | 'SIN_TOTAL' | 'NO_DISPONIBLE' | 'ERROR';
 export type DocumentDetectedType = 'FACTURA' | 'TICKET' | 'OTRO';
@@ -9,8 +9,22 @@ export interface DocumentAmountAnalysis {
   amount?: number;
   documentType?: DocumentDetectedType;
   confidence?: 'ALTA' | 'MEDIA' | 'BAJA';
-  source: 'XML' | 'GEMINI' | 'NINGUNO';
+  source: 'XML' | 'GEMINI' | 'PDF_LOCAL' | 'NINGUNO';
   includedInTotal: boolean;
+  requiresReview?: boolean;
+  candidates?: Array<{
+    method: 'xml' | 'qr' | 'texto_pdf' | 'llm' | 'ocr' | 'pdf_local';
+    total: number | null;
+  }>;
+  detail?: {
+    subtotal?: number | null;
+    iva?: number | null;
+    propina?: number | null;
+    moneda?: string | null;
+    fecha?: string | null;
+    emisor?: string | null;
+    uuid?: string | null;
+  };
   analyzedAt: string;
   error?: string;
 }
@@ -22,6 +36,7 @@ function extensionOf(name: string): string {
 function mimeOf(name: string, declaredType?: string): string {
   const declared = String(declaredType || '').trim().toLowerCase();
   if (declared && declared !== 'application/octet-stream') return declared;
+
   switch (extensionOf(name)) {
     case 'pdf': return 'application/pdf';
     case 'jpg':
@@ -43,18 +58,78 @@ function normalizeAmount(value: unknown): number | undefined {
   const numeric = typeof value === 'number'
     ? value
     : Number(String(value ?? '').replace(/[$,\s]/g, ''));
+
   if (!Number.isFinite(numeric) || numeric <= 0) return undefined;
   return Number(numeric.toFixed(2));
 }
 
-function markXmlAsFiscalSupport(): DocumentAmountAnalysis {
+function normalizeNonNegativeAmount(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null;
+
+  const numeric = typeof value === 'number'
+    ? value
+    : Number(String(value).replace(/[$,\s]/g, ''));
+
+  if (!Number.isFinite(numeric) || numeric < 0) return null;
+  return Number(numeric.toFixed(2));
+}
+
+function cleanOptionalText(value: unknown): string | null {
+  const text = String(value ?? '').trim();
+  return text ? text : null;
+}
+
+function decodeXmlEntities(value: string): string {
+  return String(value || '')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>');
+}
+
+function xmlAttribute(tag: string, attribute: string): string | null {
+  const match = String(tag || '').match(
+    new RegExp('\\\\b' + attribute + '=["\\\\\\']([^"\\\\\\']*)["\\\\\\']', 'i')
+  );
+  return match ? decodeXmlEntities(match[1]).trim() || null : null;
+}
+
+function readXmlFiscalDetails(dataUrl: string) {
+  try {
+    const xml = Buffer.from(base64Payload(dataUrl), 'base64').toString('utf8');
+    const comprobante = xml.match(/<(?:cfdi:)?Comprobante\\b[^>]*>/i)?.[0] || '';
+    const emisor = xml.match(/<(?:cfdi:)?Emisor\\b[^>]*>/i)?.[0] || '';
+    const timbre = xml.match(/<(?:tfd:)?TimbreFiscalDigital\\b[^>]*>/i)?.[0] || '';
+
+    return {
+      moneda: xmlAttribute(comprobante, 'Moneda'),
+      fecha: xmlAttribute(comprobante, 'Fecha'),
+      emisor: xmlAttribute(emisor, 'Nombre') || xmlAttribute(emisor, 'Rfc'),
+      uuid: xmlAttribute(timbre, 'UUID'),
+    };
+  } catch {
+    return {
+      moneda: null,
+      fecha: null,
+      emisor: null,
+      uuid: null,
+    };
+  }
+}
+
+function markXmlAsFiscalSupport(dataUrl: string): DocumentAmountAnalysis {
   return {
-    status: 'NO_DISPONIBLE',
+    status: 'DETECTADO',
     documentType: 'FACTURA',
-    source: 'NINGUNO',
+    source: 'XML',
+    confidence: 'ALTA',
     includedInTotal: false,
+    requiresReview: false,
+    candidates: [],
+    detail: readXmlFiscalDetails(dataUrl),
     analyzedAt: new Date().toISOString(),
-    error: 'El XML CFDI se conserva como complemento fiscal y no se analiza ni se suma. El importe se obtiene del comprobante PDF.',
+    error: 'XML CFDI conservado como complemento fiscal. Su importe no se suma; el gasto se obtiene del comprobante principal.',
   };
 }
 
@@ -68,21 +143,66 @@ const RESPONSE_SCHEMA = {
     },
     total: {
       type: ['number', 'null'],
-      description: 'Importe final pagado o total a pagar. No usar subtotal, IVA, propina ni autorizaciones parciales.',
+      description: 'Importe FINAL pagado o TOTAL A PAGAR. Nunca devolver subtotal, IVA, propina, efectivo recibido, cambio, saldo, autorización bancaria u otro importe parcial.',
+    },
+    subtotal: {
+      type: ['number', 'null'],
+      description: 'Subtotal visible, si existe.',
+    },
+    iva: {
+      type: ['number', 'null'],
+      description: 'IVA trasladado visible, si existe. No inventar.',
+    },
+    propina: {
+      type: ['number', 'null'],
+      description: 'Propina visible por separado, si existe.',
+    },
+    moneda: {
+      type: ['string', 'null'],
+      description: 'Moneda visible del comprobante, por ejemplo MXN.',
+    },
+    fecha: {
+      type: ['string', 'null'],
+      description: 'Fecha del comprobante, si es legible.',
+    },
+    emisor: {
+      type: ['string', 'null'],
+      description: 'Razón social o nombre comercial del emisor, si es legible.',
+    },
+    uuid: {
+      type: ['string', 'null'],
+      description: 'UUID del CFDI, cuando esté visible.',
     },
     confidence: {
       type: 'string',
       enum: ['ALTA', 'MEDIA', 'BAJA'],
-      description: 'Confianza en la identificación del total.',
+      description: 'Confianza considerando legibilidad y evidencia visible.',
     },
   },
-  required: ['documentType', 'total', 'confidence'],
+  required: [
+    'documentType',
+    'total',
+    'subtotal',
+    'iva',
+    'propina',
+    'moneda',
+    'fecha',
+    'emisor',
+    'uuid',
+    'confidence',
+  ],
 };
 
 function isTransientModelError(error: any): boolean {
   const status = Number(error?.status || error?.code || error?.error?.code || 0);
   const message = String(error?.message || error || '').toUpperCase();
-  return status === 429 || status === 500 || status === 502 || status === 503 ||
+
+  return status === 408 ||
+    status === 429 ||
+    status === 500 ||
+    status === 502 ||
+    status === 503 ||
+    message.includes('TIMEOUT') ||
     message.includes('UNAVAILABLE') ||
     message.includes('HIGH DEMAND') ||
     message.includes('RESOURCE EXHAUSTED') ||
@@ -95,6 +215,7 @@ async function generateDocumentResponse(
   contents: any[],
 ) {
   let lastError: any;
+
   for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       return await ai.models.generateContent({
@@ -103,29 +224,40 @@ async function generateDocumentResponse(
         config: {
           responseMimeType: 'application/json',
           responseSchema: RESPONSE_SCHEMA,
+          temperature: 0,
         },
       });
     } catch (error) {
       lastError = error;
       if (!isTransientModelError(error) || attempt === 2) throw error;
-      // Los 503 de capacidad de Gemini suelen ser temporales; damos tiempo
-      // suficiente antes de repetir para evitar golpear nuevamente al mismo backend.
+
       const delayMs = attempt === 1 ? 3000 : 7000;
       await new Promise((resolve) => setTimeout(resolve, delayMs));
     }
   }
+
   throw lastError;
 }
 
-async function analyzeVisualDocument(name: string, mimeType: string, dataUrl: string): Promise<DocumentAmountAnalysis> {
-  const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
+async function analyzeVisualDocument(
+  name: string,
+  mimeType: string,
+  dataUrl: string,
+): Promise<DocumentAmountAnalysis> {
   const analyzedAt = new Date().toISOString();
 
-  // PDF digital: intenta primero extracción determinista local.
-  // Evita depender de Gemini cuando el comprobante ya contiene texto legible.
+  // PDF digital: primero intenta una extracción determinista local.
   if (mimeType === 'application/pdf') {
     const local = readPdfTotalFallback(dataUrl);
+
     if (local) {
+      console.log(
+        '[EXPENSE-DOCUMENT-ANALYSIS] PDF local detectado ' +
+        name +
+        ' total=' +
+        local.amount
+      );
+
       return {
         status: 'DETECTADO',
         amount: local.amount,
@@ -133,18 +265,23 @@ async function analyzeVisualDocument(name: string, mimeType: string, dataUrl: st
         confidence: local.confidence,
         source: 'PDF_LOCAL',
         includedInTotal: true,
+        requiresReview: false,
+        candidates: [{ method: 'pdf_local', total: local.amount }],
         analyzedAt,
       };
     }
   }
+
+  const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
 
   if (!apiKey) {
     return {
       status: 'NO_DISPONIBLE',
       source: 'NINGUNO',
       includedInTotal: false,
+      requiresReview: true,
       analyzedAt,
-      error: 'GEMINI_API_KEY no está configurada.',
+      error: 'GEMINI_API_KEY no está configurada y no fue posible obtener el importe por una capa local.',
     };
   }
 
@@ -153,6 +290,7 @@ async function analyzeVisualDocument(name: string, mimeType: string, dataUrl: st
       status: 'NO_DISPONIBLE',
       source: 'NINGUNO',
       includedInTotal: false,
+      requiresReview: true,
       analyzedAt,
       error: 'El tipo de archivo no admite lectura automática de importe.',
     };
@@ -161,17 +299,29 @@ async function analyzeVisualDocument(name: string, mimeType: string, dataUrl: st
   try {
     const ai = new GoogleGenAI({ apiKey });
     const data = base64Payload(dataUrl);
+    const pdfText = mimeType === 'application/pdf'
+      ? extractPdfTextFromDataUrl(dataUrl)
+      : '';
+
+    const textContext = pdfText
+      ? [
+          'Texto nativo extraído automáticamente del PDF.',
+          'Puede estar incompleto o fuera de orden; úsalo solamente como evidencia adicional.',
+          pdfText.slice(0, 20000),
+        ].join('\n')
+      : 'No existe texto nativo confiable disponible. Utiliza la evidencia visual del documento.';
 
     const contents = [
       {
         text: [
-          'Analiza este comprobante de gastos de DIMER.',
-          'Identifica si el documento es FACTURA, TICKET u OTRO.',
-          'Encuentra exclusivamente el importe FINAL que la persona pagó o el TOTAL A PAGAR.',
-          'No uses subtotal, IVA, propina, cambio, saldo, autorización de tarjeta, folios ni otros importes parciales.',
-          'Si hay varios totales, elige el que represente el total final de la operación.',
-          'Si no existe un total claramente legible, devuelve total=null.',
-          'No inventes números.',
+          'Actúa como lector documental de VIÁTICOS DIMER.',
+          'Identifica si el comprobante es FACTURA, TICKET u OTRO.',
+          'Encuentra exclusivamente el importe FINAL pagado o TOTAL A PAGAR.',
+          'NO confundas el total con subtotal, IVA, propina, efectivo recibido, cambio, saldo, autorización de tarjeta, folio o cualquier importe parcial.',
+          'Si existe propina, regístrala solamente en propina.',
+          'Si el total no se puede leer con certeza, devuelve total=null. Nunca adivines.',
+          'Devuelve únicamente el JSON solicitado por el esquema.',
+          textContext,
           'Nombre de archivo: ' + name,
         ].join('\n'),
       },
@@ -183,7 +333,10 @@ async function analyzeVisualDocument(name: string, mimeType: string, dataUrl: st
       },
     ];
 
-    const configuredModel = String(process.env.GEMINI_DOCUMENT_MODEL || 'gemini-3.8-flash').trim();
+    const configuredModel = String(
+      process.env.GEMINI_DOCUMENT_MODEL || 'gemini-3.8-flash'
+    ).trim();
+
     const modelsToTry = Array.from(new Set([
       configuredModel,
       'gemini-3.8-flash',
@@ -197,29 +350,46 @@ async function analyzeVisualDocument(name: string, mimeType: string, dataUrl: st
 
     for (const model of modelsToTry) {
       try {
-        console.log(`[EXPENSE-DOCUMENT-ANALYSIS] Intentando modelo ${model} para ${name}`);
+        console.log(
+          '[EXPENSE-DOCUMENT-ANALYSIS] Intentando modelo ' +
+          model +
+          ' para ' +
+          name
+        );
+
         response = await generateDocumentResponse(ai, model, contents);
         break;
       } catch (error: any) {
         lastError = error;
-        console.warn(`[EXPENSE-DOCUMENT-ANALYSIS] Modelo ${model} no disponible para ${name}:`, error?.message || error);
+
+        console.warn(
+          '[EXPENSE-DOCUMENT-ANALYSIS] Modelo ' +
+          model +
+          ' no disponible para ' +
+          name +
+          ': ' +
+          (error?.message || error)
+        );
+
         if (!isTransientModelError(error)) throw error;
       }
     }
 
     if (!response) {
-      const message = String(lastError?.message || lastError || '').trim();
-      throw new Error(
-        message
-          ? `El lector documental no estuvo disponible temporalmente. Detalle: ${message}`
-          : 'No hubo un modelo disponible para analizar el documento.'
-      );
+      throw lastError || new Error('No hubo un modelo disponible para analizar el documento.');
     }
 
     const rawText = String(response.text || '').trim();
     const parsed = JSON.parse(rawText) as {
       documentType?: string;
       total?: number | null;
+      subtotal?: number | null;
+      iva?: number | null;
+      propina?: number | null;
+      moneda?: string | null;
+      fecha?: string | null;
+      emisor?: string | null;
+      uuid?: string | null;
       confidence?: string;
     };
 
@@ -228,20 +398,44 @@ async function analyzeVisualDocument(name: string, mimeType: string, dataUrl: st
         ? parsed.documentType
         : 'OTRO';
 
-    const confidence =
-      parsed.confidence === 'ALTA' || parsed.confidence === 'MEDIA' || parsed.confidence === 'BAJA'
+    const modelConfidence =
+      parsed.confidence === 'ALTA' ||
+      parsed.confidence === 'MEDIA' ||
+      parsed.confidence === 'BAJA'
         ? parsed.confidence
         : 'BAJA';
 
     const amount = normalizeAmount(parsed.total);
+    const requiresReview =
+      amount === undefined ||
+      modelConfidence === 'BAJA' ||
+      documentType === 'OTRO';
+
+    const detail = {
+      subtotal: normalizeNonNegativeAmount(parsed.subtotal),
+      iva: normalizeNonNegativeAmount(parsed.iva),
+      propina: normalizeNonNegativeAmount(parsed.propina),
+      moneda: cleanOptionalText(parsed.moneda),
+      fecha: cleanOptionalText(parsed.fecha),
+      emisor: cleanOptionalText(parsed.emisor),
+      uuid: cleanOptionalText(parsed.uuid),
+    };
+
+    const candidates = [{
+      method: 'llm' as const,
+      total: amount ?? null,
+    }];
 
     if (amount === undefined) {
       return {
         status: 'SIN_TOTAL',
         documentType,
-        confidence,
+        confidence: 'BAJA',
         source: 'GEMINI',
         includedInTotal: false,
+        requiresReview: true,
+        candidates,
+        detail,
         analyzedAt,
         error: 'No se detectó un importe final confiable.',
       };
@@ -251,17 +445,22 @@ async function analyzeVisualDocument(name: string, mimeType: string, dataUrl: st
       status: 'DETECTADO',
       amount,
       documentType,
-      confidence,
+      confidence: requiresReview ? 'BAJA' : modelConfidence,
       source: 'GEMINI',
       includedInTotal: documentType === 'FACTURA' || documentType === 'TICKET',
+      requiresReview,
+      candidates,
+      detail,
       analyzedAt,
     };
   } catch (error: any) {
     console.error('[EXPENSE-DOCUMENT-ANALYSIS-ERROR]', error);
+
     return {
       status: 'ERROR',
       source: 'GEMINI',
       includedInTotal: false,
+      requiresReview: true,
       analyzedAt,
       error: error?.message || 'No fue posible analizar el documento.',
     };
@@ -277,8 +476,12 @@ export async function analyzeDocumentAmount(input: {
   const mimeType = mimeOf(input.fileName, input.fileType);
 
   if (ext === 'xml' || mimeType === 'application/xml' || mimeType === 'text/xml') {
-    return markXmlAsFiscalSupport();
+    return markXmlAsFiscalSupport(input.dataUrl);
   }
 
-  return analyzeVisualDocument(input.fileName, mimeType, input.dataUrl);
+  return analyzeVisualDocument(
+    input.fileName,
+    mimeType,
+    input.dataUrl
+  );
 }

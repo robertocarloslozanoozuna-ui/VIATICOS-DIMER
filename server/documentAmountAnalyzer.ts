@@ -1,4 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
+import { readPdfTotalFallback } from './pdfAmountFallback.js';
 
 export type DocumentAnalysisStatus = 'DETECTADO' | 'SIN_TOTAL' | 'NO_DISPONIBLE' | 'ERROR';
 export type DocumentDetectedType = 'FACTURA' | 'TICKET' | 'OTRO';
@@ -119,6 +120,23 @@ async function generateDocumentResponse(
 async function analyzeVisualDocument(name: string, mimeType: string, dataUrl: string): Promise<DocumentAmountAnalysis> {
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   const analyzedAt = new Date().toISOString();
+
+  // PDF digital: intenta primero extracción determinista local.
+  // Evita depender de Gemini cuando el comprobante ya contiene texto legible.
+  if (mimeType === 'application/pdf') {
+    const local = readPdfTotalFallback(dataUrl);
+    if (local) {
+      return {
+        status: 'DETECTADO',
+        amount: local.amount,
+        documentType: local.documentType,
+        confidence: local.confidence,
+        source: 'PDF_LOCAL',
+        includedInTotal: true,
+        analyzedAt,
+      };
+    }
+  }
 
   if (!apiKey) {
     return {

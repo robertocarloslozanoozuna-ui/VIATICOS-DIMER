@@ -748,10 +748,8 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
     // 3. NO alterar la matriz de comprobación de gastos (items).
     // Las partidas contables se definen exclusivamente mediante la importación del Reporte Excel oficial o captura manual.
-    setShowBulkUploaderModal(false);
-    setActionSuccess(
-      `¡${newAttachments.length} documento(s) (PDF, XML o capturas) resguardado(s) exitosamente en el expediente! Disponibles para consulta y descarga tanto por el colaborador como por Finanzas.`
-    );
+    // El modal permanece abierto mientras el lote sigue procesándose. El uploader
+    // lo cierra una sola vez cuando termina todo el lote.
   }
 
   async function handleReanalyzeSupportFile(file: ExpenseFileAttachment) {

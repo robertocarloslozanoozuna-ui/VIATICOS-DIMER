@@ -298,6 +298,61 @@ function validateRefund(difference: number, refund: any): string | null {
   return null;
 }
 
+async function recoverAttachmentBinary(
+  requestId: string,
+  fileId: string,
+  currentFile: any,
+): Promise<any> {
+  if (
+    currentFile &&
+    typeof currentFile.dataUrl === 'string' &&
+    currentFile.dataUrl.startsWith('data:') &&
+    currentFile.dataUrl.includes(';base64,')
+  ) {
+    return currentFile;
+  }
+
+  try {
+    const logs = await listAuditLogs(requestId);
+    // Recorremos del más reciente al más antiguo para recuperar la última
+    // versión que todavía conserve el binario original.
+    for (let index = logs.length - 1; index >= 0; index -= 1) {
+      const verification = (logs[index].details as any)?.verification;
+      if (!verification) continue;
+
+      const candidates: any[] = [
+        ...(Array.isArray(verification.supportFiles) ? verification.supportFiles : []),
+        ...(Array.isArray(verification.pendingFiscalXmls) ? verification.pendingFiscalXmls : []),
+      ];
+
+      for (const item of Array.isArray(verification.items) ? verification.items : []) {
+        if (item?.xmlFile) candidates.push(item.xmlFile);
+        if (item?.pdfFile) candidates.push(item.pdfFile);
+        if (item?.ticketFile) candidates.push(item.ticketFile);
+      }
+
+      if (verification.originalExcelFile) candidates.push(verification.originalExcelFile);
+      if (verification.refund?.receiptFile) candidates.push(verification.refund.receiptFile);
+      if (verification.refund?.signedReceiptFile) candidates.push(verification.refund.signedReceiptFile);
+
+      const recovered = candidates.find((file: any) =>
+        file?.id === fileId &&
+        typeof file.dataUrl === 'string' &&
+        file.dataUrl.startsWith('data:') &&
+        file.dataUrl.includes(';base64,')
+      );
+
+      if (recovered) {
+        return { ...currentFile, ...recovered };
+      }
+    }
+  } catch (error) {
+    console.warn('[EXPENSE-FILE-RECOVERY] No se pudo recuperar el binario histórico:', error);
+  }
+
+  return currentFile;
+}
+
 export function registerExpenseRoutes(app: Express) {
   app.post('/api/expenses/upload-file', async (req: Request, res: Response) => {
     try {
@@ -373,6 +428,14 @@ export function registerExpenseRoutes(app: Express) {
       const analysis = ext === 'xml'
         ? await analyzeDocumentAmount({ fileName: name, fileType: type, dataUrl })
         : undefined;
+
+      if (ext === 'xml') {
+        console.log(
+          `[EXPENSE-UPLOAD] XML CFDI guardado: ${name} | total=${analysis?.amount ?? 'N/D'} | status=${analysis?.status}`
+        );
+      } else {
+        console.log(`[EXPENSE-UPLOAD] Documento guardado sin lectura automática: ${name}`);
+      }
 
       const attachment: any = {
         id: `att_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
@@ -838,12 +901,28 @@ export function registerExpenseRoutes(app: Express) {
       if (!request) return res.status(404).json({ success: false, error: 'Solicitud relacionada no encontrada' });
       if (!userIsAdminOrFinanzas(user) && !isOwner(request, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para consultar este archivo' });
 
-      const matches = found.file.dataUrl.match(/^data:([^;]+);base64,(.+)$/);
-      if (!matches) return res.status(500).json({ success: false, error: 'Formato de archivo inválido' });
+      const file = await recoverAttachmentBinary(request.id, fileId, found.file);
+      const matches = String(file.dataUrl || '').match(/^data:([^;]+);base64,(.+)$/);
+      if (!matches) {
+        return res.status(404).json({
+          success: false,
+          error: 'El contenido binario de este documento ya no está disponible en el expediente.',
+        });
+      }
+
       const buffer = Buffer.from(matches[2], 'base64');
-      res.setHeader('Content-Type', matches[1]);
+      const contentType = matches[1] || file.type || 'application/octet-stream';
       const inline = String(req.query.inline || '') === '1';
-      res.setHeader('Content-Disposition', `${inline ? 'inline' : 'attachment'}; filename="${encodeURIComponent(found.file.name)}"`);
+      const safeName = String(file.name || 'documento').replace(/[\r\n"]/g, '_');
+
+      res.setHeader('Content-Type', contentType);
+      res.setHeader(
+        'Content-Disposition',
+        inline
+          ? `inline; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`
+          : `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`
+      );
+      res.setHeader('Cache-Control', 'private, no-store');
       res.setHeader('Content-Length', buffer.length);
       return res.send(buffer);
     } catch (e: any) {

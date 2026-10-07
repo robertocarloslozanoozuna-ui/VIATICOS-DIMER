@@ -2106,7 +2106,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                     </span>
                   </h4>
                   <p className="text-[11px] text-indigo-800 mt-0.5">
-                    El sistema lee el total de PDF, tickets e imágenes. Los XML CFDI se leen por separado y no se suman para evitar duplicar una factura.
+                    El sistema lee el total de PDF, tickets e imágenes. Los XML CFDI se conservan únicamente como complemento fiscal y no se analizan ni se suman.
                   </p>
                 </div>
                 <div className="text-right">
@@ -2132,11 +2132,6 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                 {documentTotals.withoutTotalCount > 0 && (
                   <span className="px-2 py-1 rounded bg-amber-50 border border-amber-200 text-amber-900 font-semibold">
                     Sin total: {documentTotals.withoutTotalCount}
-                  </span>
-                )}
-                {documentTotals.fiscalXmlTotal > 0 && (
-                  <span className="px-2 py-1 rounded bg-purple-50 border border-purple-200 text-purple-900 font-semibold">
-                    Total CFDI leído: {formatCurrency(documentTotals.fiscalXmlTotal)} (referencia)
                   </span>
                 )}
               </div>
@@ -2261,7 +2256,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                                   {formatFileSize(file.size)}
                                 </span>
                               </div>
-                              {file.analysis?.status === 'DETECTADO' && file.analysis.amount ? (
+                              {!isXml && file.analysis?.status === 'DETECTADO' && file.analysis.amount ? (
                                 <div className="text-[10px] font-mono font-bold text-indigo-800">
                                   Total detectado: {formatCurrency(file.analysis.amount)}
                                   {file.analysis.confidence && (

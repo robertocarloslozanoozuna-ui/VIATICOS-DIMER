@@ -263,6 +263,9 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
         `¡${processedCount} documento(s) procesado(s) exitosamente, guardado(s) y leídos en el expediente!`
       );
     }
+
+    // Cerrar una sola vez, cuando todos los documentos terminaron.
+    onClose?.();
   }
 
   const pendingCount = queue.filter((q) => q.status === 'LISTO' || q.status === 'PENDIENTE').length;

@@ -131,6 +131,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   const [pendingFiscalXmls, setPendingFiscalXmls] = useState<ExpenseFileAttachment[]>([]);
   const [supportFiles, setSupportFiles] = useState<ExpenseFileAttachment[]>([]);
   const [previewModalFile, setPreviewModalFile] = useState<ExpenseFileAttachment | null>(null);
+  const [reanalyzingFileId, setReanalyzingFileId] = useState<string | null>(null);
 
   // Original Excel Report File and Audit Summary
   const [originalExcelFile, setOriginalExcelFile] = useState<ExpenseFileAttachment | null>(null);
@@ -698,6 +699,61 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     setActionSuccess(
       `¡${newAttachments.length} documento(s) (PDF, XML o capturas) resguardado(s) exitosamente en el expediente! Disponibles para consulta y descarga tanto por el colaborador como por Finanzas.`
     );
+  }
+
+  async function handleReanalyzeSupportFile(file: ExpenseFileAttachment) {
+    if (!loadedRequest || !canEdit || reanalyzingFileId) return;
+    const lower = file.name.toLowerCase();
+    const isXml = lower.endsWith('.xml') || file.role === 'COMPLEMENTO_FISCAL';
+    if (isXml) {
+      setActionError('Los archivos XML CFDI no se analizan. Son únicamente complemento fiscal del PDF.');
+      return;
+    }
+
+    setReanalyzingFileId(file.id);
+    setActionError(null);
+    setActionSuccess(null);
+
+    try {
+      const analysis = await analyzeAttachment(file);
+      const updatedFile: ExpenseFileAttachment = {
+        ...file,
+        analysis: analysis || {
+          status: 'ERROR',
+          source: 'NINGUNO',
+          includedInTotal: false,
+          analyzedAt: new Date().toISOString(),
+          error: 'No fue posible obtener el resultado de lectura.',
+        },
+      };
+
+      setSupportFiles((prev) =>
+        prev.map((current) => current.id === file.id ? updatedFile : current)
+      );
+
+      setUploadedAttachmentsPool((prev) =>
+        prev.map((current) => current.id === file.id ? updatedFile : current)
+      );
+
+      setItems((prev) =>
+        prev.map((item) => ({
+          ...item,
+          pdfFile: item.pdfFile?.id === file.id ? updatedFile : item.pdfFile,
+          ticketFile: item.ticketFile?.id === file.id ? updatedFile : item.ticketFile,
+          xmlFile: item.xmlFile?.id === file.id ? updatedFile : item.xmlFile,
+        }))
+      );
+
+      if (updatedFile.analysis?.status === 'DETECTADO' && updatedFile.analysis.amount) {
+        setActionSuccess(`Lectura actualizada: ${updatedFile.name} → ${formatCurrency(updatedFile.analysis.amount)}.`);
+      } else {
+        setActionError(updatedFile.analysis?.error || 'No se detectó un total confiable en este documento.');
+      }
+    } catch (error: any) {
+      setActionError(error?.message || 'No fue posible volver a leer el documento.');
+    } finally {
+      setReanalyzingFileId(null);
+    }
   }
 
   function handleRemoveSupportFile(fileId: string) {
@@ -2295,6 +2351,26 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                             </button>
 
                             <div className="flex items-center gap-1">
+                              {!isXml && (
+                                <button
+                                  type="button"
+                                  onClick={() => void handleReanalyzeSupportFile(file)}
+                                  disabled={reanalyzingFileId !== null}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[11px] font-bold transition cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
+                                  title="Volver a leer el importe y tipo de este documento"
+                                >
+                                  <RefreshCw className={`w-3.5 h-3.5 ${reanalyzingFileId === file.id ? 'animate-spin' : ''}`} />
+                                  <span>{reanalyzingFileId === file.id ? 'Leyendo...' : 'Volver a leer'}</span>
+                                </button>
+                              )}
+                              {isXml && (
+                                <span
+                                  className="inline-flex items-center px-2.5 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold"
+                                  title="El XML no se analiza ni suma; funciona únicamente como complemento fiscal"
+                                >
+                                  Complemento fiscal
+                                </span>
+                              )}
                               {isImg && (
                                 <button
                                   type="button"

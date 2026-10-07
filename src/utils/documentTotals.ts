@@ -2,7 +2,6 @@ import type { ExpenseFileAttachment, ExpenseItem } from '../types.js';
 
 export interface DocumentTotalsSummary {
   totalDetected: number;
-  fiscalXmlTotal: number;
   primaryDocumentCount: number;
   analyzedDocumentCount: number;
   pendingDocumentCount: number;
@@ -43,10 +42,7 @@ export function summarizeDocumentTotals(
   for (const file of pendingFiscalXmls || []) pushUnique(file);
 
   const primaryFiles = files.filter((file) => !isXml(file));
-  const xmlFiles = files.filter((file) => isXml(file));
-
   let totalDetected = 0;
-  let fiscalXmlTotal = 0;
   let analyzedDocumentCount = 0;
   let pendingDocumentCount = 0;
   let withoutTotalCount = 0;
@@ -82,14 +78,8 @@ export function summarizeDocumentTotals(
     }
   }
 
-  // Los XML CFDI son únicamente complementos fiscales.
-  // No se analiza su importe y jamás participan en la conciliación.
-  void xmlFiles;
-
-
   return {
     totalDetected: Number(totalDetected.toFixed(2)),
-    fiscalXmlTotal: 0,
     primaryDocumentCount: primaryFiles.length,
     analyzedDocumentCount,
     pendingDocumentCount,

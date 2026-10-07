@@ -49,7 +49,7 @@ function extractVerification(details: any, row: any): ExpenseVerification | null
 async function syncWithSupabase(map: Map<string, ExpenseVerification>) {
   try {
     const { data, error } = await supabase.from('audit_logs').select('*')
-      .in('action', ['COMPROBACION_GASTOS_FINALIZADA', 'COMPROBACION_GASTOS_BORRADOR', 'CORRECCION_COMPROBACION_BORRADOR']).order('created_at', { ascending: true });
+      .in('action', ['COMPROBACION_GASTOS_FINALIZADA', 'COMPROBACION_GASTOS_BORRADOR', 'CORRECCION_COMPROBACION_BORRADOR', 'COMPROBACION_GASTOS_DOCUMENTO']).order('created_at', { ascending: true });
     if (error || !Array.isArray(data)) return;
     for (const row of data) {
       const verification = extractVerification(row.details, row);

@@ -132,6 +132,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   const [supportFiles, setSupportFiles] = useState<ExpenseFileAttachment[]>([]);
   const [previewModalFile, setPreviewModalFile] = useState<ExpenseFileAttachment | null>(null);
   const [reanalyzingFileId, setReanalyzingFileId] = useState<string | null>(null);
+  const [confirmDocumentReview, setConfirmDocumentReview] = useState(false);
 
   // Original Excel Report File and Audit Summary
   const [originalExcelFile, setOriginalExcelFile] = useState<ExpenseFileAttachment | null>(null);
@@ -664,6 +665,14 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     [items, supportFiles, pendingFiscalXmls]
   );
 
+  const documentsRequiringReview = useMemo(
+    () =>
+      items.flatMap((item) => [item.pdfFile, item.ticketFile])
+        .filter((file): file is ExpenseFileAttachment => Boolean(file))
+        .filter((file) => file.analysis?.requiresReview === true),
+    [items]
+  );
+
   // Normaliza el nombre base para detectar parejas (ej. factura_hotel.pdf y factura_hotel.xml)
   function getFileBaseSignature(filename: string): string {
     return filename
@@ -994,6 +1003,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       setActionError('Debes registrar al menos un comprobante de gasto antes de finalizar.');
       return;
     }
+    setConfirmDocumentReview(false);
     setActionError(null);
     setShowConfirmFinalModal(true);
   }
@@ -1018,6 +1028,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
           excelAuditSummary: excelAuditSummary || null,
           notes,
           refund: refund || undefined,
+          confirmDocumentReview,
         }),
       });
       const data = await res.json();
@@ -3266,6 +3277,35 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                 </div>
               ) : null}
 
+              {documentsRequiringReview.length > 0 && (
+                <div className="p-3 bg-amber-50 border border-amber-300 rounded-lg text-[11px] text-amber-950 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
+                    <div>
+                      <strong>Revisión requerida antes de enviar.</strong>
+                      <p className="mt-0.5 text-amber-900">
+                        El sistema detectó {documentsRequiringReview.length} comprobante(s) cuya lectura automática no tiene certeza suficiente.
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-[10px] text-amber-900 font-mono break-words">
+                    {documentsRequiringReview.map((file) => file.name).join(' • ')}
+                  </div>
+                  <label className="flex items-start gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={confirmDocumentReview}
+                      onChange={(e) => setConfirmDocumentReview(e.target.checked)}
+                      disabled={submittingFinal}
+                      className="mt-0.5 accent-amber-600"
+                    />
+                    <span className="font-semibold">
+                      Confirmo que revisé visualmente los comprobantes señalados y acepto continuar con el importe capturado.
+                    </span>
+                  </label>
+                </div>
+              )}
+
               {notes && (
                 <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 text-xs text-slate-700">
                   <strong>Observaciones:</strong> "{notes}"
@@ -3292,7 +3332,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
               <button
                 type="button"
                 onClick={executeSubmitFinal}
-                disabled={submittingFinal}
+                disabled={submittingFinal || (documentsRequiringReview.length > 0 && !confirmDocumentReview)}
                 className="inline-flex items-center gap-1.5 px-4 py-1.5 rounded-lg bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50"
               >
                 {submittingFinal ? (

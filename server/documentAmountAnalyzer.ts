@@ -46,36 +46,14 @@ function normalizeAmount(value: unknown): number | undefined {
   return Number(numeric.toFixed(2));
 }
 
-function analyzeXml(dataUrl: string): DocumentAmountAnalysis {
-  const payload = base64Payload(dataUrl);
-  const xml = Buffer.from(payload, 'base64').toString('utf8').replace(/^\uFEFF/, '');
-  const rootMatch =
-    xml.match(/<[^>]*Comprobante\b[^>]*\bTotal\s*=\s*["']([^"']+)["']/i) ||
-    xml.match(/<[^>]*Comprobante\b[^>]*\btotal\s*=\s*["']([^"']+)["']/i);
-
-  const amount = normalizeAmount(rootMatch?.[1]);
-  const analyzedAt = new Date().toISOString();
-
-  if (amount === undefined) {
-    return {
-      status: 'SIN_TOTAL',
-      documentType: 'FACTURA',
-      confidence: 'ALTA',
-      source: 'XML',
-      includedInTotal: false,
-      analyzedAt,
-      error: 'No se encontró un atributo Total válido en el CFDI.',
-    };
-  }
-
+function markXmlAsFiscalSupport(): DocumentAmountAnalysis {
   return {
-    status: 'DETECTADO',
-    amount,
+    status: 'NO_DISPONIBLE',
     documentType: 'FACTURA',
-    confidence: 'ALTA',
-    source: 'XML',
+    source: 'NINGUNO',
     includedInTotal: false,
-    analyzedAt,
+    analyzedAt: new Date().toISOString(),
+    error: 'El XML CFDI se conserva como complemento fiscal y no se analiza ni se suma. El importe se obtiene del comprobante PDF.',
   };
 }
 
@@ -99,6 +77,41 @@ const RESPONSE_SCHEMA = {
   },
   required: ['documentType', 'total', 'confidence'],
 };
+
+function isTransientModelError(error: any): boolean {
+  const status = Number(error?.status || error?.code || error?.error?.code || 0);
+  const message = String(error?.message || error || '').toUpperCase();
+  return status === 429 || status === 500 || status === 502 || status === 503 ||
+    message.includes('UNAVAILABLE') ||
+    message.includes('HIGH DEMAND') ||
+    message.includes('RESOURCE EXHAUSTED') ||
+    message.includes('RATE LIMIT');
+}
+
+async function generateDocumentResponse(
+  ai: GoogleGenAI,
+  model: string,
+  contents: any[],
+) {
+  let lastError: any;
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    try {
+      return await ai.models.generateContent({
+        model,
+        contents,
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: RESPONSE_SCHEMA,
+        },
+      });
+    } catch (error) {
+      lastError = error;
+      if (!isTransientModelError(error) || attempt === 2) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 700 * attempt));
+    }
+  }
+  throw lastError;
+}
 
 async function analyzeVisualDocument(name: string, mimeType: string, dataUrl: string): Promise<DocumentAmountAnalysis> {
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
@@ -128,33 +141,50 @@ async function analyzeVisualDocument(name: string, mimeType: string, dataUrl: st
     const ai = new GoogleGenAI({ apiKey });
     const data = base64Payload(dataUrl);
 
-    const response = await ai.models.generateContent({
-      model: String(process.env.GEMINI_DOCUMENT_MODEL || 'gemini-3.8-flash').trim(),
-      contents: [
-        {
-          text: [
-            'Analiza este comprobante de gastos de DIMER.',
-            'Identifica si el documento es FACTURA, TICKET u OTRO.',
-            'Encuentra exclusivamente el importe FINAL que la persona pagó o el TOTAL A PAGAR.',
-            'No uses subtotal, IVA, propina, cambio, saldo, autorización de tarjeta, folios ni otros importes parciales.',
-            'Si hay varios totales, elige el que represente el total final de la operación.',
-            'Si no existe un total claramente legible, devuelve total=null.',
-            'No inventes números.',
-            'Nombre de archivo: ' + name,
-          ].join('\n'),
-        },
-        {
-          inlineData: {
-            mimeType,
-            data,
-          },
-        },
-      ],
-      config: {
-        responseMimeType: 'application/json',
-        responseSchema: RESPONSE_SCHEMA,
+    const contents = [
+      {
+        text: [
+          'Analiza este comprobante de gastos de DIMER.',
+          'Identifica si el documento es FACTURA, TICKET u OTRO.',
+          'Encuentra exclusivamente el importe FINAL que la persona pagó o el TOTAL A PAGAR.',
+          'No uses subtotal, IVA, propina, cambio, saldo, autorización de tarjeta, folios ni otros importes parciales.',
+          'Si hay varios totales, elige el que represente el total final de la operación.',
+          'Si no existe un total claramente legible, devuelve total=null.',
+          'No inventes números.',
+          'Nombre de archivo: ' + name,
+        ].join('\n'),
       },
-    });
+      {
+        inlineData: {
+          mimeType,
+          data,
+        },
+      },
+    ];
+
+    const configuredModel = String(process.env.GEMINI_DOCUMENT_MODEL || 'gemini-3.7-flash').trim();
+    const modelsToTry = Array.from(new Set([
+      configuredModel,
+      'gemini-3.7-flash',
+      'gemini-3.6-flash',
+    ]));
+
+    let response: any = null;
+    let lastError: any = null;
+
+    for (const model of modelsToTry) {
+      try {
+        console.log(`[EXPENSE-DOCUMENT-ANALYSIS] Intentando modelo ${model} para ${name}`);
+        response = await generateDocumentResponse(ai, model, contents);
+        break;
+      } catch (error: any) {
+        lastError = error;
+        console.warn(`[EXPENSE-DOCUMENT-ANALYSIS] Modelo ${model} no disponible para ${name}:`, error?.message || error);
+        if (!isTransientModelError(error)) throw error;
+      }
+    }
+
+    if (!response) throw lastError || new Error('No hubo un modelo disponible para analizar el documento.');
 
     const rawText = String(response.text || '').trim();
     const parsed = JSON.parse(rawText) as {
@@ -217,17 +247,7 @@ export async function analyzeDocumentAmount(input: {
   const mimeType = mimeOf(input.fileName, input.fileType);
 
   if (ext === 'xml' || mimeType === 'application/xml' || mimeType === 'text/xml') {
-    try {
-      return analyzeXml(input.dataUrl);
-    } catch (error: any) {
-      return {
-        status: 'ERROR',
-        source: 'XML',
-        includedInTotal: false,
-        analyzedAt: new Date().toISOString(),
-        error: error?.message || 'No fue posible leer el XML CFDI.',
-      };
-    }
+    return markXmlAsFiscalSupport();
   }
 
   return analyzeVisualDocument(input.fileName, mimeType, input.dataUrl);

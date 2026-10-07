@@ -393,40 +393,107 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     }
   }
 
-  // File to base64 converter helper for expense items
-  async function analyzeAttachment(attachment: ExpenseFileAttachment): Promise<ExpenseDocumentAnalysis | undefined> {
-    const isXml = /\.xml$/i.test(attachment.name) || attachment.role === 'COMPLEMENTO_FISCAL';
-    if (!isXml) return undefined;
+  // Los adjuntos de partidas se guardan inmediatamente en el servidor.
+  // El estado del navegador conserva únicamente metadata, nunca el Base64.
+  async function uploadItemAttachment(file: File, field: 'xml' | 'pdf' | 'ticket') {
+    if (!loadedRequest) return;
+
+    const MAX_FILE_SIZE = 3 * 1024 * 1024;
+    if (file.size <= 0) {
+      setItemFormError('El archivo está vacío.');
+      return;
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      setItemFormError(`El archivo "${file.name}" supera el límite de 3 MB.`);
+      return;
+    }
+
+    if (field === 'xml' && !/\.xml$/i.test(file.name) && !file.type.includes('xml')) {
+      setItemFormError('El archivo de factura fiscal XML debe tener extensión .xml');
+      return;
+    }
+    if (field === 'pdf' && !/\.pdf$/i.test(file.name) && !file.type.includes('pdf')) {
+      setItemFormError('El archivo de factura debe tener extensión .pdf');
+      return;
+    }
+
+    setItemFormError(null);
 
     try {
-      const res = await authFetch('/api/expenses/analyze-document', {
+      const dataUrl = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result || ''));
+        reader.onerror = () => reject(new Error('No fue posible preparar el archivo para subirlo.'));
+        reader.readAsDataURL(file);
+      });
+
+      const res = await authFetch('/api/expenses/upload-file', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          folio: loadedRequest?.folio,
-          name: attachment.name,
-          size: attachment.size,
-          type: attachment.type,
-          dataUrl: attachment.dataUrl,
+          folio: loadedRequest.folio,
+          name: file.name,
+          size: file.size,
+          type: file.type || (field === 'xml' ? 'application/xml' : field === 'pdf' ? 'application/pdf' : 'image/jpeg'),
+          dataUrl,
         }),
       });
+
       const data = await res.json();
-      if (res.ok && data?.success && data?.analysis) return data.analysis as ExpenseDocumentAnalysis;
-      return {
-        status: 'ERROR',
-        source: 'NINGUNO',
-        includedInTotal: false,
-        analyzedAt: new Date().toISOString(),
-        error: data?.error || 'No fue posible leer el XML CFDI.',
+      if (!res.ok || !data.success || !data.file) {
+        const errorValue = data?.error;
+        const message =
+          typeof errorValue === 'string'
+            ? errorValue
+            : errorValue?.message || (typeof errorValue === 'object' ? JSON.stringify(errorValue) : 'No fue posible guardar el archivo.');
+        throw new Error(message);
+      }
+
+      const attachment: ExpenseFileAttachment = {
+        ...data.file,
+        dataUrl: '',
+        role: field === 'xml' ? 'COMPLEMENTO_FISCAL' : 'COMPROBANTE_PRINCIPAL',
       };
+
+      if (field === 'xml' && data.analysis) {
+        attachment.analysis = data.analysis;
+      }
+
+      // También lo dejamos visible en Documentos de soporte sin duplicar el binario.
+      setSupportFiles((prev) => {
+        const index = prev.findIndex((f) => f.id === attachment.id);
+        if (index >= 0) {
+          const next = [...prev];
+          next[index] = attachment;
+          return next;
+        }
+        return [...prev, attachment];
+      });
+      setUploadedAttachmentsPool((prev) => {
+        const index = prev.findIndex((f) => f.id === attachment.id);
+        if (index >= 0) {
+          const next = [...prev];
+          next[index] = attachment;
+          return next;
+        }
+        return [...prev, attachment];
+      });
+
+      if (field === 'xml') {
+        setItemXmlFile(attachment);
+      } else if (field === 'pdf') {
+        setItemPdfFile(attachment);
+      } else {
+        setItemTicketFile(attachment);
+      }
     } catch (error: any) {
-      return {
-        status: 'ERROR',
-        source: 'NINGUNO',
-        includedInTotal: false,
-        analyzedAt: new Date().toISOString(),
-        error: error?.message || 'No fue posible leer el XML CFDI.',
-      };
+      const message =
+        typeof error?.message === 'string'
+          ? error.message
+          : typeof error === 'object'
+            ? JSON.stringify(error)
+            : 'No fue posible subir el archivo.';
+      setItemFormError(message);
     }
   }
 
@@ -435,46 +502,9 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     field: 'xml' | 'pdf' | 'ticket'
   ) {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-
-    if (file.size > 10 * 1024 * 1024) {
-      setItemFormError(`El archivo "${file.name}" supera el límite de 10 MB.`);
-      return;
-    }
-
-    if (field === 'xml' && !file.name.toLowerCase().endsWith('.xml') && !file.type.includes('xml')) {
-      setItemFormError('El archivo de factura fiscal XML debe tener extensión .xml');
-      return;
-    }
-
-    if (field === 'pdf' && !file.name.toLowerCase().endsWith('.pdf') && !file.type.includes('pdf')) {
-      setItemFormError('El archivo de factura debe tener extensión .pdf');
-      return;
-    }
-
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const attachment: ExpenseFileAttachment = {
-        id: `att_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-        name: file.name,
-        size: file.size,
-        type: file.type || (field === 'xml' ? 'text/xml' : field === 'pdf' ? 'application/pdf' : 'image/jpeg'),
-        dataUrl: reader.result as string,
-        uploadedAt: new Date().toISOString(),
-      };
-
-      setItemFormError(null);
-      if (field === 'xml') {
-        const analysis = await analyzeAttachment(attachment);
-        setItemXmlFile(analysis ? { ...attachment, analysis, role: 'COMPLEMENTO_FISCAL' } : { ...attachment, role: 'COMPLEMENTO_FISCAL' });
-      }
-      if (field === 'pdf') setItemPdfFile(attachment);
-      if (field === 'ticket') setItemTicketFile(attachment);
-    };
-    reader.onerror = () => {
-      setItemFormError('Error al leer el archivo. Intenta de nuevo.');
-    };
-    reader.readAsDataURL(file);
+    void uploadItemAttachment(file, field);
   }
 
   // File upload for refund voucher

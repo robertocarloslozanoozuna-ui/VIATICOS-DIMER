@@ -259,6 +259,19 @@ function getDocumentsRequiringReview(items: ExpenseItem[]): ExpenseItem[] {
   );
 }
 
+function mergeSupportFiles(
+  stored: ExpenseFileAttachment[] | undefined,
+  incoming: ExpenseFileAttachment[] | undefined,
+): ExpenseFileAttachment[] {
+  const storedById = new Map((stored || []).filter(Boolean).map((file) => [file.id, file]));
+  if (!Array.isArray(incoming)) return stored || [];
+  return incoming.map((file) => {
+    const previous = storedById.get(file.id);
+    if (previous && !file.dataUrl) return { ...previous, ...file, dataUrl: previous.dataUrl };
+    return file;
+  });
+}
+
 function validateRefund(difference: number, refund: any): string | null {
   if (difference <= 0) return null;
   if (!refund || typeof refund !== 'object') return 'Existe un saldo a favor de la empresa. Debes registrar el reembolso antes de finalizar la comprobación.';
@@ -302,12 +315,17 @@ export function registerExpenseRoutes(app: Express) {
         return res.status(400).json({ success: false, error: 'Formato no admitido. Formatos válidos: PDF, XML (CFDI), JPG, JPEG, PNG y WEBP.' });
       }
 
-      const MAX_FILE_SIZE = 10 * 1024 * 1024;
+      // Vercel limita el cuerpo de una Function a 4.5 MB. Como el archivo viaja
+      // dentro de JSON/base64, dejamos margen para el JSON y la cabecera data:.
+      const MAX_FILE_SIZE = 3 * 1024 * 1024;
       const payload = dataUrl.split(';base64,')[1] || '';
       const estimatedBytes = Math.floor((payload.length * 3) / 4) - (payload.endsWith('==') ? 2 : payload.endsWith('=') ? 1 : 0);
       const effectiveSize = declaredSize > 0 ? declaredSize : estimatedBytes;
       if (effectiveSize <= 0 || effectiveSize > MAX_FILE_SIZE) {
-        return res.status(400).json({ success: false, error: `El archivo debe tener entre 1 byte y 10 MB. Tamaño detectado: ${(Math.max(effectiveSize, 0) / (1024 * 1024)).toFixed(1)} MB.` });
+        return res.status(400).json({
+          success: false,
+          error: `El archivo debe tener entre 1 byte y 3 MB para esta carga web. Tamaño detectado: ${(Math.max(effectiveSize, 0) / (1024 * 1024)).toFixed(1)} MB.`,
+        });
       }
 
       const mimeByExt: Record<string, string> = {
@@ -319,6 +337,28 @@ export function registerExpenseRoutes(app: Express) {
         webp: 'image/webp',
       };
       const type = declaredType || mimeByExt[ext];
+
+      const existing = await getVerificationByFolio(folio);
+      const existingSupportFiles = Array.isArray(existing?.supportFiles) ? existing!.supportFiles! : [];
+      const duplicate = existingSupportFiles.find((file) =>
+        file?.name === name && Number(file?.size) === effectiveSize
+      );
+      if (duplicate) {
+        return res.json({
+          success: true,
+          file: { ...duplicate, dataUrl: '' },
+          duplicate: true,
+        });
+      }
+
+      // El servidor realiza la lectura una sola vez. Esto elimina el segundo
+      // POST /analyze-document que antes duplicaba el payload base64 y la memoria.
+      const analysis = await analyzeDocumentAmount({
+        fileName: name,
+        fileType: type,
+        dataUrl,
+      });
+
       const attachment: any = {
         id: `att_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`,
         name,
@@ -326,14 +366,108 @@ export function registerExpenseRoutes(app: Express) {
         type,
         dataUrl,
         uploadedAt: new Date().toISOString(),
+        analysis,
       };
 
-      return res.json({ success: true, file: attachment });
+      const totals = existing
+        ? {
+            totalAmountPaid: existing.totalAmountPaid,
+            totalExpenses: existing.totalExpenses,
+            difference: existing.difference,
+            balanceType: existing.balanceType,
+            balanceAmount: existing.balanceAmount,
+          }
+        : calculateTotals(request, [], undefined);
+
+      const now = new Date().toISOString();
+      const verification: ExpenseVerification = existing || {
+        id: `exp_${Date.now()}`,
+        requestId: request.id,
+        folio: request.folio,
+        userId: request.userId || user.id,
+        userName: request.requesterName || user.name,
+        userEmail: request.user?.email || user.email,
+        department: request.department || user.department,
+        destination: request.destination,
+        status: 'BORRADOR',
+        items: [],
+        ...totals,
+        notes: '',
+        createdAt: now,
+        updatedAt: now,
+      };
+
+      verification.supportFiles = [...existingSupportFiles, attachment];
+      verification.updatedAt = now;
+
+      const saved = await saveVerification(verification);
+      await recordAuditLog({
+        requestId: request.id,
+        userId: user.id,
+        action: 'COMPROBACION_GASTOS_DOCUMENTO',
+        details: { verification: saved, documentId: attachment.id },
+      });
+
+      // El cliente conserva solo metadata. El binario queda persistido en el
+      // expediente y se recupera por /api/expenses/file/:fileId cuando hace falta.
+      return res.json({
+        success: true,
+        file: { ...attachment, dataUrl: '' },
+        analysis,
+      });
     } catch (e: any) {
       console.error('[EXPENSE-UPLOAD-FILE-ERROR]', e);
-      return res.status(500).json({ success: false, error: e.message || 'Error al validar el archivo.' });
+      return res.status(500).json({ success: false, error: e.message || 'Error al guardar el archivo.' });
     }
   });
+  app.post('/api/expenses/analyze-stored-document', async (req: Request, res: Response) => {
+    try {
+      const user = await getRequestUser(req);
+      if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
+
+      const folio = String(req.body?.folio || '').trim().toUpperCase();
+      const fileId = String(req.body?.fileId || '').trim();
+      if (!folio || !fileId) return res.status(400).json({ success: false, error: 'Folio y archivo requeridos.' });
+
+      const request = await getRequest(folio);
+      if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
+      const privileged = userIsAdminOrFinanzas(user);
+      if (!privileged && !isOwner(request, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para analizar este documento.' });
+
+      const found = await findFileById(fileId);
+      if (!found || found.folio !== folio) return res.status(404).json({ success: false, error: 'Archivo no encontrado en este expediente.' });
+      const lower = found.file.name.toLowerCase();
+      if (lower.endsWith('.xml') || found.file.role === 'COMPLEMENTO_FISCAL') {
+        return res.status(400).json({ success: false, error: 'Los archivos XML CFDI no se analizan.' });
+      }
+
+      const analysis = await analyzeDocumentAmount({
+        fileName: found.file.name,
+        fileType: found.file.type,
+        dataUrl: found.file.dataUrl,
+      });
+
+      const existing = await getVerificationByFolio(folio);
+      if (!existing) return res.status(404).json({ success: false, error: 'Comprobación no encontrada.' });
+      const updatedSupport = (existing.supportFiles || []).map((file) =>
+        file.id === fileId ? { ...file, analysis } : file
+      );
+      const saved = await saveVerification({ ...existing, supportFiles: updatedSupport, updatedAt: new Date().toISOString() });
+      await recordAuditLog({
+        requestId: request.id,
+        userId: user.id,
+        action: 'COMPROBACION_GASTOS_DOCUMENTO',
+        details: { verification: saved, documentId: fileId, reanalysis: true },
+      });
+
+      const updated = updatedSupport.find((file) => file.id === fileId)!;
+      return res.json({ success: true, analysis, file: { ...updated, dataUrl: '' } });
+    } catch (e: any) {
+      console.error('[EXPENSE-STORED-ANALYSIS-ERROR]', e);
+      return res.status(500).json({ success: false, error: e.message || 'Error al volver a leer el documento.' });
+    }
+  });
+
   app.post('/api/expenses/analyze-document', async (req: Request, res: Response) => {
     try {
       const user = await getRequestUser(req);
@@ -524,7 +658,7 @@ export function registerExpenseRoutes(app: Express) {
         userEmail: existing?.userEmail || request.user?.email || user.email,
         department: request.department || user.department, destination: request.destination,
         status: 'BORRADOR', items, ...totals, notes,
-        supportFiles: Array.isArray(req.body.supportFiles) ? req.body.supportFiles : (existing?.supportFiles || []),
+        supportFiles: mergeSupportFiles(existing?.supportFiles, Array.isArray(req.body.supportFiles) ? req.body.supportFiles : undefined),
         pendingFiscalXmls: Array.isArray(req.body.pendingFiscalXmls) ? req.body.pendingFiscalXmls : (existing?.pendingFiscalXmls || []),
         originalExcelFile: Object.prototype.hasOwnProperty.call(req.body, 'originalExcelFile') ? (req.body.originalExcelFile || undefined) : existing?.originalExcelFile,
         excelAuditSummary: Object.prototype.hasOwnProperty.call(req.body, 'excelAuditSummary') ? (req.body.excelAuditSummary || undefined) : existing?.excelAuditSummary,
@@ -600,7 +734,7 @@ export function registerExpenseRoutes(app: Express) {
         userEmail: existing?.userEmail || request.user?.email || user.email,
         department: request.department || user.department, destination: request.destination,
         status: 'ENVIADA', items, ...totals, notes,
-        supportFiles: Array.isArray(req.body.supportFiles) ? req.body.supportFiles : (existing?.supportFiles || []),
+        supportFiles: mergeSupportFiles(existing?.supportFiles, Array.isArray(req.body.supportFiles) ? req.body.supportFiles : undefined),
         pendingFiscalXmls: Array.isArray(req.body.pendingFiscalXmls) ? req.body.pendingFiscalXmls : (existing?.pendingFiscalXmls || []),
         originalExcelFile: req.body.originalExcelFile || existing?.originalExcelFile,
         excelAuditSummary: req.body.excelAuditSummary || existing?.excelAuditSummary,

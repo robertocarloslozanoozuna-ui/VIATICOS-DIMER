@@ -63,7 +63,7 @@ export interface ExpenseDocumentAnalysis {
   amount?: number;
   documentType?: 'FACTURA' | 'TICKET' | 'OTRO';
   confidence?: 'ALTA' | 'MEDIA' | 'BAJA';
-  source: 'XML' | 'GEMINI' | 'NINGUNO';
+  source: 'XML' | 'GEMINI' | 'PDF_LOCAL' | 'NINGUNO';
   includedInTotal: boolean;
   analyzedAt: string;
   error?: string;

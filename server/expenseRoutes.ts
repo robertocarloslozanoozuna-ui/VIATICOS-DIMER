@@ -251,6 +251,14 @@ function validateItems(items: ExpenseItem[]): string | null {
   return null;
 }
 
+function getDocumentsRequiringReview(items: ExpenseItem[]): ExpenseItem[] {
+  return (items || []).filter((item) =>
+    [item.pdfFile, item.ticketFile]
+      .filter(Boolean)
+      .some((file) => file?.analysis?.requiresReview === true)
+  );
+}
+
 function validateRefund(difference: number, refund: any): string | null {
   if (difference <= 0) return null;
   if (!refund || typeof refund !== 'object') return 'Existe un saldo a favor de la empresa. Debes registrar el reembolso antes de finalizar la comprobación.';
@@ -492,6 +500,7 @@ export function registerExpenseRoutes(app: Express) {
       const items: ExpenseItem[] = Array.isArray(req.body.items) ? req.body.items : [];
       const notes = String(req.body.notes || '').trim();
       const refund = req.body.refund || undefined;
+      const confirmDocumentReview = req.body.confirmDocumentReview === true;
       if (!folio) return res.status(400).json({ success: false, error: 'Folio requerido' });
       const request = await getRequest(folio);
       if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
@@ -566,6 +575,16 @@ export function registerExpenseRoutes(app: Express) {
 
       const itemError = validateItems(items);
       if (itemError) return res.status(400).json({ success: false, error: itemError });
+
+      const documentsRequiringReview = getDocumentsRequiringReview(items);
+      if (documentsRequiringReview.length > 0 && !confirmDocumentReview) {
+        return res.status(409).json({
+          success: false,
+          error: 'Hay uno o más comprobantes cuya lectura automática requiere revisión. Confirma expresamente la revisión antes de enviar a Finanzas.',
+          requiresDocumentReview: true,
+          documentCount: documentsRequiringReview.length,
+        });
+      }
       const totalsBeforeRefund = calculateTotals(request, items);
       const refundError = validateRefund(totalsBeforeRefund.difference, refund);
       if (refundError) return res.status(400).json({ success: false, error: refundError });

@@ -395,6 +395,9 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
   // File to base64 converter helper for expense items
   async function analyzeAttachment(attachment: ExpenseFileAttachment): Promise<ExpenseDocumentAnalysis | undefined> {
+    const isXml = /\.xml$/i.test(attachment.name) || attachment.role === 'COMPLEMENTO_FISCAL';
+    if (!isXml) return undefined;
+
     try {
       const res = await authFetch('/api/expenses/analyze-document', {
         method: 'POST',
@@ -408,15 +411,13 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         }),
       });
       const data = await res.json();
-      if (res.ok && data?.success && data?.analysis) {
-        return data.analysis as ExpenseDocumentAnalysis;
-      }
+      if (res.ok && data?.success && data?.analysis) return data.analysis as ExpenseDocumentAnalysis;
       return {
         status: 'ERROR',
         source: 'NINGUNO',
         includedInTotal: false,
         analyzedAt: new Date().toISOString(),
-        error: data?.error || 'No fue posible analizar el documento.',
+        error: data?.error || 'No fue posible leer el XML CFDI.',
       };
     } catch (error: any) {
       return {
@@ -424,7 +425,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         source: 'NINGUNO',
         includedInTotal: false,
         analyzedAt: new Date().toISOString(),
-        error: error?.message || 'No fue posible analizar el documento.',
+        error: error?.message || 'No fue posible leer el XML CFDI.',
       };
     }
   }
@@ -463,14 +464,12 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       };
 
       setItemFormError(null);
-      const analysis = await analyzeAttachment(attachment);
-      const analyzedAttachment: ExpenseFileAttachment = analysis
-        ? { ...attachment, analysis }
-        : attachment;
-
-      if (field === 'xml') setItemXmlFile(analyzedAttachment);
-      if (field === 'pdf') setItemPdfFile(analyzedAttachment);
-      if (field === 'ticket') setItemTicketFile(analyzedAttachment);
+      if (field === 'xml') {
+        const analysis = await analyzeAttachment(attachment);
+        setItemXmlFile(analysis ? { ...attachment, analysis, role: 'COMPLEMENTO_FISCAL' } : { ...attachment, role: 'COMPLEMENTO_FISCAL' });
+      }
+      if (field === 'pdf') setItemPdfFile(attachment);
+      if (field === 'ticket') setItemTicketFile(attachment);
     };
     reader.onerror = () => {
       setItemFormError('Error al leer el archivo. Intenta de nuevo.');
@@ -754,12 +753,8 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
   async function handleReanalyzeSupportFile(file: ExpenseFileAttachment) {
     if (!loadedRequest || !canEdit || reanalyzingFileId) return;
-    const lower = file.name.toLowerCase();
-    const isXml = lower.endsWith('.xml') || file.role === 'COMPLEMENTO_FISCAL';
-    if (isXml) {
-      setActionError('Los archivos XML CFDI no se analizan. Son únicamente complemento fiscal del PDF.');
-      return;
-    }
+    const isXml = /\.xml$/i.test(file.name) || file.role === 'COMPLEMENTO_FISCAL';
+    if (!isXml) return;
 
     setReanalyzingFileId(file.id);
     setActionError(null);
@@ -773,36 +768,51 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       });
       const data = await res.json();
       if (!res.ok || !data.success || !data.file) {
-        throw new Error(data.error || 'No fue posible volver a leer el documento.');
+        throw new Error(data.error || 'No fue posible volver a leer el XML.');
       }
 
       const updatedFile: ExpenseFileAttachment = lightweightAttachment(data.file);
+      setSupportFiles((prev) => prev.map((current) => current.id === file.id ? updatedFile : current));
+      setUploadedAttachmentsPool((prev) => prev.map((current) => current.id === file.id ? updatedFile : current));
+      setItems((prev) => prev.map((item) => ({
+        ...item,
+        xmlFile: item.xmlFile?.id === file.id ? updatedFile : item.xmlFile,
+      })));
 
-      setSupportFiles((prev) =>
-        prev.map((current) => current.id === file.id ? updatedFile : current)
-      );
-      setUploadedAttachmentsPool((prev) =>
-        prev.map((current) => current.id === file.id ? updatedFile : current)
-      );
-      setItems((prev) =>
-        prev.map((item) => ({
-          ...item,
-          pdfFile: item.pdfFile?.id === file.id ? updatedFile : item.pdfFile,
-          ticketFile: item.ticketFile?.id === file.id ? updatedFile : item.ticketFile,
-          xmlFile: item.xmlFile?.id === file.id ? updatedFile : item.xmlFile,
-        }))
-      );
-
-      if (updatedFile.analysis?.status === 'DETECTADO' && updatedFile.analysis.amount) {
-        setActionSuccess(`Lectura actualizada: ${updatedFile.name} → ${formatCurrency(updatedFile.analysis.amount)}.`);
+      if (updatedFile.analysis?.status === 'DETECTADO' && Number(updatedFile.analysis.amount) > 0) {
+        setActionSuccess(`XML actualizado: ${updatedFile.name} → ${formatCurrency(updatedFile.analysis.amount)}.`);
       } else {
-        setActionError(updatedFile.analysis?.error || 'No se detectó un total confiable en este documento.');
+        setActionError(updatedFile.analysis?.error || 'No se detectó un total válido en el XML.');
       }
     } catch (error: any) {
-      setActionError(error?.message || 'No fue posible volver a leer el documento.');
+      setActionError(error?.message || 'No fue posible volver a leer el XML.');
     } finally {
       setReanalyzingFileId(null);
     }
+  }
+
+  function getMatchingXmlForSupportFile(file: ExpenseFileAttachment): ExpenseFileAttachment | undefined {
+    if (!/\.pdf$/i.test(file.name)) return undefined;
+    const key = getFileBaseSignature(file.name);
+    return supportFiles.find((candidate) =>
+      (/\.xml$/i.test(candidate.name) || candidate.role === 'COMPLEMENTO_FISCAL') &&
+      getFileBaseSignature(candidate.name) === key
+    );
+  }
+
+  function handleManualDocumentAmount(fileId: string, value: string) {
+    const parsed = value.trim() === '' ? null : Number(value);
+    const amount = parsed !== null && Number.isFinite(parsed) && parsed >= 0 ? Number(parsed.toFixed(2)) : null;
+    const patch = (file: ExpenseFileAttachment) =>
+      file.id === fileId ? { ...file, manualAmount: amount } : file;
+
+    setSupportFiles((prev) => prev.map(patch));
+    setUploadedAttachmentsPool((prev) => prev.map(patch));
+    setItems((prev) => prev.map((item) => ({
+      ...item,
+      pdfFile: item.pdfFile?.id === fileId ? patch(item.pdfFile) : item.pdfFile,
+      ticketFile: item.ticketFile?.id === fileId ? patch(item.ticketFile) : item.ticketFile,
+    })));
   }
 
   function handleRemoveSupportFile(fileId: string) {
@@ -2241,7 +2251,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                     </span>
                   </h4>
                   <p className="text-[11px] text-indigo-800 mt-0.5">
-                    El sistema lee el total de PDF, tickets e imágenes. Los XML CFDI se conservan únicamente como complemento fiscal y no se analizan ni se suman.
+                    Las facturas se relacionan por nombre entre PDF y XML. Solo el XML determina el total; PDF e imágenes se capturan manualmente cuando no existe un XML utilizable.
                   </p>
                 </div>
                 <div className="text-right">
@@ -2324,7 +2334,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                     <Archive className="w-8 h-8 text-slate-300 mx-auto mb-1.5" />
                     <p className="text-xs font-bold text-slate-700">No hay documentos adjuntos aún en este expediente</p>
                     <p className="text-[11px] text-slate-500 mt-0.5 max-w-md mx-auto">
-                      Sube tus facturas PDF, XML o capturas/fotos de tickets para que queden disponibles para Finanzas y para tu consulta.
+                      Sube facturas PDF + XML y tickets/capturas. El XML calcula automáticamente; PDF e imágenes requieren captura manual. Finanzas podrá revisar cada documento sin descargarlo.
                     </p>
                     {canEdit && (
                       <button
@@ -2349,6 +2359,17 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                         lower.endsWith('.png') ||
                         lower.endsWith('.webp') ||
                         Boolean(file.type && file.type.startsWith('image/'));
+                      const matchingXml = getMatchingXmlForSupportFile(file);
+                      const xmlHasTotal = Boolean(
+                        matchingXml?.analysis?.status === 'DETECTADO' &&
+                        Number(matchingXml?.analysis?.amount) > 0
+                      );
+                      const manualRequired = !isXml && (!isPdf || !xmlHasTotal);
+                      const displayedAmount = isXml
+                        ? Number(file.analysis?.amount || 0)
+                        : xmlHasTotal
+                        ? Number(matchingXml?.analysis?.amount || 0)
+                        : Number(file.manualAmount || 0);
 
                       return (
                         <div
@@ -2356,141 +2377,94 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                           className="p-3 rounded-lg border border-slate-200 bg-white hover:border-indigo-300 hover:shadow-2xs transition flex flex-col justify-between gap-2.5"
                         >
                           <div className="flex items-start gap-2.5 min-w-0">
-                            <div
-                              className={`p-2 rounded-lg shrink-0 ${
-                                isPdf
-                                  ? 'bg-rose-50 text-rose-600 border border-rose-100'
-                                  : isXml
-                                  ? 'bg-amber-50 text-amber-600 border border-amber-100'
-                                  : 'bg-teal-50 text-teal-600 border border-teal-100'
-                              }`}
-                            >
+                            <div className={`p-2 rounded-lg shrink-0 ${isPdf ? 'bg-rose-50 text-rose-600 border border-rose-100' : isXml ? 'bg-amber-50 text-amber-600 border border-amber-100' : 'bg-teal-50 text-teal-600 border border-teal-100'}`}>
                               {isPdf && <FileText className="w-4 h-4" />}
                               {isXml && <FileCode className="w-4 h-4" />}
                               {isImg && <ImageIcon className="w-4 h-4" />}
                               {!isPdf && !isXml && !isImg && <Paperclip className="w-4 h-4" />}
                             </div>
 
-                            <div className="min-w-0 flex-1 space-y-1">
-                              <p className="text-xs font-bold text-slate-800 truncate" title={file.name}>
-                                {file.name}
-                              </p>
+                            <div className="min-w-0 flex-1 space-y-1.5">
+                              <p className="text-xs font-bold text-slate-800 truncate" title={file.name}>{file.name}</p>
                               <div className="flex flex-wrap items-center gap-1.5">
-                                <span
-                                  className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${
-                                    isPdf
-                                      ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                                      : isXml
-                                      ? 'bg-amber-50 text-amber-800 border border-amber-200'
-                                      : 'bg-teal-50 text-teal-800 border border-teal-200'
-                                  }`}
-                                >
+                                <span className={`px-1.5 py-0.2 rounded text-[10px] font-bold ${isPdf ? 'bg-rose-50 text-rose-700 border border-rose-200' : isXml ? 'bg-amber-50 text-amber-800 border border-amber-200' : 'bg-teal-50 text-teal-800 border border-teal-200'}`}>
                                   {isPdf ? 'Factura PDF' : isXml ? 'Fiscal XML CFDI' : 'Captura / Ticket'}
                                 </span>
-                                <span className="text-[10px] font-mono text-slate-400">
-                                  {formatFileSize(file.size)}
-                                </span>
+                                <span className="text-[10px] font-mono text-slate-400">{formatFileSize(file.size)}</span>
                               </div>
-                              {!isXml && file.analysis?.status === 'DETECTADO' && file.analysis.amount ? (
+
+                              {isXml ? (
                                 <div className="space-y-1">
-                                  <div className="text-[10px] font-mono font-black text-indigo-800">
-                                    Total detectado: {formatCurrency(file.analysis.amount)}
-                                  </div>
-                                  <div className="flex flex-wrap items-center gap-1.5 text-[9px]">
-                                    <span className="px-1.5 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-700 font-bold">
-                                      Método: {getAnalysisMethodLabel(file.analysis.source)}
-                                    </span>
-                                    {file.analysis.confidence && (
-                                      <span className="px-1.5 py-0.5 rounded bg-indigo-50 border border-indigo-100 text-indigo-700 font-semibold">
-                                        Confianza: {file.analysis.confidence.toLowerCase()}
-                                      </span>
-                                    )}
-                                    {file.analysis.requiresReview && (
-                                      <span className="px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800 font-bold">
-                                        Requiere revisión
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                              ) : file.analysis?.status === 'SIN_TOTAL' ? (
-                                <div className="space-y-1">
-                                  <div className="text-[10px] font-semibold text-amber-700">
-                                    No se detectó un total confiable
-                                  </div>
-                                  <span className="inline-flex px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-800 text-[9px] font-bold">
-                                    Requiere captura/revisión manual
-                                  </span>
-                                </div>
-                              ) : file.analysis?.status === 'ERROR' || file.analysis?.status === 'NO_DISPONIBLE' ? (
-                                <div className="space-y-1">
-                                  <div className="text-[10px] font-semibold text-slate-500">
-                                    Lectura automática no disponible
-                                  </div>
-                                  {file.analysis?.error && (
-                                    <div className="text-[9px] text-rose-600 truncate max-w-[260px]" title={file.analysis.error}>
-                                      {file.analysis.error}
+                                  {file.analysis?.status === 'DETECTADO' && Number(file.analysis.amount) > 0 ? (
+                                    <div className="text-[10px] font-mono font-black text-emerald-800">
+                                      Total detectado por XML: {formatCurrency(Number(file.analysis.amount))}
+                                    </div>
+                                  ) : (
+                                    <div className="text-[10px] font-semibold text-rose-700">
+                                      XML sin total utilizable
                                     </div>
                                   )}
+                                  <div className="text-[9px] text-slate-500">Este importe se suma al <strong>Total detectado de comprobantes</strong> únicamente cuando existe un PDF con el mismo nombre base.</div>
                                 </div>
-                              ) : null}
-                              {file.uuid && (
-                                <p className="text-[9px] font-mono text-slate-400 truncate" title={`UUID: ${file.uuid}`}>
-                                  UUID: {file.uuid}
-                                </p>
+                              ) : isPdf && xmlHasTotal ? (
+                                <div className="space-y-1">
+                                  <div className="text-[10px] font-mono font-black text-emerald-800">
+                                    XML relacionado: {formatCurrency(Number(matchingXml!.analysis!.amount))}
+                                  </div>
+                                  <div className="text-[9px] text-emerald-700 font-semibold">Factura conciliada por nombre. El PDF no se lee.</div>
+                                </div>
+                              ) : (
+                                <div className="space-y-1.5">
+                                  <div className="text-[10px] font-semibold text-slate-600">
+                                    {isPdf ? 'PDF sin XML utilizable — captura el total manualmente' : 'Imagen / ticket — captura el total manualmente'}
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <label className="text-[10px] font-bold text-slate-700 whitespace-nowrap">Total:</label>
+                                    <div className="relative flex-1 max-w-[180px]">
+                                      <span className="absolute left-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400">$</span>
+                                      <input
+                                        type="number"
+                                        min="0"
+                                        step="0.01"
+                                        value={file.manualAmount ?? ''}
+                                        onChange={(e) => handleManualDocumentAmount(file.id, e.target.value)}
+                                        disabled={!canEdit}
+                                        placeholder="0.00"
+                                        className="w-full pl-5 pr-2 py-1 rounded border border-slate-300 text-[11px] font-mono font-bold focus:outline-none focus:ring-1 focus:ring-teal-500 disabled:bg-slate-50"
+                                      />
+                                    </div>
+                                  </div>
+                                  <div className="text-[9px] text-slate-500">Este importe solo afecta el Total detectado de comprobantes; no modifica los gastos.</div>
+                                </div>
                               )}
+
+                              {displayedAmount > 0 && (
+                                <div className="text-[10px] font-mono font-black text-indigo-800">
+                                  {isXml ? 'Total XML' : xmlHasTotal ? 'Total de comprobante' : 'Total manual'}: {formatCurrency(displayedAmount)}
+                                </div>
+                              )}
+                              {file.uuid && <p className="text-[9px] font-mono text-slate-400 truncate" title={`UUID: ${file.uuid}`}>UUID: {file.uuid}</p>}
                             </div>
                           </div>
 
-                          {/* Action Buttons: Descargar & Ver & Eliminar */}
                           <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-1">
-                            <button
-                              type="button"
-                              onClick={() => downloadAttachment(file)}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-slate-700 text-[11px] font-bold transition cursor-pointer"
-                              title="Descargar este archivo"
-                            >
-                              <Download className="w-3.5 h-3.5 text-slate-500 hover:text-indigo-600" />
+                            <button type="button" onClick={() => downloadAttachment(file)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-100 hover:bg-indigo-50 hover:text-indigo-700 text-slate-700 text-[11px] font-bold transition cursor-pointer" title="Descargar este archivo">
+                              <Download className="w-3.5 h-3.5" />
                               <span>Descargar</span>
                             </button>
 
                             <div className="flex items-center gap-1">
-                              {!isXml && (
-                                <button
-                                  type="button"
-                                  onClick={() => void handleReanalyzeSupportFile(file)}
-                                  disabled={reanalyzingFileId !== null}
-                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 text-[11px] font-bold transition cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed"
-                                  title="Volver a leer el importe y tipo de este documento"
-                                >
-                                  <RefreshCw className={`w-3.5 h-3.5 ${reanalyzingFileId === file.id ? 'animate-spin' : ''}`} />
-                                  <span>{reanalyzingFileId === file.id ? 'Leyendo...' : 'Volver a leer'}</span>
-                                </button>
-                              )}
+                              <button type="button" onClick={() => setPreviewModalFile(file)} className="p-1 rounded text-slate-400 hover:text-teal-700 hover:bg-slate-100 transition cursor-pointer" title="Vista previa">
+                                <Eye className="w-3.5 h-3.5" />
+                              </button>
                               {isXml && (
-                                <span
-                                  className="inline-flex items-center px-2.5 py-1 rounded bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold"
-                                  title="El XML no se analiza ni suma; funciona únicamente como complemento fiscal"
-                                >
-                                  Complemento fiscal
-                                </span>
-                              )}
-                              {isImg && (
-                                <button
-                                  type="button"
-                                  onClick={() => setPreviewModalFile(file)}
-                                  className="p-1 rounded text-slate-400 hover:text-teal-700 hover:bg-slate-100 transition cursor-pointer"
-                                  title="Vista previa de captura"
-                                >
-                                  <Eye className="w-3.5 h-3.5" />
+                                <button type="button" onClick={() => void handleReanalyzeSupportFile(file)} disabled={!canEdit || reanalyzingFileId !== null} className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-amber-50 hover:bg-amber-100 text-amber-800 border border-amber-200 text-[11px] font-bold transition cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed" title="Volver a leer el XML CFDI">
+                                  <RefreshCw className={`w-3.5 h-3.5 ${reanalyzingFileId === file.id ? 'animate-spin' : ''}`} />
+                                  <span>{reanalyzingFileId === file.id ? 'Leyendo XML...' : 'Volver a leer XML'}</span>
                                 </button>
                               )}
                               {canEdit && (
-                                <button
-                                  type="button"
-                                  onClick={() => handleRemoveSupportFile(file.id)}
-                                  className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer"
-                                  title="Eliminar este archivo del expediente"
-                                >
+                                <button type="button" onClick={() => handleRemoveSupportFile(file.id)} className="p-1 rounded text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition cursor-pointer" title="Eliminar este archivo del expediente">
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </button>
                               )}
@@ -2499,6 +2473,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                         </div>
                       );
                     })}
+                  </div>}
                   </div>
                 )}
               </div>
@@ -3534,7 +3509,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                 />
               ) : (
                 <iframe
-                  src={previewModalFile.dataUrl}
+                  src={previewModalUrl || ''}
                   title={previewModalFile.name}
                   className="w-full h-[70vh] rounded border border-slate-300"
                 />

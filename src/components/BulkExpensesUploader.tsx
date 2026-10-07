@@ -134,6 +134,22 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
     setGlobalNotice(null);
   }
 
+  function readableError(value: unknown, fallback = 'Error al procesar el archivo.') {
+    if (typeof value === 'string' && value.trim()) return value;
+    if (value instanceof Error && value.message) return value.message;
+    if (value && typeof value === 'object') {
+      const candidate = value as any;
+      if (typeof candidate.message === 'string' && candidate.message.trim()) return candidate.message;
+      if (typeof candidate.error === 'string' && candidate.error.trim()) return candidate.error;
+      try {
+        return JSON.stringify(value);
+      } catch {
+        return fallback;
+      }
+    }
+    return fallback;
+  }
+
   async function uploadIndividualFile(item: FileQueueItem): Promise<ExpenseFileAttachment | null> {
     return new Promise((resolve) => {
       const reader = new FileReader();
@@ -165,7 +181,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
 
           const data = await res.json();
           if (!res.ok || !data.success || !data.file) {
-            throw new Error(data.error || 'Fallo en la validación o lectura del servidor.');
+            throw new Error(readableError(data.error, 'No fue posible guardar el archivo en el expediente.'));
           }
 
           const attachment: ExpenseFileAttachment = data.file;
@@ -181,7 +197,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
           setQueue((prev) =>
             prev.map((q) =>
               q.id === item.id
-                ? { ...q, status: 'ERROR', progress: 0, error: err.message || 'Error al procesar archivo' }
+                ? { ...q, status: 'ERROR', progress: 0, error: readableError(err, 'Error al procesar archivo') }
                 : q
             )
           );

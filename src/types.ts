@@ -97,6 +97,8 @@ export interface ExpenseFileAttachment {
   uuid?: string;
   role?: 'COMPROBANTE_PRINCIPAL' | 'COMPLEMENTO_FISCAL' | 'DOCUMENTO_ORIGINAL_EXCEL';
   analysis?: ExpenseDocumentAnalysis;
+  /** Importe capturado manualmente cuando el documento no tiene un XML CFDI utilizable. */
+  manualAmount?: number | null;
 }
 
 export interface ExpenseItem {

@@ -263,32 +263,31 @@ function mergeSupportFiles(
   stored: ExpenseFileAttachment[] | undefined,
   incoming: ExpenseFileAttachment[] | undefined,
 ): ExpenseFileAttachment[] {
-  const storedById = new Map((stored || []).filter(Boolean).map((file) => [file.id, file]));
-  if (!Array.isArray(incoming)) return stored || [];
+  const previousFiles = Array.isArray(stored) ? stored.filter(Boolean) : [];
+  if (!Array.isArray(incoming)) return previousFiles;
 
-  return incoming.map((file) => {
-    const previous = storedById.get(file.id);
+  const incomingById = new Map(incoming.filter(Boolean).map((file) => [file.id, file]));
 
-    // The client intentionally keeps large attachments metadata-only (dataUrl: '').
-    // Never let that lightweight representation erase the server-persisted binary.
-    if (previous) {
-      const incomingHasContent = typeof file.dataUrl === 'string' && file.dataUrl.trim().length > 0;
-      const previousHasContent = typeof previous.dataUrl === 'string' && previous.dataUrl.trim().length > 0;
+  const normalizedIncoming = incoming.map((file) => {
+    const previous = previousFiles.find((candidate) => candidate.id === file.id);
+    if (!previous) return file;
 
-      if (!incomingHasContent && previousHasContent) {
-        return { ...previous, ...file, dataUrl: previous.dataUrl };
-      }
-
-      // If both versions are metadata-only, keep the previous record as the base.
-      // This preserves any server-side fields (including storage metadata/analysis)
-      // that the browser does not send back.
-      if (!incomingHasContent && !previousHasContent) {
-        return { ...previous, ...file, dataUrl: '' };
-      }
-    }
-
-    return file;
+    // The client intentionally keeps V2 attachments metadata-only.
+    // Preserve server-side Storage metadata/analysis and never reintroduce
+    // a large Base64 payload from the previous snapshot.
+    return { ...previous, ...file, dataUrl: '' };
   });
+
+  // V2 documents are durable records in expense_documents/Storage. Their
+  // absence from a possibly stale browser snapshot must never delete them.
+  // Explicit deletion is handled by DELETE /api/expenses/documents/:fileId,
+  // which marks the Storage record DELETED; the next canonical hydration then
+  // stops returning that file.
+  const preservedStorageFiles = previousFiles.filter(
+    (file) => Boolean(file.storagePath) && !incomingById.has(file.id),
+  );
+
+  return [...normalizedIncoming, ...preservedStorageFiles];
 }
 
 function validateRefund(difference: number, refund: any): string | null {
@@ -393,7 +392,51 @@ export function registerExpenseRoutes(app: Express) {
       const document = await getExpenseDocument(documentId);
       if (!document || document.folio !== folio || document.request_id !== request.id) return res.status(404).json({ success: false, error: 'Documento no encontrado en este expediente.' });
       const file = await completeExpenseDocument(documentId);
-      await recordAuditLog({ requestId: request.id, userId: user.id, action: 'COMPROBACION_GASTOS_DOCUMENTO', details: { folio, documentId, document: file, storage: 'supabase' } });
+
+      // El documento V2 ya es durable en Supabase Storage + expense_documents.
+      // También actualizamos el snapshot de comprobación para que un expediente
+      // nuevo tenga inmediatamente una representación visible del documento,
+      // incluso antes de que exista el primer autosave del formulario.
+      const existing = await getVerificationByFolioFast(folio, request.id);
+      const totals = existing
+        ? {
+            totalAmountPaid: existing.totalAmountPaid,
+            totalExpenses: existing.totalExpenses,
+            difference: existing.difference,
+            balanceType: existing.balanceType,
+            balanceAmount: existing.balanceAmount,
+          }
+        : calculateTotals(request, [], undefined);
+      const now = new Date().toISOString();
+      const verification: ExpenseVerification = existing || {
+        id: `exp_${Date.now()}`,
+        requestId: request.id,
+        folio: request.folio,
+        userId: request.userId || user.id,
+        userName: request.requesterName || user.name,
+        userEmail: request.user?.email || user.email,
+        department: request.department || user.department,
+        destination: request.destination,
+        status: 'BORRADOR',
+        items: [],
+        ...totals,
+        notes: '',
+        createdAt: now,
+        updatedAt: now,
+      };
+      const supportFiles = Array.isArray(verification.supportFiles) ? verification.supportFiles : [];
+      if (!supportFiles.some((candidate) => candidate.id === file.id)) {
+        verification.supportFiles = [...supportFiles, file];
+      }
+      verification.updatedAt = now;
+
+      const saved = saveVerificationFast(verification);
+      await recordAuditLog({
+        requestId: request.id,
+        userId: user.id,
+        action: 'COMPROBACION_GASTOS_DOCUMENTO',
+        details: { verification: saved, documentId, storage: 'supabase' },
+      });
       return res.json({ success: true, file });
     } catch (error: any) {
       console.error('[EXPENSE-DOCUMENT-UPLOAD-COMPLETE-ERROR]', error);
@@ -808,6 +851,7 @@ export function registerExpenseRoutes(app: Express) {
       // Consulta únicamente el historial de este folio. La ruta anterior
       // sincronizaba todos los autosaves del proyecto en cada búsqueda.
       const verification = await getVerificationByFolioFast(request.folio, request.id);
+      res.setHeader('Cache-Control', 'private, no-store, max-age=0');
       return res.json({ success: true, request, verification, canEdit, statusNotice, userRole: user.role, isOwner: owner, isPrivileged: privileged });
     } catch (e: any) {
       console.error('[EXPENSE-SEARCH-ERROR]', e);

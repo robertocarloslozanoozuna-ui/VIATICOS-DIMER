@@ -288,12 +288,14 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
   const errorCount = queue.filter((q) => q.status === 'ERROR').length;
   const uploadedCount = queue.filter((q) => q.status === 'SUBIDO').length;
 
-  // Suma únicamente los importes finales detectados en documentos principales.
-  // Los XML CFDI no se suman aquí porque son complemento fiscal y podrían duplicar una factura.
+  // El XML CFDI sí forma parte del Total detectado en comprobantes.
+  // El PDF no se lee: si tiene XML relacionado, el importe viene del XML;
+  // si no tiene XML, el importe se captura manualmente fuera de este modal.
   const detectedDocumentsTotal = Number(
     queue.reduce((sum, q) => {
       const analysis = q.attachment?.analysis;
       return sum + (
+        q.name.toLowerCase().endsWith('.xml') &&
         analysis?.status === 'DETECTADO' &&
         analysis.includedInTotal &&
         Number.isFinite(Number(analysis.amount))
@@ -304,7 +306,10 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
   );
 
   const detectedDocumentsCount = queue.filter(
-    (q) => q.attachment?.analysis?.status === 'DETECTADO' && q.attachment.analysis.includedInTotal
+    (q) =>
+      q.name.toLowerCase().endsWith('.xml') &&
+      q.attachment?.analysis?.status === 'DETECTADO' &&
+      q.attachment.analysis.includedInTotal
   ).length;
 
   const formatCurrency = (amount: number) =>
@@ -432,7 +437,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
                 Se suma cada “Total detectado” una sola vez
               </span>
               <span className="block mt-0.5 text-[10px] text-slate-500">
-                Los XML CFDI se leen automáticamente y su total se usa una sola vez cuando existe el PDF con el mismo nombre base. PDF e imágenes se capturan manualmente.
+                Los XML CFDI se leen automáticamente y cada XML válido suma una sola vez. Si existe PDF con el mismo nombre base, el PDF no vuelve a sumar. PDF e imágenes se capturan manualmente.
               </span>
             </div>
           </div>

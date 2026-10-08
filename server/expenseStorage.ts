@@ -147,6 +147,25 @@ async function getCache() {
   await syncWithSupabase(verificationsCache);
   return verificationsCache;
 }
+
+/**
+ * Fast in-memory save used immediately after a document upload.
+ * The upload route already writes a complete audit snapshot; forcing a full
+ * audit_logs synchronization here makes every document wait for the entire
+ * historical table and can hit Vercel's 60s runtime limit.
+ */
+export function saveVerificationFast(v: ExpenseVerification): ExpenseVerification {
+  const cleanFolio = String(v.folio || '').toUpperCase().trim();
+  if (!cleanFolio) throw new Error('Folio requerido para guardar la comprobación');
+  if (!verificationsCache) verificationsCache = loadFromDisk();
+  const cloned = JSON.parse(JSON.stringify(v)) as ExpenseVerification;
+  cloned.folio = cleanFolio;
+  cloned.updatedAt = new Date().toISOString();
+  verificationsCache.set(cleanFolio, cloned);
+  persistToDisk(verificationsCache);
+  return JSON.parse(JSON.stringify(cloned));
+}
+
 export async function getVerificationByFolio(folio: string): Promise<ExpenseVerification | null> {
   const key = String(folio || '').toUpperCase().trim(); if (!key) return null;
   const value = (await getCache()).get(key); return value ? JSON.parse(JSON.stringify(value)) : null;

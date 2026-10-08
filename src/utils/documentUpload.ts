@@ -163,7 +163,10 @@ export async function uploadExpenseDocument(input: {
     String(initData.token || ''),
     'viaticos-comprobantes',
     String(initData.path || ''),
-    input.file,
+    new File([input.file], input.file.name, {
+      type: String(initData.mimeType || input.file.type || 'application/octet-stream'),
+      lastModified: input.file.lastModified,
+    }),
     input.onProgress,
   );
 

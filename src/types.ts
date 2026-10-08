@@ -92,6 +92,7 @@ export interface ExpenseFileAttachment {
   name: string;
   size: number;
   type: string;
+  /** Compatibilidad con documentos históricos/Excel. Los comprobantes V2 usan Storage y dejan este campo vacío. */
   dataUrl: string;
   uploadedAt: string;
   uuid?: string;
@@ -99,6 +100,14 @@ export interface ExpenseFileAttachment {
   analysis?: ExpenseDocumentAnalysis;
   /** Importe capturado manualmente cuando el documento no tiene un XML CFDI utilizable. */
   manualAmount?: number | null;
+  /** Ubicación física del comprobante V2 en Supabase Storage. */
+  storageBucket?: string;
+  storagePath?: string;
+  /** Huella SHA-256 del archivo para deduplicación e idempotencia. */
+  sha256?: string;
+  documentType?: string;
+  documentStatus?: string;
+  readingStatus?: string;
 }
 
 export interface ExpenseItem {

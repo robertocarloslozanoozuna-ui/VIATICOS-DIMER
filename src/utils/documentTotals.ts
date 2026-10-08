@@ -13,14 +13,15 @@ export interface DocumentTotalsSummary {
 }
 
 function isXml(file: ExpenseFileAttachment): boolean {
-  const lower = file.name.toLowerCase();
-  return lower.endsWith('.xml') || file.role === 'COMPLEMENTO_FISCAL';
+  return /\.xml$/i.test(file.name) || file.role === 'COMPLEMENTO_FISCAL';
 }
 
 function baseSignature(filename: string): string {
-  return filename
+  return String(filename || '')
     .replace(/\.[^/.]+$/, '')
     .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
     .replace(/[_\s-]+/g, '')
     .trim();
 }
@@ -29,19 +30,25 @@ function isPdf(file: ExpenseFileAttachment): boolean {
   return /\.pdf$/i.test(file.name);
 }
 
+function attachmentIdentity(file: ExpenseFileAttachment): string {
+  const uuid = String(file.uuid || file.analysis?.detail?.uuid || '').trim().toLowerCase();
+  if (uuid) return `uuid:${uuid}`;
+  return `file:${String(file.name || '').trim().toLowerCase()}|${Number(file.size) || 0}`;
+}
+
 export function summarizeDocumentTotals(
   items: ExpenseItem[],
   supportFiles: ExpenseFileAttachment[] = [],
   pendingFiscalXmls: ExpenseFileAttachment[] = [],
 ): DocumentTotalsSummary {
   const files: ExpenseFileAttachment[] = [];
-  const seen = new Set<string>();
+  const seenIds = new Set<string>();
 
   const pushUnique = (file?: ExpenseFileAttachment) => {
     if (!file) return;
-    const key = file.id || file.name + '_' + file.size;
-    if (seen.has(key)) return;
-    seen.add(key);
+    const key = file.id || `${file.name}_${file.size}`;
+    if (seenIds.has(key)) return;
+    seenIds.add(key);
     files.push(file);
   };
 
@@ -53,13 +60,34 @@ export function summarizeDocumentTotals(
   for (const file of supportFiles || []) pushUnique(file);
   for (const file of pendingFiscalXmls || []) pushUnique(file);
 
-  const xmlByBase = new Map<string, ExpenseFileAttachment>();
-  files.filter(isXml).forEach((xml) => {
-    const key = baseSignature(xml.name);
-    if (key) xmlByBase.set(key, xml);
-  });
-
+  const xmlFiles = files.filter(isXml);
   const primaryFiles = files.filter((file) => !isXml(file));
+
+  // Every valid CFDI XML contributes to Total detectado en comprobantes.
+  // A matching PDF is NOT required for the XML to count.
+  const uniqueXmls: ExpenseFileAttachment[] = [];
+  const seenXmls = new Set<string>();
+  for (const xml of xmlFiles) {
+    const identity = attachmentIdentity(xml);
+    if (seenXmls.has(identity)) continue;
+    seenXmls.add(identity);
+    uniqueXmls.push(xml);
+  }
+
+  const xmlByBase = new Map<string, ExpenseFileAttachment>();
+  for (const xml of uniqueXmls) {
+    const key = baseSignature(xml.name);
+    if (
+      key &&
+      xml.analysis?.status === 'DETECTADO' &&
+      Number.isFinite(Number(xml.analysis.amount)) &&
+      Number(xml.analysis.amount) > 0 &&
+      !xmlByBase.has(key)
+    ) {
+      xmlByBase.set(key, xml);
+    }
+  }
+
   let totalDetected = 0;
   let analyzedDocumentCount = 0;
   let pendingDocumentCount = 0;
@@ -69,57 +97,63 @@ export function summarizeDocumentTotals(
   let ticketCount = 0;
   let unclassifiedCount = 0;
 
-  for (const file of primaryFiles) {
-    const pairedXml = isPdf(file) ? xmlByBase.get(baseSignature(file.name)) : undefined;
-    const xmlAnalysis = pairedXml?.analysis;
-    const hasXmlTotal =
-      Boolean(pairedXml) &&
-      xmlAnalysis?.status === 'DETECTADO' &&
-      Number.isFinite(Number(xmlAnalysis.amount)) &&
-      Number(xmlAnalysis.amount) > 0;
-
-    if (hasXmlTotal) {
-      totalDetected += Number(xmlAnalysis!.amount);
+  // XML is the authoritative automatic amount for fiscal invoices.
+  for (const xml of uniqueXmls) {
+    if (
+      xml.analysis?.status === 'DETECTADO' &&
+      Number.isFinite(Number(xml.analysis.amount)) &&
+      Number(xml.analysis.amount) > 0
+    ) {
+      totalDetected += Number(xml.analysis.amount);
       analyzedDocumentCount += 1;
       invoiceCount += 1;
+    } else if (xml.analysis?.status === 'ERROR') {
+      errorCount += 1;
+      invoiceCount += 1;
+    } else if (xml.analysis?.status === 'SIN_TOTAL') {
+      withoutTotalCount += 1;
+      invoiceCount += 1;
+    } else {
+      pendingDocumentCount += 1;
+      invoiceCount += 1;
+    }
+  }
+
+  // PDF is only the visual invoice. When a matching XML exists, the PDF
+  // contributes ZERO because its XML amount was already counted.
+  // When there is no usable XML, the user can enter a manual amount.
+  for (const file of primaryFiles) {
+    if (isPdf(file)) {
+      const pairedXml = xmlByBase.get(baseSignature(file.name));
+      if (pairedXml) continue;
+
+      const manualAmount = Number(file.manualAmount);
+      if (Number.isFinite(manualAmount) && manualAmount > 0) {
+        totalDetected += manualAmount;
+        analyzedDocumentCount += 1;
+        invoiceCount += 1;
+      } else {
+        invoiceCount += 1;
+        pendingDocumentCount += 1;
+      }
       continue;
     }
 
-    // PDFs without a usable XML and all images/tickets are manual.
+    // Ticket/image: never OCR/read automatically; only manual amount counts.
     const manualAmount = Number(file.manualAmount);
     if (Number.isFinite(manualAmount) && manualAmount > 0) {
       totalDetected += manualAmount;
       analyzedDocumentCount += 1;
-      if (isPdf(file)) invoiceCount += 1;
-      else if (file.analysis?.documentType === 'TICKET' || file.type.startsWith('image/')) ticketCount += 1;
-      else unclassifiedCount += 1;
-      continue;
-    }
-
-    if (isPdf(file)) {
-      invoiceCount += 1;
-      pendingDocumentCount += 1;
+      ticketCount += 1;
     } else {
       ticketCount += 1;
       pendingDocumentCount += 1;
     }
   }
 
-  for (const xml of files.filter(isXml)) {
-    const pairedPdf = primaryFiles.find((file) => isPdf(file) && baseSignature(file.name) === baseSignature(xml.name));
-    if (!pairedPdf) {
-      // XML alone is fiscal support but is not counted until its PDF is related.
-      unclassifiedCount += 1;
-      continue;
-    }
-    if (xml.analysis?.status !== 'DETECTADO') {
-      errorCount += xml.analysis?.status === 'ERROR' ? 1 : 0;
-    }
-  }
-
   return {
     totalDetected: Number(totalDetected.toFixed(2)),
-    primaryDocumentCount: primaryFiles.length,
+    primaryDocumentCount: primaryFiles.length + uniqueXmls.length,
     analyzedDocumentCount,
     pendingDocumentCount,
     withoutTotalCount,

@@ -2160,7 +2160,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                         </span>
                       </h4>
                       <p className="text-[11px] text-amber-800">
-                        Los archivos <strong>.xml</strong> son complementos fiscales del comprobante y <strong>no representan un gasto por sí mismos (Importe: N/A)</strong>. Asócialos a una partida de gasto existente o crea una nueva partida.
+                        Los archivos <strong>.xml</strong> son complementos fiscales del comprobante. Su total fiscal sí se incluye en <strong>Total detectado de comprobantes</strong>, pero <strong>nunca modifica Total de Gastos ni crea una partida automáticamente</strong>. Puedes asociarlos a una partida existente o crear una nueva.
                       </p>
                     </div>
                   </div>
@@ -2275,7 +2275,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                     </span>
                   </h4>
                   <p className="text-[11px] text-indigo-800 mt-0.5">
-                    Las facturas se relacionan por nombre entre PDF y XML. Solo el XML determina el total; PDF e imágenes se capturan manualmente cuando no existe un XML utilizable.
+                    Las facturas se relacionan por nombre entre PDF y XML. Cada XML CFDI válido suma al Total detectado; el PDF nunca se lee ni duplica ese importe. PDF sin XML e imágenes/tickets usan captura manual.
                   </p>
                 </div>
                 <div className="text-right">
@@ -2427,7 +2427,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                                       XML sin total utilizable
                                     </div>
                                   )}
-                                  <div className="text-[9px] text-slate-500">Este importe se suma al <strong>Total detectado de comprobantes</strong> únicamente cuando existe un PDF con el mismo nombre base.</div>
+                                  <div className="text-[9px] text-slate-500">Este importe se suma al <strong>Total detectado de comprobantes</strong> aunque todavía no exista el PDF. Si después se carga el PDF con el mismo nombre base, no se vuelve a sumar.</div>
                                 </div>
                               ) : isPdf && xmlHasTotal ? (
                                 <div className="space-y-1">

@@ -195,6 +195,16 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   const autosaveInFlightRef = useRef(false);
   const autosaveInFlightPromiseRef = useRef<Promise<void> | null>(null);
   const autosaveVersionRef = useRef(0);
+  const autosaveSnapshotRef = useRef<{
+    folio: string;
+    items: ExpenseItem[];
+    supportFiles: ExpenseFileAttachment[];
+    pendingFiscalXmls: ExpenseFileAttachment[];
+    originalExcelFile: ExpenseFileAttachment | null;
+    excelAuditSummary: ExcelAuditSummary | null;
+    notes: string;
+    refund?: ExpenseRefund;
+  } | null>(null);
   const [submittingFinal, setSubmittingFinal] = useState<boolean>(false);
   const [showConfirmFinalModal, setShowConfirmFinalModal] = useState<boolean>(false);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
@@ -1009,14 +1019,15 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   }
 
   // Persistencia automática del progreso de la comprobación.
-  // El guardado usa el endpoint existente, pero el backend consulta únicamente
-  // el historial de este folio y usa la ruta rápida de persistencia.
+  // Mantiene una copia de la última captura de estado para que, si otro cambio
+  // ocurre mientras el POST anterior está en vuelo, el reintento siempre use
+  // los datos más recientes y no una closure antigua.
   async function persistDraftSilently(): Promise<void> {
-    if (!loadedRequest || !canEdit || submittingFinal || finalizingAccounting) return;
+    const snapshot = autosaveSnapshotRef.current;
+    if (!snapshot || submittingFinal || finalizingAccounting) return;
 
-    // Si ya existe un guardado en curso, el cambio actual no se pierde:
-    // el effect incrementa autosaveVersionRef y el guardado en curso programa
-    // otro intento al terminar.
+    // Si ya existe un guardado en curso, el cambio actual no se pierde.
+    // El versionado del effect programará el siguiente guardado al terminar.
     if (autosaveInFlightRef.current) {
       return autosaveInFlightPromiseRef.current || undefined;
     }
@@ -1027,14 +1038,14 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          folio: loadedRequest.folio,
-          items,
-          supportFiles,
-          pendingFiscalXmls,
-          originalExcelFile: originalExcelFile || null,
-          excelAuditSummary: excelAuditSummary || null,
-          notes,
-          refund: refund || undefined,
+          folio: snapshot.folio,
+          items: snapshot.items,
+          supportFiles: snapshot.supportFiles,
+          pendingFiscalXmls: snapshot.pendingFiscalXmls,
+          originalExcelFile: snapshot.originalExcelFile || null,
+          excelAuditSummary: snapshot.excelAuditSummary || null,
+          notes: snapshot.notes,
+          refund: snapshot.refund || undefined,
         }),
       });
 
@@ -1054,12 +1065,13 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       autosaveInFlightRef.current = false;
       autosaveInFlightPromiseRef.current = null;
 
-      // Si hubo cambios mientras el POST estaba en curso, guarda el estado
-      // más reciente inmediatamente después de liberar la petición anterior.
+      const latestSnapshot = autosaveSnapshotRef.current;
+      const changedWhileSaving = autosaveVersionRef.current > versionAtStart;
+
+      // Si hubo cambios durante el POST, guarda la captura más reciente.
       if (
-        autosaveVersionRef.current > versionAtStart &&
-        loadedRequest &&
-        canEdit &&
+        changedWhileSaving &&
+        latestSnapshot?.folio === snapshot.folio &&
         !submittingFinal &&
         !finalizingAccounting
       ) {
@@ -1072,10 +1084,20 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   }
 
   // Cada cambio relevante se guarda automáticamente después de una breve pausa.
-  // La versión evita perder cambios que ocurran mientras otro autosave está en vuelo.
+  // La captura actual se actualiza antes de programar el timer.
   useEffect(() => {
     if (!loadedRequest || !canEdit || searching || submittingFinal || finalizingAccounting) return;
 
+    autosaveSnapshotRef.current = {
+      folio: loadedRequest.folio,
+      items,
+      supportFiles,
+      pendingFiscalXmls,
+      originalExcelFile,
+      excelAuditSummary,
+      notes,
+      refund: refund || undefined,
+    };
     autosaveVersionRef.current += 1;
 
     if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);

@@ -5,11 +5,13 @@ import { getRequest, updateRequest, recordAuditLog, listAuditLogs, getUserById, 
 import { getVerificationByFolio, getVerificationByFolioFast, saveVerification, saveVerificationFast, listAllVerifications, findFileById } from './expenseStorage.js';
 import { sendEmail, buildExpenseVerificationSubmittedEmailHtml } from './mailService.js';
 import { resolveBaseUrl } from './baseUrl.js';
-import type { User, ExpenseItem, ExpenseVerification } from '../src/types.js';
+import type { User, ExpenseItem, ExpenseVerification, ExpenseFileAttachment } from '../src/types.js';
 import { computeExpenseBalances } from '../src/utils/expenseCalculations.js';
 import { parseDimerExpenseExcel } from './excelImport.js';
 import { analyzeDocumentAmount } from './documentAmountAnalyzer.js';
 import { supabase } from './supabase.js';
+import { getDocumentUploadAuthorization, completeExpenseDocument, getExpenseDocument, setManualDocumentAmount, deleteExpenseDocument, signedDocumentUrl } from './documentService.js';
+import { downloadObject } from './documentStorage.js';
 
 
 const OFFICIAL_TEMPLATE_SOURCE_FOLIO = 'VIAT-2026-000002';
@@ -354,6 +356,96 @@ async function recoverAttachmentBinary(
 }
 
 export function registerExpenseRoutes(app: Express) {
+  app.post('/api/expenses/document-upload-url', async (req: Request, res: Response) => {
+    try {
+      const user = await getRequestUser(req);
+      if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
+      const folio = String(req.body?.folio || '').trim().toUpperCase();
+      const name = String(req.body?.name || '').trim();
+      const type = String(req.body?.type || '').trim().toLowerCase();
+      const size = Number(req.body?.size) || 0;
+      const sha256 = String(req.body?.sha256 || '').trim().toLowerCase();
+      if (!folio || !name) return res.status(400).json({ success: false, error: 'Folio y nombre de archivo son requeridos.' });
+      const request = await getRequest(folio);
+      if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
+      const privileged = userIsAdminOrFinanzas(user);
+      if (!privileged && !isOwner(request, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para adjuntar archivos en este folio.' });
+      if (request.status !== 'PAGADA' && request.status !== 'COMPROBADA') return res.status(400).json({ success: false, error: 'Solo se pueden adjuntar documentos en solicitudes pagadas. Estado actual: ' + request.status });
+      const result = await getDocumentUploadAuthorization({ requestId: request.id, folio, user, name, type, size, sha256 });
+      return res.json({ success: true, ...result });
+    } catch (error: any) {
+      console.error('[EXPENSE-DOCUMENT-UPLOAD-URL-ERROR]', error);
+      return res.status(400).json({ success: false, error: error?.message || 'No fue posible preparar la carga del documento.' });
+    }
+  });
+
+  app.post('/api/expenses/document-upload-complete', async (req: Request, res: Response) => {
+    try {
+      const user = await getRequestUser(req);
+      if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
+      const folio = String(req.body?.folio || '').trim().toUpperCase();
+      const documentId = String(req.body?.documentId || '').trim();
+      if (!folio || !documentId) return res.status(400).json({ success: false, error: 'Folio y documento son requeridos.' });
+      const request = await getRequest(folio);
+      if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
+      const privileged = userIsAdminOrFinanzas(user);
+      if (!privileged && !isOwner(request, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para confirmar este documento.' });
+      const document = await getExpenseDocument(documentId);
+      if (!document || document.folio !== folio || document.request_id !== request.id) return res.status(404).json({ success: false, error: 'Documento no encontrado en este expediente.' });
+      const file = await completeExpenseDocument(documentId);
+      await recordAuditLog({ requestId: request.id, userId: user.id, action: 'COMPROBACION_GASTOS_DOCUMENTO', details: { folio, documentId, document: file, storage: 'supabase' } });
+      return res.json({ success: true, file });
+    } catch (error: any) {
+      console.error('[EXPENSE-DOCUMENT-UPLOAD-COMPLETE-ERROR]', error);
+      return res.status(400).json({ success: false, error: error?.message || 'No fue posible confirmar el documento.' });
+    }
+  });
+
+  app.post('/api/expenses/document-manual-amount', async (req: Request, res: Response) => {
+    try {
+      const user = await getRequestUser(req);
+      if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
+      const folio = String(req.body?.folio || '').trim().toUpperCase();
+      const fileId = String(req.body?.fileId || '').trim();
+      const rawAmount = req.body?.amount;
+      const amount = rawAmount === null || rawAmount === '' || typeof rawAmount === 'undefined' ? null : Number(rawAmount);
+      if (!folio || !fileId) return res.status(400).json({ success: false, error: 'Folio y documento son requeridos.' });
+      if (amount !== null && (!Number.isFinite(amount) || amount < 0)) return res.status(400).json({ success: false, error: 'Importe manual inválido.' });
+      const request = await getRequest(folio);
+      if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
+      const privileged = userIsAdminOrFinanzas(user);
+      if (!privileged && !isOwner(request, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para modificar este documento.' });
+      const document = await getExpenseDocument(fileId);
+      if (!document || document.folio !== folio || document.request_id !== request.id || document.status === 'DELETED') return res.status(404).json({ success: false, error: 'Documento no encontrado en este expediente.' });
+      const file = await setManualDocumentAmount(fileId, amount);
+      return res.json({ success: true, file });
+    } catch (error: any) {
+      console.error('[EXPENSE-DOCUMENT-MANUAL-AMOUNT-ERROR]', error);
+      return res.status(400).json({ success: false, error: error?.message || 'No fue posible guardar el importe manual.' });
+    }
+  });
+
+  app.delete('/api/expenses/documents/:fileId', async (req: Request, res: Response) => {
+    try {
+      const user = await getRequestUser(req);
+      if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
+      const fileId = String(req.params.fileId || '').trim();
+      const folio = String(req.query.folio || '').trim().toUpperCase();
+      if (!fileId || !folio) return res.status(400).json({ success: false, error: 'Folio y documento son requeridos.' });
+      const request = await getRequest(folio);
+      if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
+      const privileged = userIsAdminOrFinanzas(user);
+      if (!privileged && !isOwner(request, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para retirar este documento.' });
+      const document = await getExpenseDocument(fileId);
+      if (!document || document.folio !== folio || document.request_id !== request.id) return res.status(404).json({ success: false, error: 'Documento no encontrado en este expediente.' });
+      await deleteExpenseDocument(fileId);
+      await recordAuditLog({ requestId: request.id, userId: user.id, action: 'COMPROBACION_GASTOS_DOCUMENTO_ELIMINADO', details: { folio, documentId: fileId, filename: document.original_name } });
+      return res.json({ success: true });
+    } catch (error: any) {
+      console.error('[EXPENSE-DOCUMENT-DELETE-ERROR]', error);
+      return res.status(400).json({ success: false, error: error?.message || 'No fue posible retirar el documento.' });
+    }
+  });
   app.post('/api/expenses/upload-file', async (req: Request, res: Response) => {
     try {
       const user = await getRequestUser(req);
@@ -905,6 +997,35 @@ export function registerExpenseRoutes(app: Express) {
       const fileId = String(req.params.fileId || '').trim();
       const requestedFolio = String(req.query.folio || '').trim().toUpperCase();
       if (!fileId) return res.status(400).json({ success: false, error: 'ID de archivo requerido' });
+
+      // V2: los comprobantes nuevos viven en Supabase Storage y ya no conservan
+      // el binario Base64 dentro de audit_logs. Servimos el objeto desde Storage
+      // después de validar exactamente el mismo permiso del expediente.
+      const v2Document = await getExpenseDocument(fileId);
+      if (v2Document) {
+        if (v2Document.status === 'DELETED') return res.status(404).json({ success: false, error: 'El documento ya no está disponible.' });
+        const v2Request = await getRequest(v2Document.folio);
+        if (!v2Request || v2Request.id !== v2Document.request_id) {
+          return res.status(404).json({ success: false, error: 'Solicitud relacionada no encontrada' });
+        }
+        if (!userIsAdminOrFinanzas(user) && !isOwner(v2Request, user)) {
+          return res.status(403).json({ success: false, error: 'No tienes permiso para consultar este archivo' });
+        }
+
+        const buffer = await downloadObject(v2Document.storage_path);
+        const inline = String(req.query.inline || '') === '1';
+        const safeName = String(v2Document.original_name || 'documento').replace(/[\r\n\"]/g, '_');
+        res.setHeader('Content-Type', v2Document.mime_type || 'application/octet-stream');
+        res.setHeader(
+          'Content-Disposition',
+          inline
+            ? `inline; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`
+            : `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`
+        );
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.setHeader('Content-Length', buffer.length);
+        return res.send(buffer);
+      }
 
       const request = requestedFolio ? await getRequest(requestedFolio) : null;
       const found = request

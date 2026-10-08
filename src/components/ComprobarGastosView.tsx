@@ -41,6 +41,7 @@ import {
   FileCheck,
   Printer
 } from 'lucide-react';
+import { uploadExpenseDocument } from '../utils/documentUpload.js';
 import type {
   User as UserType,
   TravelRequest,
@@ -132,6 +133,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   const [supportFiles, setSupportFiles] = useState<ExpenseFileAttachment[]>([]);
   const [previewModalFile, setPreviewModalFile] = useState<ExpenseFileAttachment | null>(null);
   const [previewModalUrl, setPreviewModalUrl] = useState<string | null>(null);
+  const documentAmountTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   useEffect(() => {
     let objectUrl: string | null = null;
@@ -398,13 +400,13 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   async function uploadItemAttachment(file: File, field: 'xml' | 'pdf' | 'ticket') {
     if (!loadedRequest) return;
 
-    const MAX_FILE_SIZE = 3 * 1024 * 1024;
+    const MAX_FILE_SIZE = 20 * 1024 * 1024;
     if (file.size <= 0) {
       setItemFormError('El archivo está vacío.');
       return;
     }
     if (file.size > MAX_FILE_SIZE) {
-      setItemFormError(`El archivo "${file.name}" supera el límite de 3 MB.`);
+      setItemFormError(`El archivo "${file.name}" supera el límite de 20 MB.`);
       return;
     }
 
@@ -420,46 +422,15 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     setItemFormError(null);
 
     try {
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(String(reader.result || ''));
-        reader.onerror = () => reject(new Error('No fue posible preparar el archivo para subirlo.'));
-        reader.readAsDataURL(file);
+      const attachment = await uploadExpenseDocument({
+        folio: loadedRequest.folio,
+        file,
       });
 
-      const res = await authFetch('/api/expenses/upload-file', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          folio: loadedRequest.folio,
-          name: file.name,
-          size: file.size,
-          type: file.type || (field === 'xml' ? 'application/xml' : field === 'pdf' ? 'application/pdf' : 'image/jpeg'),
-          dataUrl,
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.success || !data.file) {
-        const errorValue = data?.error;
-        const message =
-          typeof errorValue === 'string'
-            ? errorValue
-            : errorValue?.message || (typeof errorValue === 'object' ? JSON.stringify(errorValue) : 'No fue posible guardar el archivo.');
-        throw new Error(message);
+      if (attachment.analysis) {
+        // V2: el análisis fiscal, cuando aplica, viene del backend a partir del XML almacenado.
       }
 
-      const attachment: ExpenseFileAttachment = {
-        ...data.file,
-        dataUrl: '',
-        role: field === 'xml' ? 'COMPLEMENTO_FISCAL' : 'COMPROBANTE_PRINCIPAL',
-      };
-
-      if (field === 'xml' && data.analysis) {
-        attachment.analysis = data.analysis;
-      }
-
-      // También lo dejamos visible en Documentos de soporte sin duplicar el binario.
       setSupportFiles((prev) => {
         const index = prev.findIndex((f) => f.id === attachment.id);
         if (index >= 0) {
@@ -487,13 +458,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         setItemTicketFile(attachment);
       }
     } catch (error: any) {
-      const message =
-        typeof error?.message === 'string'
-          ? error.message
-          : typeof error === 'object'
-            ? JSON.stringify(error)
-            : 'No fue posible subir el archivo.';
-      setItemFormError(message);
+      setItemFormError(error?.message || 'No fue posible subir el archivo.');
     }
   }
 
@@ -738,7 +703,22 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     [items, supportFiles, pendingFiscalXmls]
   );
 
-  const documentsRequiringReview = useMemo(() => [], []);
+  const documentsRequiringReview = useMemo(() => {
+    const candidates = [...supportFiles, ...pendingFiscalXmls];
+    const seen = new Set<string>();
+
+    return candidates.filter((file) => {
+      if (seen.has(file.id)) return false;
+      seen.add(file.id);
+
+      // XML: una lectura con error o sin total requiere revisión.
+      if ((/\.xml$/i.test(file.name) || file.role === 'COMPLEMENTO_FISCAL') && file.analysis?.requiresReview) {
+        return true;
+      }
+
+      return false;
+    });
+  }, [supportFiles, pendingFiscalXmls]);
 
   // Normaliza el nombre base para detectar parejas (ej. factura_hotel.pdf y factura_hotel.xml)
   function getFileBaseSignature(filename: string): string {
@@ -832,16 +812,65 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
     setSupportFiles((prev) => prev.map(patch));
     setUploadedAttachmentsPool((prev) => prev.map(patch));
+    setPendingFiscalXmls((prev) => prev.map(patch));
     setItems((prev) => prev.map((item) => ({
       ...item,
       pdfFile: item.pdfFile?.id === fileId ? patch(item.pdfFile) : item.pdfFile,
       ticketFile: item.ticketFile?.id === fileId ? patch(item.ticketFile) : item.ticketFile,
     })));
+
+    const prior = documentAmountTimersRef.current[fileId];
+    if (prior) clearTimeout(prior);
+    const folio = loadedRequest?.folio || '';
+    documentAmountTimersRef.current[fileId] = setTimeout(async () => {
+      try {
+        const res = await authFetch('/api/expenses/document-manual-amount', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ folio, fileId, amount }),
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(typeof data?.error === 'string' ? data.error : 'No fue posible guardar el importe manual.');
+        }
+      } catch (error: any) {
+        console.warn('[DOCUMENT-MANUAL-AMOUNT] No se pudo guardar:', error?.message || error);
+      } finally {
+        delete documentAmountTimersRef.current[fileId];
+      }
+    }, 500);
   }
 
-  function handleRemoveSupportFile(fileId: string) {
+  async function handleRemoveSupportFile(fileId: string) {
+    const target = [...supportFiles, ...uploadedAttachmentsPool].find((f) => f.id === fileId);
+
+    if (target?.storagePath) {
+      try {
+        const res = await authFetch(`/api/expenses/documents/${encodeURIComponent(fileId)}?folio=${encodeURIComponent(loadedRequest?.folio || '')}`, {
+          method: 'DELETE',
+        });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(typeof data?.error === 'string' ? data.error : 'No fue posible retirar el documento.');
+        }
+      } catch (error: any) {
+        setActionError(error?.message || 'No fue posible retirar el documento.');
+        setActionSuccess(null);
+        return;
+      }
+    }
+
     setSupportFiles((prev) => prev.filter((f) => f.id !== fileId));
     setUploadedAttachmentsPool((prev) => prev.filter((f) => f.id !== fileId));
+    setPendingFiscalXmls((prev) => prev.filter((f) => f.id !== fileId));
+    setItems((prev) => prev.map((item) => ({
+      ...item,
+      xmlFile: item.xmlFile?.id === fileId ? undefined : item.xmlFile,
+      pdfFile: item.pdfFile?.id === fileId ? undefined : item.pdfFile,
+      ticketFile: item.ticketFile?.id === fileId ? undefined : item.ticketFile,
+    })));
+
+    setActionError(null);
     setActionSuccess('Documento retirado del expediente.');
   }
 
@@ -3410,8 +3439,8 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
       {/* MODAL: Carga Masiva de Comprobantes */}
       {showBulkUploaderModal && loadedRequest && (
-        <div className="fixed inset-0 z-[550] bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="w-full max-w-2xl my-6">
+        <div className="fixed inset-0 z-[550] bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-hidden">
+          <div className="w-full max-w-2xl max-h-[calc(100vh-2rem)] min-h-0">
             <BulkExpensesUploader
               folio={loadedRequest.folio}
               existingFileSignatures={new Set(uploadedAttachmentsPool.map(a => `${a.name}_${a.size}`))}

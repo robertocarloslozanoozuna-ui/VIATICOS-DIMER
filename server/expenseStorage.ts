@@ -167,7 +167,7 @@ async function syncWithSupabase(map: Map<string, ExpenseVerification>) {
       const verification = extractVerification(row.details, row);
       if (!verification) continue;
       const existing = map.get(verification.folio);
-      const incomingTime = new Date(verification.updatedAt || row.created_at || 0).getTime();
+      const incomingTime = new Date(verification.updatedAt || (row as any).created_at || row.createdAt || 0).getTime();
       const existingTime = new Date(existing?.updatedAt || 0).getTime();
       if (!existing || incomingTime >= existingTime) {
         // Los autosaves y cierres guardan metadata-only. Conservamos los

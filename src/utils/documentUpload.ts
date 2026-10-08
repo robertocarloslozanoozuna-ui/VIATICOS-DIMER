@@ -1,13 +1,6 @@
 import { authFetch } from './apiHelper.js';
 import type { ExpenseFileAttachment } from '../types.js';
 
-function toBase64(value: string): string {
-  const bytes = new TextEncoder().encode(value);
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
 function encodeMetadata(value: string): string {
   const bytes = new TextEncoder().encode(String(value || ''));
   let binary = '';

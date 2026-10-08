@@ -126,7 +126,6 @@ export async function getDocumentUploadAuthorization(input: {
     path: upload.path,
     token: upload.token,
     mimeType: mime,
-    mimeType: mime,
     uploadEndpoint: `${getStorageProjectBaseUrl()}/storage/v1/upload/resumable`,
   };
 }

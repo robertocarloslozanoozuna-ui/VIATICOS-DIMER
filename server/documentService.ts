@@ -91,8 +91,21 @@ export async function getDocumentUploadAuthorization(input: {
   }
 
   const duplicate = await findDocumentByHash(input.requestId, input.sha256);
-  if (duplicate) {
+  if (duplicate && duplicate.status !== 'UPLOADING') {
     return { duplicate: true, documentId: duplicate.id, attachment: attachmentFromDocument(duplicate) };
+  }
+
+  if (duplicate && duplicate.status === 'UPLOADING') {
+    const upload = await createSignedUpload(duplicate.storage_path);
+    return {
+      duplicate: false,
+      resume: true,
+      documentId: duplicate.id,
+      path: duplicate.storage_path,
+      token: upload.token,
+      mimeType: duplicate.mime_type,
+      uploadEndpoint: `${getStorageProjectBaseUrl()}/storage/v1/upload/resumable`,
+    };
   }
 
   const documentId = `doc_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
@@ -156,6 +169,35 @@ export async function completeExpenseDocument(documentId: string): Promise<Retur
   }
 
   const reading = await readCfdiXml(await downloadObject(doc.storage_path));
+  const { data: priorAttempts, error: priorAttemptsError } = await supabase
+    .from('expense_document_readings')
+    .select('attempt_number')
+    .eq('document_id', doc.id)
+    .order('attempt_number', { ascending: false })
+    .limit(1);
+  if (priorAttemptsError) throw new Error(priorAttemptsError.message || 'No fue posible consultar el historial de lectura.');
+
+  const { error: readingInsertError } = await supabase
+    .from('expense_document_readings')
+    .insert({
+      id: `read_${Date.now()}_${crypto.randomBytes(5).toString('hex')}`,
+      document_id: doc.id,
+      attempt_number: Number(priorAttempts?.[0]?.attempt_number || 0) + 1,
+      engine: 'CFDI_XML',
+      status: reading.status,
+      amount: reading.amount,
+      currency: reading.currency,
+      confidence: reading.status === 'READ' ? 'ALTA' : 'BAJA',
+      error: reading.error || null,
+      raw_result: {
+        uuid: reading.uuid,
+        rfcEmisor: reading.rfcEmisor,
+        nombreEmisor: reading.nombreEmisor,
+        subtotal: reading.subtotal,
+      },
+    });
+  if (readingInsertError) throw new Error(readingInsertError.message || 'No fue posible guardar el historial de lectura.');
+
   if (reading.status === 'READ') {
     const updated = await updateDocument(doc.id, {
       status: 'READ',

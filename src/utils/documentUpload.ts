@@ -1,140 +1,12 @@
 import { authFetch } from './apiHelper.js';
 import type { ExpenseFileAttachment } from '../types.js';
 
-function encodeMetadata(value: string): string {
-  const bytes = new TextEncoder().encode(String(value || ''));
-  let binary = '';
-  for (const byte of bytes) binary += String.fromCharCode(byte);
-  return btoa(binary);
-}
-
 async function computeSha256(file: File): Promise<string> {
   const buffer = await file.arrayBuffer();
   const digest = await crypto.subtle.digest('SHA-256', buffer);
-  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-class SignedTusJwsError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'SignedTusJwsError';
-  }
-}
-
-async function startTusUpload(
-  endpoint: string,
-  token: string,
-  bucketName: string,
-  objectName: string,
-  file: File,
-  onProgress?: (percent: number) => void,
-) {
-  const metadata = [
-    ['bucketName', bucketName],
-    ['objectName', objectName],
-    ['contentType', file.type || 'application/octet-stream'],
-    ['cacheControl', '3600'],
-  ].map(([key, value]) => `${key} ${encodeMetadata(value)}`).join(',');
-
-  const init = await fetch(endpoint, {
-    method: 'POST',
-    headers: {
-      'Tus-Resumable': '1.0.0',
-      'Upload-Length': String(file.size),
-      'Upload-Metadata': metadata,
-      'x-signature': token,
-    },
-  });
-
-  if (!init.ok) {
-    const body = await init.text().catch(() => '');
-    if (init.status === 403 && /Invalid Compact JWS|invalid_compact_jws/i.test(body)) {
-      throw new SignedTusJwsError('Supabase rechazó el token firmado para la carga TUS.');
-    }
-    throw new Error(body || `No fue posible iniciar la carga (HTTP ${init.status}).`);
-  }
-
-  const location = init.headers.get('Location');
-  if (!location) throw new Error('Storage no devolvió la ubicación de carga.');
-  let uploadUrl: string;
-  try {
-    uploadUrl = new URL(location, endpoint).toString();
-  } catch {
-    uploadUrl = location;
-  }
-
-  const chunkSize = 6 * 1024 * 1024;
-  let offset = Number(init.headers.get('Upload-Offset') || 0);
-
-  const readOffset = async () => {
-    const response = await fetch(uploadUrl, {
-      method: 'HEAD',
-      headers: { 'Tus-Resumable': '1.0.0', 'x-signature': token },
-    });
-    if (!response.ok) return offset;
-    return Number(response.headers.get('Upload-Offset') || offset);
-  };
-
-  while (offset < file.size) {
-    const chunk = file.slice(offset, Math.min(offset + chunkSize, file.size));
-    let uploaded = false;
-    let lastError = '';
-
-    for (let attempt = 1; attempt <= 4 && !uploaded; attempt += 1) {
-      try {
-        const response = await fetch(uploadUrl, {
-          method: 'PATCH',
-          headers: {
-            'Tus-Resumable': '1.0.0',
-            'Upload-Offset': String(offset),
-            'Content-Type': 'application/offset+octet-stream',
-            'x-signature': token,
-          },
-          body: chunk,
-        });
-
-        if (response.ok) {
-          const nextOffset = Number(response.headers.get('Upload-Offset'));
-          if (!Number.isFinite(nextOffset) || nextOffset < offset) {
-            throw new Error('Storage devolvió un offset de carga inválido.');
-          }
-          offset = nextOffset;
-          uploaded = true;
-          onProgress?.(Math.round((offset / file.size) * 100));
-          break;
-        }
-
-        const body = await response.text().catch(() => '');
-        if (response.status === 403 && /Invalid Compact JWS|invalid_compact_jws/i.test(body)) {
-          throw new SignedTusJwsError('Supabase rechazó el token firmado para la carga TUS.');
-        }
-        lastError = body || `HTTP ${response.status}`;
-        const recovered = await readOffset();
-        if (Number.isFinite(recovered) && recovered >= offset && recovered <= file.size) {
-          offset = recovered;
-          if (offset >= file.size) {
-            uploaded = true;
-            break;
-          }
-        }
-      } catch (error: any) {
-        lastError = error?.message || 'Error de red durante la carga.';
-        const recovered = await readOffset();
-        if (Number.isFinite(recovered) && recovered >= offset && recovered <= file.size) {
-          offset = recovered;
-          if (offset >= file.size) {
-            uploaded = true;
-            break;
-          }
-        }
-      }
-      await new Promise((resolve) => setTimeout(resolve, attempt * 600));
-    }
-
-    if (!uploaded) throw new Error(lastError || 'No fue posible completar la carga del documento.');
-  }
-
-  onProgress?.(100);
+  return Array.from(new Uint8Array(digest))
+    .map((byte) => byte.toString(16).padStart(2, '0'))
+    .join('');
 }
 
 function uploadWithSignedUrl(
@@ -148,6 +20,7 @@ function uploadWithSignedUrl(
     xhr.open('PUT', signedUrl, true);
     xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
     xhr.setRequestHeader('Cache-Control', 'max-age=3600');
+    xhr.setRequestHeader('x-upsert', 'true');
 
     xhr.upload.onprogress = (event) => {
       if (event.lengthComputable) {
@@ -161,7 +34,13 @@ function uploadWithSignedUrl(
         resolve();
         return;
       }
+
       const body = xhr.responseText || ('HTTP ' + xhr.status);
+      if (xhr.status === 403 && /Invalid Compact JWS|ERR_JWS_INVALID|invalid_compact_jws/i.test(body)) {
+        reject(new Error('Supabase rechazó la URL firmada de carga. La firma generada por Storage no pudo validarse.'));
+        return;
+      }
+
       reject(new Error(body || ('No fue posible cargar el documento (HTTP ' + xhr.status + ').')));
     };
 
@@ -177,6 +56,7 @@ export async function uploadExpenseDocument(input: {
   onProgress?: (percent: number) => void;
 }): Promise<ExpenseFileAttachment> {
   const sha256 = await computeSha256(input.file);
+
   const initResponse = await authFetch('/api/expenses/document-upload-url', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -191,12 +71,20 @@ export async function uploadExpenseDocument(input: {
 
   const initData = await initResponse.json().catch(() => ({}));
   if (!initResponse.ok || !initData.success) {
-    throw new Error(typeof initData.error === 'string' ? initData.error : 'No fue posible iniciar la carga del documento.');
+    throw new Error(
+      typeof initData.error === 'string'
+        ? initData.error
+        : 'No fue posible iniciar la carga del documento.',
+    );
   }
 
-  if (initData.duplicate && initData.file) {
+  if (initData.duplicate && initData.attachment) {
     input.onProgress?.(100);
-    return { ...initData.file, dataUrl: '' };
+    return { ...initData.attachment, dataUrl: '' };
+  }
+
+  if (!initData.signedUrl) {
+    throw new Error('Storage no devolvió una URL firmada válida para cargar el documento.');
   }
 
   const preparedFile = new File([input.file], input.file.name, {
@@ -204,30 +92,28 @@ export async function uploadExpenseDocument(input: {
     lastModified: input.file.lastModified,
   });
 
-  try {
-    await startTusUpload(
-      String(initData.uploadEndpoint || ''),
-      String(initData.token || ''),
-      'viaticos-comprobantes',
-      String(initData.path || ''),
-      preparedFile,
-      input.onProgress,
-    );
-  } catch (error: any) {
-    // Compatibilidad defensiva: si Storage rechaza el JWS firmado en TUS,
-    // usamos la URL firmada estándar que Supabase también genera para este archivo.
-    if (!(error instanceof SignedTusJwsError) || !initData.signedUrl) throw error;
-    await uploadWithSignedUrl(String(initData.signedUrl), preparedFile, input.onProgress);
-  }
+  await uploadWithSignedUrl(
+    String(initData.signedUrl),
+    preparedFile,
+    input.onProgress,
+  );
 
   const complete = await authFetch('/api/expenses/document-upload-complete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ folio: input.folio, documentId: initData.documentId }),
+    body: JSON.stringify({
+      folio: input.folio,
+      documentId: initData.documentId,
+    }),
   });
+
   const completeData = await complete.json().catch(() => ({}));
   if (!complete.ok || !completeData.success || !completeData.file) {
-    throw new Error(typeof completeData.error === 'string' ? completeData.error : 'El archivo subió, pero no pudo confirmarse en el expediente.');
+    throw new Error(
+      typeof completeData.error === 'string'
+        ? completeData.error
+        : 'El archivo subió, pero no pudo confirmarse en el expediente.',
+    );
   }
 
   return { ...completeData.file, dataUrl: '' };

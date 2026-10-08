@@ -149,7 +149,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
     (async () => {
       try {
-        const res = await authFetch(`/api/expenses/file/${encodeURIComponent(previewModalFile.id)}?inline=1`);
+        const res = await authFetch(`/api/expenses/file/${encodeURIComponent(previewModalFile.id)}?inline=1&folio=${encodeURIComponent(loadedRequest?.folio || '')}`);
         if (!res.ok) throw new Error('No fue posible cargar la vista previa.');
         const blob = await res.blob();
         objectUrl = URL.createObjectURL(blob);
@@ -1144,7 +1144,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         return;
       }
 
-      const res = await authFetch(`/api/expenses/file/${encodeURIComponent(file.id)}?inline=0`);
+      const res = await authFetch(`/api/expenses/file/${encodeURIComponent(file.id)}?inline=0&folio=${encodeURIComponent(loadedRequest?.folio || '')}`);
       if (!res.ok) throw new Error('No fue posible descargar el archivo.');
       const blob = await res.blob();
       const objectUrl = URL.createObjectURL(blob);

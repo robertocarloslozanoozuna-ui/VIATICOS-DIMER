@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import type { User, ExpenseFileAttachment } from '../src/types.js';
+import { supabase } from './supabase.js';
 import {
   buildDocumentStoragePath,
   createSignedDownloadUrl,

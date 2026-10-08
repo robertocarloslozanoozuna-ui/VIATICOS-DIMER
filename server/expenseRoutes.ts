@@ -903,15 +903,20 @@ export function registerExpenseRoutes(app: Express) {
       const user = await getRequestUser(req);
       if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
       const fileId = String(req.params.fileId || '').trim();
+      const requestedFolio = String(req.query.folio || '').trim().toUpperCase();
       if (!fileId) return res.status(400).json({ success: false, error: 'ID de archivo requerido' });
-      const found = await findFileById(fileId);
+
+      const request = requestedFolio ? await getRequest(requestedFolio) : null;
+      const found = request
+        ? await findFileById(fileId, request.id)
+        : await findFileById(fileId);
       if (!found) return res.status(404).json({ success: false, error: 'Archivo no encontrado' });
 
-      const request = await getRequest(found.folio);
-      if (!request) return res.status(404).json({ success: false, error: 'Solicitud relacionada no encontrada' });
-      if (!userIsAdminOrFinanzas(user) && !isOwner(request, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para consultar este archivo' });
+      const resolvedRequest = request || await getRequest(found.folio);
+      if (!resolvedRequest) return res.status(404).json({ success: false, error: 'Solicitud relacionada no encontrada' });
+      if (!userIsAdminOrFinanzas(user) && !isOwner(resolvedRequest, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para consultar este archivo' });
 
-      const file = await recoverAttachmentBinary(request.id, fileId, found.file);
+      const file = await recoverAttachmentBinary(resolvedRequest.id, fileId, found.file);
       const matches = String(file.dataUrl || '').match(/^data:([^;]+);base64,(.+)$/);
       if (!matches) {
         return res.status(404).json({

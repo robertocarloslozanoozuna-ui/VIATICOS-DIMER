@@ -805,7 +805,9 @@ export function registerExpenseRoutes(app: Express) {
       else if (request.status === 'CANCELADA') statusNotice = 'La solicitud está cancelada.';
       else statusNotice = `La solicitud se encuentra en estado "${request.status}". Solo se pueden comprobar solicitudes pagadas.`;
 
-      const verification = await getVerificationByFolio(request.folio);
+      // Consulta únicamente el historial de este folio. La ruta anterior
+      // sincronizaba todos los autosaves del proyecto en cada búsqueda.
+      const verification = await getVerificationByFolioFast(request.folio, request.id);
       return res.json({ success: true, request, verification, canEdit, statusNotice, userRole: user.role, isOwner: owner, isPrivileged: privileged });
     } catch (e: any) {
       console.error('[EXPENSE-SEARCH-ERROR]', e);
@@ -858,7 +860,9 @@ export function registerExpenseRoutes(app: Express) {
       }
 
       const totals = calculateTotals(request, items, refund);
-      const existing = await getVerificationByFolio(folio);
+      // El autosave no necesita sincronizar toda la tabla audit_logs. Solo
+      // requiere conocer la última versión de este expediente.
+      const existing = await getVerificationByFolioFast(folio, request.id);
       const now = new Date().toISOString();
       const verification: ExpenseVerification = {
         id: existing?.id || `exp_${Date.now()}`,
@@ -875,7 +879,9 @@ export function registerExpenseRoutes(app: Express) {
         refund: refund !== undefined ? refund : existing?.refund,
         submittedAt: existing?.submittedAt, updatedAt: now, createdAt: existing?.createdAt || now,
       };
-      const saved = await saveVerification(verification);
+      // Guarda en memoria/cache sin disparar una sincronización global.
+      // La persistencia durable continúa siendo el audit log que se inserta abajo.
+      const saved = saveVerificationFast(verification);
       if (request.status === 'COMPROBADA' && privileged) {
         await updateRequest(request.id, {
           status: 'PAGADA',

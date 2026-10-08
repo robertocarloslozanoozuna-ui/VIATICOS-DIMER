@@ -304,9 +304,9 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
   };
 
   return (
-    <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden">
+    <div className="bg-white rounded-xl shadow-lg border border-slate-200 overflow-hidden max-h-[calc(100vh-2rem)] flex flex-col">
       {/* Header */}
-      <div className="p-4 bg-gradient-to-r from-teal-900 to-slate-900 text-white flex items-center justify-between">
+      <div className="p-4 bg-gradient-to-r from-teal-900 to-slate-900 text-white flex items-center justify-between shrink-0">
         <div className="flex items-center gap-2.5">
           <div className="p-2 bg-teal-500/20 rounded-lg text-teal-300">
             <Upload className="w-5 h-5" />
@@ -330,7 +330,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
         )}
       </div>
 
-      <div className="p-5 space-y-4">
+      <div className="p-5 space-y-4 min-h-0 overflow-y-auto">
         {/* Dropzone Area */}
         <div
           onDragOver={handleDragOver}

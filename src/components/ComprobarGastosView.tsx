@@ -843,15 +843,6 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
   async function handleRemoveSupportFile(fileId: string) {
     const target = [...supportFiles, ...uploadedAttachmentsPool].find((f) => f.id === fileId);
-    setSupportFiles((prev) => prev.filter((f) => f.id !== fileId));
-    setUploadedAttachmentsPool((prev) => prev.filter((f) => f.id !== fileId));
-    setPendingFiscalXmls((prev) => prev.filter((f) => f.id !== fileId));
-    setItems((prev) => prev.map((item) => ({
-      ...item,
-      xmlFile: item.xmlFile?.id === fileId ? undefined : item.xmlFile,
-      pdfFile: item.pdfFile?.id === fileId ? undefined : item.pdfFile,
-      ticketFile: item.ticketFile?.id === fileId ? undefined : item.ticketFile,
-    })));
 
     if (target?.storagePath) {
       try {
@@ -864,9 +855,22 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         }
       } catch (error: any) {
         setActionError(error?.message || 'No fue posible retirar el documento.');
+        setActionSuccess(null);
+        return;
       }
     }
 
+    setSupportFiles((prev) => prev.filter((f) => f.id !== fileId));
+    setUploadedAttachmentsPool((prev) => prev.filter((f) => f.id !== fileId));
+    setPendingFiscalXmls((prev) => prev.filter((f) => f.id !== fileId));
+    setItems((prev) => prev.map((item) => ({
+      ...item,
+      xmlFile: item.xmlFile?.id === fileId ? undefined : item.xmlFile,
+      pdfFile: item.pdfFile?.id === fileId ? undefined : item.pdfFile,
+      ticketFile: item.ticketFile?.id === fileId ? undefined : item.ticketFile,
+    })));
+
+    setActionError(null);
     setActionSuccess('Documento retirado del expediente.');
   }
 

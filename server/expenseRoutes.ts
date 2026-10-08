@@ -3,6 +3,8 @@ import crypto from 'crypto';
 import { deflateRawSync, inflateRawSync } from 'zlib';
 import { getRequest, updateRequest, recordAuditLog, listAuditLogs, getUserById, hasPermission } from './db.js';
 import { getVerificationByFolio, getVerificationByFolioFast, saveVerification, saveVerificationFast, listAllVerifications, findFileById } from './expenseStorage.js';
+import { listDocumentsByRequestId } from './documentRepository.js';
+import { documentAttachmentFromRecord } from './documentService.js';
 import { sendEmail, buildExpenseVerificationSubmittedEmailHtml } from './mailService.js';
 import { resolveBaseUrl } from './baseUrl.js';
 import type { User, ExpenseItem, ExpenseVerification, ExpenseFileAttachment } from '../src/types.js';
@@ -908,6 +910,15 @@ export function registerExpenseRoutes(app: Express) {
       // requiere conocer la última versión de este expediente.
       const existing = await getVerificationByFolioFast(folio, request.id);
       const now = new Date().toISOString();
+
+      // Los documentos V2 son datos canónicos del expediente. El navegador puede
+      // enviar una captura desfasada (por ejemplo al cambiar de submenú justo
+      // después de una carga), pero nunca debe poder hacer que un documento ya
+      // confirmado en Storage desaparezca del borrador.
+      const canonicalStorageFiles = (await listDocumentsByRequestId(request.id))
+        .map(documentAttachmentFromRecord)
+        .filter((file) => file.id && file.documentStatus !== 'DELETED');
+
       const verification: ExpenseVerification = {
         id: existing?.id || `exp_${Date.now()}`,
         requestId: request.id, folio: request.folio,
@@ -916,7 +927,13 @@ export function registerExpenseRoutes(app: Express) {
         userEmail: existing?.userEmail || request.user?.email || user.email,
         department: request.department || user.department, destination: request.destination,
         status: 'BORRADOR', items, ...totals, notes,
-        supportFiles: mergeSupportFiles(existing?.supportFiles, Array.isArray(req.body.supportFiles) ? req.body.supportFiles : undefined),
+        supportFiles: mergeSupportFiles(
+          [
+            ...(existing?.supportFiles || []),
+            ...canonicalStorageFiles,
+          ],
+          Array.isArray(req.body.supportFiles) ? req.body.supportFiles : undefined,
+        ),
         pendingFiscalXmls: Array.isArray(req.body.pendingFiscalXmls) ? req.body.pendingFiscalXmls : (existing?.pendingFiscalXmls || []),
         originalExcelFile: Object.prototype.hasOwnProperty.call(req.body, 'originalExcelFile') ? (req.body.originalExcelFile || undefined) : existing?.originalExcelFile,
         excelAuditSummary: Object.prototype.hasOwnProperty.call(req.body, 'excelAuditSummary') ? (req.body.excelAuditSummary || undefined) : existing?.excelAuditSummary,

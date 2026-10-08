@@ -15,7 +15,7 @@ import {
   Plus
 } from 'lucide-react';
 import type { ExpenseDocumentAnalysis, ExpenseFileAttachment } from '../types.js';
-import { authFetch } from '../utils/apiHelper.js';
+import { uploadExpenseDocument } from '../utils/documentUpload.js';
 
 export interface FileQueueItem {
   id: string;
@@ -49,7 +49,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
   const [globalNotice, setGlobalNotice] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const MAX_FILE_SIZE = 3 * 1024 * 1024; // 3 MB (margen para el payload JSON/base64 de Vercel)
+  const MAX_FILE_SIZE = 20 * 1024 * 1024; // Los comprobantes V2 se suben directamente a Supabase Storage.
   const ALLOWED_EXTS = ['pdf', 'xml', 'jpg', 'jpeg', 'png', 'webp'];
 
   function validateFile(file: File): { valid: boolean; error?: string } {
@@ -57,7 +57,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
       return { valid: false, error: 'El archivo está vacío (0 bytes).' };
     }
     if (file.size > MAX_FILE_SIZE) {
-      return { valid: false, error: `Excede el límite de 3 MB (${(file.size / (1024 * 1024)).toFixed(1)} MB).` };
+      return { valid: false, error: `Excede el límite de 20 MB (${(file.size / (1024 * 1024)).toFixed(1)} MB).` };
     }
     const ext = file.name.toLowerCase().split('.').pop() || '';
     if (!ALLOWED_EXTS.includes(ext)) {
@@ -151,73 +151,39 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
   }
 
   async function uploadIndividualFile(item: FileQueueItem): Promise<ExpenseFileAttachment | null> {
-    return new Promise((resolve) => {
-      const reader = new FileReader();
-
+    try {
       setQueue((prev) =>
-        prev.map((q) => (q.id === item.id ? { ...q, status: 'SUBIENDO', progress: 20 } : q))
+        prev.map((q) => (q.id === item.id ? { ...q, status: 'SUBIENDO', progress: 5 } : q))
       );
 
-      reader.onload = async () => {
-        const dataUrl = reader.result as string;
-        try {
+      const attachment = await uploadExpenseDocument({
+        folio: String(folio || ''),
+        file: item.file,
+        onProgress: (percent) => {
           setQueue((prev) =>
-            prev.map((q) => (q.id === item.id ? { ...q, progress: 55 } : q))
+            prev.map((q) => (q.id === item.id ? { ...q, progress: Math.max(5, percent) } : q))
           );
+        },
+      });
 
-          // El servidor valida, analiza y guarda el documento en una sola llamada.
-          // La respuesta ya no devuelve el base64, solo metadata + análisis.
-          const res = await authFetch('/api/expenses/upload-file', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              name: item.name,
-              size: item.size,
-              type: item.type,
-              dataUrl,
-              folio,
-            }),
-          });
-
-          const data = await res.json();
-          if (!res.ok || !data.success || !data.file) {
-            throw new Error(readableError(data.error, 'No fue posible guardar el archivo en el expediente.'));
-          }
-
-          const attachment: ExpenseFileAttachment = data.file;
-          setQueue((prev) =>
-            prev.map((q) =>
-              q.id === item.id
-                ? { ...q, status: 'SUBIDO', progress: 100, attachment, error: undefined }
-                : q
-            )
-          );
-          resolve(attachment);
-        } catch (err: any) {
-          setQueue((prev) =>
-            prev.map((q) =>
-              q.id === item.id
-                ? { ...q, status: 'ERROR', progress: 0, error: readableError(err, 'Error al procesar archivo') }
-                : q
-            )
-          );
-          resolve(null);
-        }
-      };
-
-      reader.onerror = () => {
-        setQueue((prev) =>
-          prev.map((q) =>
-            q.id === item.id
-              ? { ...q, status: 'ERROR', progress: 0, error: 'Error al leer el archivo desde el dispositivo' }
-              : q
-          )
-        );
-        resolve(null);
-      };
-
-      reader.readAsDataURL(item.file);
-    });
+      setQueue((prev) =>
+        prev.map((q) =>
+          q.id === item.id
+            ? { ...q, status: 'SUBIDO', progress: 100, attachment, error: undefined }
+            : q
+        )
+      );
+      return attachment;
+    } catch (err: any) {
+      setQueue((prev) =>
+        prev.map((q) =>
+          q.id === item.id
+            ? { ...q, status: 'ERROR', progress: 0, error: readableError(err, 'Error al subir el archivo') }
+            : q
+        )
+      );
+      return null;
+    }
   }
 
   async function retryItem(item: FileQueueItem) {
@@ -394,7 +360,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
             Haz clic para seleccionar documentos o arrástralos aquí
           </p>
           <p className="text-[11px] text-slate-500 mt-1">
-            Formatos admitidos: <strong>PDF, XML (CFDI), JPG, JPEG, PNG, WEBP</strong> &bull; Límite: 3 MB por archivo
+            Formatos admitidos: <strong>PDF, XML (CFDI), JPG, JPEG, PNG, WEBP</strong> &bull; Límite: 20 MB por archivo
           </p>
 
           <div className="mt-3 flex items-center justify-center gap-2 text-[10px] text-slate-400 font-mono">

@@ -963,6 +963,24 @@ export function registerExpenseRoutes(app: Express) {
         .map(documentAttachmentFromRecord)
         .filter((file) => file.id && file.documentStatus !== 'DELETED');
 
+      const incomingSupportFiles = Array.isArray(req.body.supportFiles)
+        ? req.body.supportFiles as ExpenseFileAttachment[]
+        : [];
+
+      // Para V2, Storage es la única autoridad sobre documentos persistidos.
+      // La captura del navegador solo puede aportar soportes legacy sin storagePath;
+      // nunca puede eliminar ni sustituir documentos que ya existen en
+      // expense_documents.
+      const legacyStoredSupportFiles = (existing?.supportFiles || []).filter((file) => !file?.storagePath);
+      const legacyIncomingSupportFiles = incomingSupportFiles.filter((file) => !file?.storagePath);
+      const mergedSupportFiles = [
+        ...legacyIncomingSupportFiles,
+        ...legacyStoredSupportFiles.filter(
+          (stored) => !legacyIncomingSupportFiles.some((incoming) => incoming.id === stored.id),
+        ),
+        ...canonicalStorageFiles,
+      ];
+
       const verification: ExpenseVerification = {
         id: existing?.id || `exp_${Date.now()}`,
         requestId: request.id, folio: request.folio,
@@ -971,13 +989,7 @@ export function registerExpenseRoutes(app: Express) {
         userEmail: existing?.userEmail || request.user?.email || user.email,
         department: request.department || user.department, destination: request.destination,
         status: 'BORRADOR', items, ...totals, notes,
-        supportFiles: mergeSupportFiles(
-          [
-            ...(existing?.supportFiles || []),
-            ...canonicalStorageFiles,
-          ],
-          Array.isArray(req.body.supportFiles) ? req.body.supportFiles : undefined,
-        ),
+        supportFiles: mergedSupportFiles,
         pendingFiscalXmls: Array.isArray(req.body.pendingFiscalXmls) ? req.body.pendingFiscalXmls : (existing?.pendingFiscalXmls || []),
         originalExcelFile: Object.prototype.hasOwnProperty.call(req.body, 'originalExcelFile') ? (req.body.originalExcelFile || undefined) : existing?.originalExcelFile,
         excelAuditSummary: Object.prototype.hasOwnProperty.call(req.body, 'excelAuditSummary') ? (req.body.excelAuditSummary || undefined) : existing?.excelAuditSummary,

@@ -104,6 +104,7 @@ export async function getDocumentUploadAuthorization(input: {
       documentId: duplicate.id,
       path: duplicate.storage_path,
       token: upload.token,
+      signedUrl: upload.signedUrl,
       mimeType: duplicate.mime_type,
       uploadEndpoint: `${getStorageProjectBaseUrl()}/storage/v1/upload/resumable`,
     };
@@ -138,6 +139,7 @@ export async function getDocumentUploadAuthorization(input: {
     documentId: document.id,
     path: upload.path,
     token: upload.token,
+    signedUrl: upload.signedUrl,
     mimeType: mime,
     uploadEndpoint: `${getStorageProjectBaseUrl()}/storage/v1/upload/resumable`,
   };
@@ -233,7 +235,7 @@ export async function completeExpenseDocument(documentId: string): Promise<Retur
 
   const updated = await updateDocument(doc.id, {
     status: reading.status === 'SIN_TOTAL' ? 'MANUAL_REQUIRED' : 'READ_ERROR',
-    reading_status: reading.status === 'SIN_TOTAL' ? 'ERROR' : 'ERROR',
+    reading_status: 'ERROR',
     reading_source: 'CFDI_XML',
     detected_amount: null,
     currency: reading.currency,

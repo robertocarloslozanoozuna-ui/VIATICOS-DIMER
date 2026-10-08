@@ -19,9 +19,44 @@ function decodeXmlEntities(value: string): string {
     .replace(/&gt;/g, '>');
 }
 
+function decodeXmlBuffer(buffer: Buffer): string {
+  if (buffer.length >= 2 && buffer[0] === 0xff && buffer[1] === 0xfe) {
+    return buffer.subarray(2).toString('utf16le');
+  }
+  if (buffer.length >= 2 && buffer[0] === 0xfe && buffer[1] === 0xff) {
+    const swapped = Buffer.alloc(buffer.length - 2);
+    for (let i = 2; i + 1 < buffer.length; i += 2) {
+      swapped[i - 2] = buffer[i + 1];
+      swapped[i - 1] = buffer[i];
+    }
+    return swapped.toString('utf16le');
+  }
+
+  const sample = buffer.subarray(0, Math.min(buffer.length, 512));
+  let zeroEven = 0;
+  let zeroOdd = 0;
+  for (let i = 0; i < sample.length; i += 1) {
+    if (sample[i] === 0) {
+      if (i % 2 === 0) zeroEven += 1;
+      else zeroOdd += 1;
+    }
+  }
+  if (zeroOdd > 10 && zeroOdd > zeroEven * 2) return buffer.toString('utf16le');
+  if (zeroEven > 10 && zeroEven > zeroOdd * 2) {
+    const swapped = Buffer.alloc(buffer.length);
+    for (let i = 0; i + 1 < buffer.length; i += 2) {
+      swapped[i] = buffer[i + 1];
+      swapped[i + 1] = buffer[i];
+    }
+    return swapped.toString('utf16le');
+  }
+
+  return buffer.toString('utf8').replace(/^\uFEFF/, '');
+}
+
 function xmlAttribute(tag: string, attribute: string): string | null {
   const match = String(tag || '').match(
-    new RegExp(`${attribute}=["']([^"']*)["']`, 'i')
+    new RegExp(`${attribute}\\s*=\\s*["']([^"']*)["']`, 'i')
   );
   return match ? decodeXmlEntities(match[1]).trim() || null : null;
 }
@@ -44,7 +79,7 @@ function analyzeXml(dataUrl: string): ExpenseDocumentAnalysis {
   const analyzedAt = new Date().toISOString();
 
   try {
-    const xml = Buffer.from(base64Payload(dataUrl), 'base64').toString('utf8');
+    const xml = decodeXmlBuffer(Buffer.from(base64Payload(dataUrl), 'base64'));
     const comprobante = xml.match(/<(?:cfdi:)?Comprobante\b[^>]*>/i)?.[0] || '';
 
     if (!comprobante) {

@@ -2,7 +2,7 @@ import type { Express, Request, Response } from 'express';
 import crypto from 'crypto';
 import { deflateRawSync, inflateRawSync } from 'zlib';
 import { getRequest, updateRequest, recordAuditLog, listAuditLogs, getUserById, hasPermission } from './db.js';
-import { getVerificationByFolio, saveVerification, listAllVerifications, findFileById } from './expenseStorage.js';
+import { getVerificationByFolio, saveVerification, saveVerificationFast, listAllVerifications, findFileById } from './expenseStorage.js';
 import { sendEmail, buildExpenseVerificationSubmittedEmailHtml } from './mailService.js';
 import { resolveBaseUrl } from './baseUrl.js';
 import type { User, ExpenseItem, ExpenseVerification } from '../src/types.js';
@@ -489,7 +489,7 @@ export function registerExpenseRoutes(app: Express) {
       verification.supportFiles = [...existingSupportFiles, attachment];
       verification.updatedAt = now;
 
-      const saved = await saveVerification(verification);
+      const saved = saveVerificationFast(verification);
       await recordAuditLog({
         requestId: request.id,
         userId: user.id,

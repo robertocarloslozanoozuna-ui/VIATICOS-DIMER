@@ -193,6 +193,8 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   const [savingDraft, setSavingDraft] = useState<boolean>(false);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const autosaveInFlightRef = useRef(false);
+  const autosaveInFlightPromiseRef = useRef<Promise<void> | null>(null);
+  const autosaveVersionRef = useRef(0);
   const [submittingFinal, setSubmittingFinal] = useState<boolean>(false);
   const [showConfirmFinalModal, setShowConfirmFinalModal] = useState<boolean>(false);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
@@ -297,6 +299,16 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     if (!folioToFind) {
       setSearchError('Ingresa un folio oficial (ej. VIAT-2026-000001).');
       return;
+    }
+
+    // Antes de cambiar de folio, fuerza el último autosave pendiente para que
+    // el cambio de pantalla no cancele el timer y pierda la captura reciente.
+    if (loadedRequest && canEdit && !submittingFinal && !finalizingAccounting) {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+      await persistDraftSilently();
     }
 
     setSearching(true);
@@ -997,12 +1009,20 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   }
 
   // Persistencia automática del progreso de la comprobación.
-  // Usa el mismo endpoint de borrador existente, pero sin interrumpir al usuario.
-  async function persistDraftSilently() {
-    if (!loadedRequest || !canEdit || submittingFinal || finalizingAccounting || autosaveInFlightRef.current) return;
+  // El guardado usa el endpoint existente, pero el backend consulta únicamente
+  // el historial de este folio y usa la ruta rápida de persistencia.
+  async function persistDraftSilently(): Promise<void> {
+    if (!loadedRequest || !canEdit || submittingFinal || finalizingAccounting) return;
 
-    autosaveInFlightRef.current = true;
-    try {
+    // Si ya existe un guardado en curso, el cambio actual no se pierde:
+    // el effect incrementa autosaveVersionRef y el guardado en curso programa
+    // otro intento al terminar.
+    if (autosaveInFlightRef.current) {
+      return autosaveInFlightPromiseRef.current || undefined;
+    }
+
+    const versionAtStart = autosaveVersionRef.current;
+    const promise = (async () => {
       const res = await authFetch('/api/expenses/draft', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1021,17 +1041,42 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       if (!res.ok) {
         console.warn('[AUTOSAVE-DRAFT] No se pudo guardar el progreso:', res.status);
       }
+    })();
+
+    autosaveInFlightRef.current = true;
+    autosaveInFlightPromiseRef.current = promise;
+
+    try {
+      await promise;
     } catch (e) {
       console.warn('[AUTOSAVE-DRAFT] Error al guardar progreso:', e);
     } finally {
       autosaveInFlightRef.current = false;
+      autosaveInFlightPromiseRef.current = null;
+
+      // Si hubo cambios mientras el POST estaba en curso, guarda el estado
+      // más reciente inmediatamente después de liberar la petición anterior.
+      if (
+        autosaveVersionRef.current > versionAtStart &&
+        loadedRequest &&
+        canEdit &&
+        !submittingFinal &&
+        !finalizingAccounting
+      ) {
+        if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = setTimeout(() => {
+          void persistDraftSilently();
+        }, 250);
+      }
     }
   }
 
   // Cada cambio relevante se guarda automáticamente después de una breve pausa.
-  // Evita peticiones por cada tecla y permite salir a otro menú sin perder el avance.
+  // La versión evita perder cambios que ocurran mientras otro autosave está en vuelo.
   useEffect(() => {
     if (!loadedRequest || !canEdit || searching || submittingFinal || finalizingAccounting) return;
+
+    autosaveVersionRef.current += 1;
 
     if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
     autosaveTimerRef.current = setTimeout(() => {

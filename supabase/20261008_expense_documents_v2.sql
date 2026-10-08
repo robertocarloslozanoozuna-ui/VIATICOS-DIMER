@@ -103,17 +103,3 @@ set
   public = false,
   file_size_limit = excluded.file_size_limit,
   allowed_mime_types = excluded.allowed_mime_types;
-
-create table if not exists public.expense_document_readings (
-  id text primary key,
-  document_id text not null references public.expense_documents(id) on delete cascade,
-  attempt_number integer not null check (attempt_number > 0),
-  engine text not null,
-  status text not null,
-  amount numeric null,
-  currency text null,
-  confidence text null,
-  error text null,
-  raw_result jsonb null,
-  created_at timestamptz not null default now()
-);

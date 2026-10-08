@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import type { User } from '../src/types.js';
+import type { User, ExpenseFileAttachment } from '../src/types.js';
 import {
   buildDocumentStoragePath,
   createSignedDownloadUrl,
@@ -27,7 +27,7 @@ export function sha256Hex(input: ArrayBuffer | Buffer | Uint8Array): string {
   return crypto.createHash('sha256').update(Buffer.from(input as any)).digest('hex');
 }
 
-function attachmentFromDocument(doc: ExpenseDocumentRecord) {
+function attachmentFromDocument(doc: ExpenseDocumentRecord): ExpenseFileAttachment {
   return {
     id: doc.id,
     name: doc.original_name,
@@ -125,6 +125,8 @@ export async function getDocumentUploadAuthorization(input: {
     documentId: document.id,
     path: upload.path,
     token: upload.token,
+    mimeType: mime,
+    mimeType: mime,
     uploadEndpoint: `${getStorageProjectBaseUrl()}/storage/v1/upload/resumable`,
   };
 }

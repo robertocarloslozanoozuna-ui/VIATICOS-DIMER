@@ -14,6 +14,13 @@ async function computeSha256(file: File): Promise<string> {
   return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
+class SignedTusJwsError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SignedTusJwsError';
+  }
+}
+
 async function startTusUpload(
   endpoint: string,
   token: string,
@@ -41,6 +48,9 @@ async function startTusUpload(
 
   if (!init.ok) {
     const body = await init.text().catch(() => '');
+    if (init.status === 403 && /Invalid Compact JWS|invalid_compact_jws/i.test(body)) {
+      throw new SignedTusJwsError('Supabase rechazó el token firmado para la carga TUS.');
+    }
     throw new Error(body || `No fue posible iniciar la carga (HTTP ${init.status}).`);
   }
 
@@ -94,7 +104,11 @@ async function startTusUpload(
           break;
         }
 
-        lastError = await response.text().catch(() => '') || `HTTP ${response.status}`;
+        const body = await response.text().catch(() => '');
+        if (response.status === 403 && /Invalid Compact JWS|invalid_compact_jws/i.test(body)) {
+          throw new SignedTusJwsError('Supabase rechazó el token firmado para la carga TUS.');
+        }
+        lastError = body || `HTTP ${response.status}`;
         const recovered = await readOffset();
         if (Number.isFinite(recovered) && recovered >= offset && recovered <= file.size) {
           offset = recovered;
@@ -121,6 +135,40 @@ async function startTusUpload(
   }
 
   onProgress?.(100);
+}
+
+function uploadWithSignedUrl(
+  signedUrl: string,
+  file: File,
+  onProgress?: (percent: number) => void,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+
+    xhr.open('PUT', signedUrl, true);
+    xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
+    xhr.setRequestHeader('Cache-Control', 'max-age=3600');
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) {
+        onProgress?.(Math.round((event.loaded / event.total) * 100));
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        onProgress?.(100);
+        resolve();
+        return;
+      }
+      const body = xhr.responseText || ('HTTP ' + xhr.status);
+      reject(new Error(body || ('No fue posible cargar el documento (HTTP ' + xhr.status + ').')));
+    };
+
+    xhr.onerror = () => reject(new Error('Error de red durante la carga directa del documento.'));
+    xhr.onabort = () => reject(new Error('La carga del documento fue cancelada.'));
+    xhr.send(file);
+  });
 }
 
 export async function uploadExpenseDocument(input: {
@@ -151,17 +199,26 @@ export async function uploadExpenseDocument(input: {
     return { ...initData.file, dataUrl: '' };
   }
 
-  await startTusUpload(
-    String(initData.uploadEndpoint || ''),
-    String(initData.token || ''),
-    'viaticos-comprobantes',
-    String(initData.path || ''),
-    new File([input.file], input.file.name, {
-      type: String(initData.mimeType || input.file.type || 'application/octet-stream'),
-      lastModified: input.file.lastModified,
-    }),
-    input.onProgress,
-  );
+  const preparedFile = new File([input.file], input.file.name, {
+    type: String(initData.mimeType || input.file.type || 'application/octet-stream'),
+    lastModified: input.file.lastModified,
+  });
+
+  try {
+    await startTusUpload(
+      String(initData.uploadEndpoint || ''),
+      String(initData.token || ''),
+      'viaticos-comprobantes',
+      String(initData.path || ''),
+      preparedFile,
+      input.onProgress,
+    );
+  } catch (error: any) {
+    // Compatibilidad defensiva: si Storage rechaza el JWS firmado en TUS,
+    // usamos la URL firmada estándar que Supabase también genera para este archivo.
+    if (!(error instanceof SignedTusJwsError) || !initData.signedUrl) throw error;
+    await uploadWithSignedUrl(String(initData.signedUrl), preparedFile, input.onProgress);
+  }
 
   const complete = await authFetch('/api/expenses/document-upload-complete', {
     method: 'POST',

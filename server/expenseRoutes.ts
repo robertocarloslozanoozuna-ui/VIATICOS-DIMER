@@ -11,6 +11,7 @@ import { parseDimerExpenseExcel } from './excelImport.js';
 import { analyzeDocumentAmount } from './documentAmountAnalyzer.js';
 import { supabase } from './supabase.js';
 import { getDocumentUploadAuthorization, completeExpenseDocument, getExpenseDocument, setManualDocumentAmount, deleteExpenseDocument, signedDocumentUrl } from './documentService.js';
+import { downloadObject } from './documentStorage.js';
 
 
 const OFFICIAL_TEMPLATE_SOURCE_FOLIO = 'VIAT-2026-000002';
@@ -996,6 +997,35 @@ export function registerExpenseRoutes(app: Express) {
       const fileId = String(req.params.fileId || '').trim();
       const requestedFolio = String(req.query.folio || '').trim().toUpperCase();
       if (!fileId) return res.status(400).json({ success: false, error: 'ID de archivo requerido' });
+
+      // V2: los comprobantes nuevos viven en Supabase Storage y ya no conservan
+      // el binario Base64 dentro de audit_logs. Servimos el objeto desde Storage
+      // después de validar exactamente el mismo permiso del expediente.
+      const v2Document = await getExpenseDocument(fileId);
+      if (v2Document) {
+        if (v2Document.status === 'DELETED') return res.status(404).json({ success: false, error: 'El documento ya no está disponible.' });
+        const v2Request = await getRequest(v2Document.folio);
+        if (!v2Request || v2Request.id !== v2Document.request_id) {
+          return res.status(404).json({ success: false, error: 'Solicitud relacionada no encontrada' });
+        }
+        if (!userIsAdminOrFinanzas(user) && !isOwner(v2Request, user)) {
+          return res.status(403).json({ success: false, error: 'No tienes permiso para consultar este archivo' });
+        }
+
+        const buffer = await downloadObject(v2Document.storage_path);
+        const inline = String(req.query.inline || '') === '1';
+        const safeName = String(v2Document.original_name || 'documento').replace(/[\r\n\"]/g, '_');
+        res.setHeader('Content-Type', v2Document.mime_type || 'application/octet-stream');
+        res.setHeader(
+          'Content-Disposition',
+          inline
+            ? `inline; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`
+            : `attachment; filename="${safeName}"; filename*=UTF-8''${encodeURIComponent(safeName)}`
+        );
+        res.setHeader('Cache-Control', 'private, no-store');
+        res.setHeader('Content-Length', buffer.length);
+        return res.send(buffer);
+      }
 
       const request = requestedFolio ? await getRequest(requestedFolio) : null;
       const found = request

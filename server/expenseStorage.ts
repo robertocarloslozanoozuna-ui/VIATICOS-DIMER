@@ -154,7 +154,7 @@ function extractVerification(details: any, row: any): ExpenseVerification | null
     pendingFiscalXmls: Array.isArray(source.pendingFiscalXmls) ? source.pendingFiscalXmls : [],
     originalExcelFile: source.originalExcelFile,
     excelAuditSummary: source.excelAuditSummary,
-    submittedAt: source.submittedAt, updatedAt: source.updatedAt || row.created_at, createdAt: source.createdAt || row.created_at,
+    submittedAt: source.submittedAt, updatedAt: source.updatedAt || (row as any).created_at, createdAt: source.createdAt || (row as any).created_at,
   };
   return mergeAttachmentBinaryIntoVerification(verification, details?.documentAttachment);
 }
@@ -212,7 +212,7 @@ export async function getVerificationByFolioFast(folio: string, requestId: strin
     for (const row of logs) {
       const verification = extractVerification(row.details, row);
       if (!verification || verification.folio !== key) continue;
-      const incomingTime = new Date(verification.updatedAt || row.created_at || 0).getTime();
+      const incomingTime = new Date(verification.updatedAt || (row as any).created_at || 0).getTime();
       const latestTime = new Date(latest?.updatedAt || 0).getTime();
       if (!latest || incomingTime >= latestTime) {
         latest = mergeExistingAttachmentBinaries(verification, latest);

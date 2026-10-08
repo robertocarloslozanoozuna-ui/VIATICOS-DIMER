@@ -455,6 +455,7 @@ export function registerExpenseRoutes(app: Express) {
         uploadedAt: new Date().toISOString(),
         role: ext === 'xml' ? 'COMPLEMENTO_FISCAL' : 'COMPROBANTE_PRINCIPAL',
         ...(analysis ? { analysis } : {}),
+        ...(analysis?.detail?.uuid ? { uuid: analysis.detail.uuid } : {}),
       };
 
       const totals = existing

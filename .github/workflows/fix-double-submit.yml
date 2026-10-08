@@ -1,12 +1,11 @@
 name: Fix duplicate request submissions
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
 jobs:
   patch:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Add submit guard

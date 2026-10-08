@@ -312,7 +312,6 @@ export const ExcelExpensesTable: React.FC<ExcelExpensesTableProps> = ({
                 <th className="py-2.5 px-2.5 text-center w-10">#</th>
                 <th className="py-2.5 px-3 min-w-[180px]">Comprobante / Archivo</th>
                 <th className="py-2.5 px-3 min-w-[130px]">Fecha de Gasto</th>
-                <th className="py-2.5 px-3 min-w-[190px]">Categoría Contable</th>
                 <th className="py-2.5 px-3 min-w-[200px]">Concepto / Descripción</th>
                 <th className="py-2.5 px-3 min-w-[160px]">Forma de Pago</th>
                 <th className="py-2.5 px-3 text-right min-w-[120px]">Importe (MXN)</th>
@@ -322,7 +321,7 @@ export const ExcelExpensesTable: React.FC<ExcelExpensesTableProps> = ({
             <tbody className="divide-y divide-slate-200">
               {items.length === 0 ? (
                 <tr>
-                  <td colSpan={canEdit ? 8 : 7} className="p-8 text-center text-slate-400">
+                  <td colSpan={canEdit ? 7 : 6} className="p-8 text-center text-slate-400">
                     <p className="font-semibold text-xs text-slate-600">No hay filas de gastos capturadas</p>
                     <p className="text-[11px] text-slate-400 mt-1">
                       {canEdit
@@ -475,40 +474,6 @@ export const ExcelExpensesTable: React.FC<ExcelExpensesTableProps> = ({
                           <span className="font-semibold text-slate-800 text-xs">
                             {item.expenseDate || 'N/D'}
                           </span>
-                        )}
-                      </td>
-
-                      {/* Categoría Contable */}
-                      <td className="py-2 px-3">
-                        {canEdit ? (
-                          <select
-                            value={item.category || ''}
-                            onChange={(e) =>
-                              handleUpdateField(idx, 'category', e.target.value as ExpenseCategoryType)
-                            }
-                            className="w-full text-xs py-1 px-2 border border-slate-300 rounded focus:ring-1 focus:ring-teal-500 focus:outline-none bg-white font-medium"
-                          >
-                            <option value="" disabled>
-                              Selecciona categoría...
-                            </option>
-                            {CATEGORY_OPTIONS.map((cat) => (
-                              <option key={cat.value} value={cat.value}>
-                                {cat.iconDesc} {cat.label}
-                              </option>
-                            ))}
-                          </select>
-                        ) : (
-                          <div>
-                            {item.category ? (
-                              <span className="font-bold text-slate-800 text-xs">
-                                {CATEGORY_OPTIONS.find((c) => c.value === item.category)?.label || item.category}
-                              </span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 text-slate-600 border border-slate-200">
-                                Sin clasificación histórica
-                              </span>
-                            )}
-                          </div>
                         )}
                       </td>
 

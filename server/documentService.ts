@@ -144,10 +144,24 @@ export async function getDocumentUploadAuthorization(input: {
 }
 
 function getStorageProjectBaseUrl(): string {
-  const raw = String(process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
-  const match = raw.match(/^https?:\/\/([^/]+)$/i);
-  if (!match) throw new Error('SUPABASE_URL no está configurada correctamente.');
+  // Reutiliza exactamente la misma SUPABASE_URL del cliente backend.
+  // Algunas configuraciones antiguas pueden traer /rest/v1; se normaliza antes de derivar Storage.
+  const raw = String(process.env.SUPABASE_URL || '').trim()
+    .replace(/\/+$/, '')
+    .replace(/\/rest\/v1\/?$/i, '');
+
+  const match = raw.match(/^https?:\/\/([^/\s]+)$/i);
+  if (!match) {
+    throw new Error(
+      'SUPABASE_URL no está configurada correctamente. Debe ser la URL del proyecto, por ejemplo https://njrzitgmnmakungxpmeo.supabase.co',
+    );
+  }
+
   const host = match[1].replace(/\.supabase\.co$/i, '');
+  if (!host) {
+    throw new Error('No fue posible determinar el proyecto Supabase desde SUPABASE_URL.');
+  }
+
   return `https://${host}.storage.supabase.co`;
 }
 

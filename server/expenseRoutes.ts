@@ -5,7 +5,7 @@ import { getRequest, updateRequest, recordAuditLog, listAuditLogs, getUserById, 
 import { getVerificationByFolio, getVerificationByFolioFast, saveVerification, saveVerificationFast, listAllVerifications, findFileById } from './expenseStorage.js';
 import { sendEmail, buildExpenseVerificationSubmittedEmailHtml } from './mailService.js';
 import { resolveBaseUrl } from './baseUrl.js';
-import type { User, ExpenseItem, ExpenseVerification } from '../src/types.js';
+import type { User, ExpenseItem, ExpenseVerification, ExpenseFileAttachment } from '../src/types.js';
 import { computeExpenseBalances } from '../src/utils/expenseCalculations.js';
 import { parseDimerExpenseExcel } from './excelImport.js';
 import { analyzeDocumentAmount } from './documentAmountAnalyzer.js';

@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import type { ExpenseVerification, ExpenseFileAttachment } from '../src/types.js';
 import { supabase } from './supabase.js';
+import { listAuditLogs } from './db.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const VERIFICATIONS_FILE = path.join(DATA_DIR, 'expenses_verifications.json');
@@ -164,6 +165,29 @@ export function saveVerificationFast(v: ExpenseVerification): ExpenseVerificatio
   verificationsCache.set(cleanFolio, cloned);
   persistToDisk(verificationsCache);
   return JSON.parse(JSON.stringify(cloned));
+}
+
+export async function getVerificationByFolioFast(folio: string, requestId: string): Promise<ExpenseVerification | null> {
+  const key = String(folio || '').toUpperCase().trim();
+  if (!key || !requestId) return null;
+
+  try {
+    const logs = await listAuditLogs(requestId);
+    let latest: ExpenseVerification | null = null;
+    for (const row of logs) {
+      const verification = extractVerification(row.details, row);
+      if (!verification || verification.folio !== key) continue;
+      const incomingTime = new Date(verification.updatedAt || row.created_at || 0).getTime();
+      const latestTime = new Date(latest?.updatedAt || 0).getTime();
+      if (!latest || incomingTime >= latestTime) {
+        latest = mergeExistingAttachmentBinaries(verification, latest);
+      }
+    }
+    return latest ? JSON.parse(JSON.stringify(latest)) : null;
+  } catch (error) {
+    console.warn('[EXPENSE-STORAGE] Fast folio lookup warning:', error);
+    return null;
+  }
 }
 
 export async function getVerificationByFolio(folio: string): Promise<ExpenseVerification | null> {

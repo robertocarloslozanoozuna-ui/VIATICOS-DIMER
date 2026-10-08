@@ -703,7 +703,22 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     [items, supportFiles, pendingFiscalXmls]
   );
 
-  const documentsRequiringReview = useMemo(() => [], []);
+  const documentsRequiringReview = useMemo(() => {
+    const candidates = [...supportFiles, ...pendingFiscalXmls];
+    const seen = new Set<string>();
+
+    return candidates.filter((file) => {
+      if (seen.has(file.id)) return false;
+      seen.add(file.id);
+
+      // XML: una lectura con error o sin total requiere revisión.
+      if ((/\.xml$/i.test(file.name) || file.role === 'COMPLEMENTO_FISCAL') && file.analysis?.requiresReview) {
+        return true;
+      }
+
+      return false;
+    });
+  }, [supportFiles, pendingFiscalXmls]);
 
   // Normaliza el nombre base para detectar parejas (ej. factura_hotel.pdf y factura_hotel.xml)
   function getFileBaseSignature(filename: string): string {
@@ -806,12 +821,13 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
     const prior = documentAmountTimersRef.current[fileId];
     if (prior) clearTimeout(prior);
+    const folio = loadedRequest?.folio || '';
     documentAmountTimersRef.current[fileId] = setTimeout(async () => {
       try {
         const res = await authFetch('/api/expenses/document-manual-amount', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ folio: loadedRequest?.folio, fileId, amount }),
+          body: JSON.stringify({ folio, fileId, amount }),
         });
         if (!res.ok) {
           const data = await res.json().catch(() => ({}));

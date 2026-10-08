@@ -274,8 +274,8 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
 
     setProcessing(false);
 
-    const failedCount = queue.filter((q) => q.status === 'ERROR').length;
-    if (failedCount === 0 && remainingCount === 0) {
+    const failedCount = pendingItems.length - processedCount;
+    if (failedCount === 0 && processedCount === pendingItems.length) {
       setGlobalNotice(
         `¡${processedCount} documento(s) subido(s) y guardado(s) exitosamente en el expediente!`
       );
@@ -290,7 +290,6 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
 
   const pendingCount = queue.filter((q) => q.status === 'LISTO' || q.status === 'PENDIENTE' || q.status === 'ERROR').length;
   const errorCount = queue.filter((q) => q.status === 'ERROR').length;
-  const remainingCount = queue.filter((q) => q.status !== 'SUBIDO').length;
   const uploadedCount = queue.filter((q) => q.status === 'SUBIDO').length;
 
   // El XML CFDI sí forma parte del Total detectado en comprobantes.

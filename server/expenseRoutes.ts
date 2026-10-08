@@ -852,7 +852,51 @@ export function registerExpenseRoutes(app: Express) {
 
       // Consulta únicamente el historial de este folio. La ruta anterior
       // sincronizaba todos los autosaves del proyecto en cada búsqueda.
-      const verification = await getVerificationByFolioFast(request.folio, request.id);
+      let verification = await getVerificationByFolioFast(request.folio, request.id);
+
+      // Los documentos V2 tienen como fuente canónica expense_documents + Storage.
+      // La pantalla nunca debe depender de que el último autosave haya conservado
+      // correctamente supportFiles. Incluso si el borrador está vacío o desfasado,
+      // los documentos vigentes del expediente se vuelven a incorporar aquí.
+      const canonicalStorageFiles = (await listDocumentsByRequestId(request.id))
+        .map(documentAttachmentFromRecord)
+        .filter((file) => file.id && file.documentStatus !== 'DELETED');
+
+      if (canonicalStorageFiles.length > 0) {
+        if (!verification) {
+          const now = new Date().toISOString();
+          const totals = calculateTotals(request, [], undefined);
+          verification = {
+            id: `exp_${Date.now()}`,
+            requestId: request.id,
+            folio: request.folio,
+            userId: request.userId || user.id,
+            userName: request.requesterName || user.name,
+            userEmail: request.user?.email || user.email,
+            department: request.department || user.department,
+            destination: request.destination,
+            status: 'BORRADOR',
+            items: [],
+            ...totals,
+            notes: '',
+            supportFiles: canonicalStorageFiles,
+            pendingFiscalXmls: [],
+            createdAt: now,
+            updatedAt: now,
+          } as ExpenseVerification;
+        } else {
+          verification = {
+            ...verification,
+            // Canonical primero; el snapshot conserva además cualquier soporte
+            // legado que no pertenezca a Storage.
+            supportFiles: mergeSupportFiles(
+              [...(verification.supportFiles || []), ...canonicalStorageFiles],
+              verification.supportFiles || [],
+            ),
+          };
+        }
+      }
+
       res.setHeader('Cache-Control', 'private, no-store, max-age=0');
       return res.json({ success: true, request, verification, canEdit, statusNotice, userRole: user.role, isOwner: owner, isPrivileged: privileged });
     } catch (e: any) {

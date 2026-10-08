@@ -206,8 +206,40 @@ export async function saveVerification(v: ExpenseVerification): Promise<ExpenseV
 export async function listAllVerifications(): Promise<ExpenseVerification[]> {
   return Array.from((await getCache()).values()).map(v => JSON.parse(JSON.stringify(v)));
 }
-export async function findFileById(fileId: string): Promise<{ file: ExpenseFileAttachment; folio: string; concept: string } | null> {
+export async function findFileById(fileId: string, requestId?: string): Promise<{ file: ExpenseFileAttachment; folio: string; concept: string } | null> {
   const key = String(fileId || '').trim(); if (!key) return null;
+
+  // Preview/download should never need to synchronize every audit record in the
+  // project. When the request is known, inspect only that request's audit trail.
+  if (requestId) {
+    try {
+      const logs = await listAuditLogs(requestId);
+      for (const row of logs) {
+        const details: any = row.details || {};
+        const verification: any = details.verification;
+        const candidates: any[] = [
+          details.documentAttachment,
+          ...(Array.isArray(verification?.supportFiles) ? verification.supportFiles : []),
+          ...(Array.isArray(verification?.pendingFiscalXmls) ? verification.pendingFiscalXmls : []),
+          ...(Array.isArray(verification?.items) ? verification.items.flatMap((item: any) => [item?.xmlFile, item?.pdfFile, item?.ticketFile]) : []),
+          verification?.originalExcelFile,
+          verification?.refund?.receiptFile,
+          verification?.refund?.signedReceiptFile,
+        ];
+        const file = candidates.find((candidate: any) => candidate?.id === key);
+        if (file) {
+          return {
+            file,
+            folio: String(verification?.folio || details.documentAttachment?.folio || '').toUpperCase().trim(),
+            concept: 'Soporte documental',
+          };
+        }
+      }
+    } catch (error) {
+      console.warn('[EXPENSE-STORAGE] Fast file lookup warning:', error);
+    }
+  }
+
   for (const v of (await getCache()).values()) {
     for (const item of v.items || []) {
       if (item.xmlFile?.id === key) return { file: item.xmlFile, folio: v.folio, concept: item.concept };

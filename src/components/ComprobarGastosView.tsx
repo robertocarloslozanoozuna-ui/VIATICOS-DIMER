@@ -3439,8 +3439,8 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
       {/* MODAL: Carga Masiva de Comprobantes */}
       {showBulkUploaderModal && loadedRequest && (
-        <div className="fixed inset-0 z-[550] bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
-          <div className="w-full max-w-2xl my-6">
+        <div className="fixed inset-0 z-[550] bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-hidden">
+          <div className="w-full max-w-2xl max-h-[calc(100vh-2rem)] min-h-0">
             <BulkExpensesUploader
               folio={loadedRequest.folio}
               existingFileSignatures={new Set(uploadedAttachmentsPool.map(a => `${a.name}_${a.size}`))}

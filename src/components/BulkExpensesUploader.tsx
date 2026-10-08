@@ -483,7 +483,7 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
                 type="button"
                 onClick={handleStartUploadAll}
                 disabled={processing || pendingCount === 0}
-                className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-teal-600 hover:bg-teal-700 disabled:bg-slate-300 disabled:hover:bg-slate-300 disabled:cursor-not-allowed disabled:opacity-100 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer"
               >
                 {processing ? (
                   <>
@@ -493,7 +493,11 @@ export const BulkExpensesUploader: React.FC<BulkExpensesUploaderProps> = ({
                 ) : (
                   <>
                     <Upload className="w-3.5 h-3.5" />
-                    <span>Subir {pendingCount} Archivo(s) al Expediente</span>
+                    <span>
+                      {pendingCount > 0
+                        ? `Subir ${pendingCount} Archivo(s) al Expediente`
+                        : 'Todos los documentos ya fueron subidos'}
+                    </span>
                   </>
                 )}
               </button>

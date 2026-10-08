@@ -3,6 +3,8 @@ import path from 'path';
 import type { ExpenseVerification, ExpenseFileAttachment } from '../src/types.js';
 import { supabase } from './supabase.js';
 import { listAuditLogs } from './db.js';
+import { listDocumentsByRequestId, findDocumentById } from './documentRepository.js';
+import { documentAttachmentFromRecord } from './documentService.js';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const VERIFICATIONS_FILE = path.join(DATA_DIR, 'expenses_verifications.json');
@@ -104,6 +106,39 @@ function mergeExistingAttachmentBinaries(incoming: ExpenseVerification, existing
   return incoming;
 }
 
+async function hydrateStorageDocuments(verification: ExpenseVerification): Promise<ExpenseVerification> {
+  if (!verification?.requestId) return verification;
+
+  try {
+    const records = await listDocumentsByRequestId(verification.requestId);
+    if (!records.length) return verification;
+
+    const canonical = records.map(documentAttachmentFromRecord);
+    const canonicalIds = new Set(canonical.map((file) => file.id));
+    const legacy = Array.isArray(verification.supportFiles) ? verification.supportFiles : [];
+
+    const mergedCanonical = canonical.map((file) => {
+      const old = legacy.find((candidate) => candidate?.id === file.id);
+      if (!old) return file;
+      return {
+        ...old,
+        ...file,
+        manualAmount: file.manualAmount ?? old.manualAmount ?? null,
+        analysis: file.analysis || old.analysis,
+        dataUrl: '',
+      };
+    });
+
+    const legacyOnly = legacy.filter((file) => !canonicalIds.has(file.id) || !file.storagePath);
+    verification.supportFiles = [...legacyOnly, ...mergedCanonical];
+  } catch (error) {
+    // Mantener compatibilidad mientras el esquema V2 no exista o durante una transición.
+    console.warn('[EXPENSE-STORAGE] V2 document hydration unavailable:', (error as any)?.message || error);
+  }
+
+  return verification;
+}
+
 function extractVerification(details: any, row: any): ExpenseVerification | null {
   const source = details?.verification || details;
   if (!source?.folio || !Array.isArray(source.items)) return null;
@@ -183,7 +218,7 @@ export async function getVerificationByFolioFast(folio: string, requestId: strin
         latest = mergeExistingAttachmentBinaries(verification, latest);
       }
     }
-    return latest ? JSON.parse(JSON.stringify(latest)) : null;
+    return latest ? JSON.parse(JSON.stringify(await hydrateStorageDocuments(latest))) : null;
   } catch (error) {
     console.warn('[EXPENSE-STORAGE] Fast folio lookup warning:', error);
     return null;
@@ -192,11 +227,11 @@ export async function getVerificationByFolioFast(folio: string, requestId: strin
 
 export async function getVerificationByFolio(folio: string): Promise<ExpenseVerification | null> {
   const key = String(folio || '').toUpperCase().trim(); if (!key) return null;
-  const value = (await getCache()).get(key); return value ? JSON.parse(JSON.stringify(value)) : null;
+  const value = (await getCache()).get(key); return value ? JSON.parse(JSON.stringify(await hydrateStorageDocuments(value))) : null;
 }
 export async function getVerificationByRequestId(requestId: string): Promise<ExpenseVerification | null> {
   if (!requestId) return null; const value = Array.from((await getCache()).values()).find(v => v.requestId === requestId);
-  return value ? JSON.parse(JSON.stringify(value)) : null;
+  return value ? JSON.parse(JSON.stringify(await hydrateStorageDocuments(value))) : null;
 }
 export async function saveVerification(v: ExpenseVerification): Promise<ExpenseVerification> {
   const cleanFolio = String(v.folio || '').toUpperCase().trim(); if (!cleanFolio) throw new Error('Folio requerido para guardar la comprobación');
@@ -207,7 +242,21 @@ export async function listAllVerifications(): Promise<ExpenseVerification[]> {
   return Array.from((await getCache()).values()).map(v => JSON.parse(JSON.stringify(v)));
 }
 export async function findFileById(fileId: string, requestId?: string): Promise<{ file: ExpenseFileAttachment; folio: string; concept: string } | null> {
-  const key = String(fileId || '').trim(); if (!key) return null;
+  const key = String(fileId || '').trim();
+  if (!key) return null;
+
+  try {
+    const document = await findDocumentById(key);
+    if (document && document.status !== 'DELETED') {
+      return {
+        file: documentAttachmentFromRecord(document) as ExpenseFileAttachment,
+        folio: String(document.folio || '').toUpperCase().trim(),
+        concept: 'Soporte documental',
+      };
+    }
+  } catch (error) {
+    console.warn('[EXPENSE-STORAGE] V2 document lookup warning:', (error as any)?.message || error);
+  }
 
   // Preview/download should never need to synchronize every audit record in the
   // project. When the request is known, inspect only that request's audit trail.

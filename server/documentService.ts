@@ -5,7 +5,6 @@ import {
   createSignedDownloadUrl,
   createSignedUpload,
   downloadObject,
-  documentTypeFromExtension,
   extensionOf,
   mimeForExtension,
   objectExists,
@@ -202,6 +201,34 @@ export async function completeExpenseDocument(documentId: string): Promise<Retur
 
 export async function getExpenseDocument(id: string) {
   return findDocumentById(id);
+}
+
+export async function setManualDocumentAmount(id: string, amount: number | null) {
+  const doc = await findDocumentById(id);
+  if (!doc || doc.status === 'DELETED') throw new Error('Documento no encontrado.');
+  const normalized = amount == null ? null : Number(Number(amount).toFixed(2));
+  if (normalized !== null && (!Number.isFinite(normalized) || normalized < 0)) {
+    throw new Error('Importe manual inválido.');
+  }
+  const updated = await (await import('./documentRepository.js')).updateDocument(id, {
+    manual_amount: normalized,
+  });
+  return documentAttachmentFromRecord(updated);
+}
+
+export async function deleteExpenseDocument(id: string) {
+  const doc = await findDocumentById(id);
+  if (!doc || doc.status === 'DELETED') throw new Error('Documento no encontrado.');
+  try {
+    await (await import('./documentStorage.js')).removeObject(doc.storage_path);
+  } catch (error: any) {
+    if (!/not found|no such|404/i.test(String(error?.message || ''))) throw error;
+  }
+  const updated = await (await import('./documentRepository.js')).updateDocument(id, {
+    status: 'DELETED',
+    deleted_at: new Date().toISOString(),
+  });
+  return documentAttachmentFromRecord(updated);
 }
 
 export async function listExpenseDocuments(requestId: string) {

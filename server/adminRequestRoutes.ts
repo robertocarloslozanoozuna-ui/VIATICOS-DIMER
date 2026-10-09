@@ -1,6 +1,7 @@
 import type { Express, NextFunction, Request, Response } from 'express';
 import crypto from 'crypto';
 import { getUserById, getRequest, deleteRequest, updateRequest, recordAuditLog, listRoles, sanitizeUser, createApprovalToken } from './db.js';
+import { supabase } from './supabase.js';
 import { buildBossApprovalEmailHtml, buildRequesterConfirmationEmailHtml, sendEmail } from './mailService.js';
 import type { User } from '../src/types.js';
 import { userHasRole } from '../src/types.js';

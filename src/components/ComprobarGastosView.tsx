@@ -22,6 +22,7 @@ import {
   Info,
   ExternalLink,
   ChevronRight,
+  ChevronDown,
   AlertTriangle,
   RefreshCw,
   FolderDown,
@@ -99,6 +100,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
   // Expense items list for active request
   const [items, setItems] = useState<ExpenseItem[]>([]);
+  const [showExpenseMatrix, setShowExpenseMatrix] = useState<boolean>(false);
   const [notes, setNotes] = useState<string>('');
 
   // Refund state (Opción para reembolsar dinero a finanzas que les sobró)
@@ -724,6 +726,13 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     () => summarizeDocumentTotals(items, supportFiles, pendingFiscalXmls),
     [items, supportFiles, pendingFiscalXmls]
   );
+
+  // Compara el total oficial del Excel (si existe) contra los importes de comprobantes.
+  // Sin Excel importado, usa el total actual de partidas como referencia.
+  const totalGeneralGastos = Number(excelAuditSummary?.totalExcel ?? totalExpenses) || 0;
+  const documentReconciliationDifference = Number((totalGeneralGastos - documentTotals.totalDetected).toFixed(2));
+  const hasUnconfirmedDocuments = documentTotals.pendingDocumentCount > 0 || documentTotals.withoutTotalCount > 0 || documentTotals.errorCount > 0;
+  const hasReconciliationData = Boolean(excelAuditSummary || items.length > 0 || supportFiles.length > 0 || pendingFiscalXmls.length > 0);
 
   const documentsRequiringReview = useMemo(() => {
     const candidates = [...supportFiles, ...pendingFiscalXmls];
@@ -2402,6 +2411,51 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
               </div>
             </div>
 
+            {hasReconciliationData && (
+              <div className={`rounded-xl border p-4 shadow-2xs ${
+                Math.abs(documentReconciliationDifference) <= 0.01 && !hasUnconfirmedDocuments
+                  ? 'bg-emerald-50 border-emerald-200'
+                  : 'bg-amber-50 border-amber-300'
+              }`}>
+                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                  <div className="min-w-0">
+                    <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                      {Math.abs(documentReconciliationDifference) <= 0.01 && !hasUnconfirmedDocuments ? (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      ) : (
+                        <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                      )}
+                      Conciliación de gastos y comprobantes
+                    </h4>
+                    <p className="text-xs text-slate-700 mt-1">
+                      {Math.abs(documentReconciliationDifference) <= 0.01 && !hasUnconfirmedDocuments
+                        ? 'Los totales coinciden. Verifica también que todos los comprobantes estén completos.'
+                        : Math.abs(documentReconciliationDifference) > 0.01
+                        ? `Existe una diferencia de ${formatCurrency(Math.abs(documentReconciliationDifference))} entre el total de gastos y los comprobantes. Verifica si falta documentación o si hay algún importe adicional.`
+                        : 'Los importes coinciden, pero hay comprobantes pendientes de lectura o sin total confirmado. Revisa antes de concluir.'}
+                    </p>
+                    {hasUnconfirmedDocuments && (
+                      <p className="text-xs font-semibold text-amber-900 mt-1.5">
+                        Revisión pendiente: {documentTotals.pendingDocumentCount + documentTotals.withoutTotalCount + documentTotals.errorCount} comprobante(s) requieren confirmar o revisar su importe.
+                      </p>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 sm:min-w-[330px]">
+                    <div className="rounded-lg bg-white/80 border border-slate-200 p-2.5">
+                      <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Total General de Gastos</span>
+                      <span className="block mt-1 text-sm font-black font-mono text-slate-900">{formatCurrency(totalGeneralGastos)}</span>
+                      <span className="block mt-0.5 text-[10px] text-slate-500">{excelAuditSummary ? 'Total del reporte Excel' : 'Suma de partidas registradas'}</span>
+                    </div>
+                    <div className="rounded-lg bg-white/80 border border-slate-200 p-2.5">
+                      <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Total detectado en comprobantes</span>
+                      <span className="block mt-1 text-sm font-black font-mono text-slate-900">{formatCurrency(documentTotals.totalDetected)}</span>
+                      <span className="block mt-0.5 text-[10px] text-slate-500">Diferencia: {formatCurrency(Math.abs(documentReconciliationDifference))}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* EXPEDIENTE: Documentos y Comprobantes Adjuntos (PDF, XML, Capturas) */}
             <div className="bg-white rounded-xl shadow-2xs border border-slate-200 overflow-hidden">
               <div className="p-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -2598,19 +2652,40 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
             </div>
 
             {/* Excel Expenses Matrix Table (Captura Rápida) */}
-            <ExcelExpensesTable
-              items={items}
-              startDate={loadedRequest.startDate}
-              endDate={loadedRequest.endDate}
-              canEdit={canEdit}
-              availableAttachments={uploadedAttachmentsPool}
-              pendingFiscalXmls={pendingFiscalXmls}
-              onChangeItems={setItems}
-              onOpenBulkUploader={() => setShowBulkUploaderModal(true)}
-              onPreviewAttachment={downloadAttachment}
-              onAssignPendingXml={handleAssociatePendingXmlToRow}
-              onUnassignXml={handleUnassignXml}
-            />
+            <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
+              <div className="p-3.5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 bg-slate-50">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold text-slate-900">Matriz de Comprobación de Gastos (Captura Rápida)</h3>
+                  <p className="text-xs text-slate-500 mt-0.5">{items.length} partida(s) registrada(s). Abre los detalles para consultar o editar la matriz.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowExpenseMatrix((current) => !current)}
+                  aria-expanded={showExpenseMatrix}
+                  className="inline-flex items-center justify-center gap-2 px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-bold text-slate-700 transition cursor-pointer shrink-0"
+                >
+                  {showExpenseMatrix ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                  {showExpenseMatrix ? 'Ocultar detalles' : 'Ver detalles'}
+                </button>
+              </div>
+              {showExpenseMatrix && (
+                <div className="border-t border-slate-200">
+                  <ExcelExpensesTable
+                    items={items}
+                    startDate={loadedRequest.startDate}
+                    endDate={loadedRequest.endDate}
+                    canEdit={canEdit}
+                    availableAttachments={uploadedAttachmentsPool}
+                    pendingFiscalXmls={pendingFiscalXmls}
+                    onChangeItems={setItems}
+                    onOpenBulkUploader={() => setShowBulkUploaderModal(true)}
+                    onPreviewAttachment={downloadAttachment}
+                    onAssignPendingXml={handleAssociatePendingXmlToRow}
+                    onUnassignXml={handleUnassignXml}
+                  />
+                </div>
+              )}
+            </div>
 
             {/* Solicitante Notes */}
             <div className="bg-white rounded-xl shadow-xs border border-slate-200 p-4">

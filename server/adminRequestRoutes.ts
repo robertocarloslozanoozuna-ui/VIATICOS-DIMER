@@ -1,7 +1,6 @@
 import type { Express, NextFunction, Request, Response } from 'express';
 import crypto from 'crypto';
 import { getUserById, getRequest, deleteRequest, updateRequest, recordAuditLog, listRoles, sanitizeUser, createApprovalToken } from './db.js';
-import { supabase } from './supabase.js';
 import { buildBossApprovalEmailHtml, buildRequesterConfirmationEmailHtml, sendEmail } from './mailService.js';
 import type { User } from '../src/types.js';
 import { userHasRole } from '../src/types.js';
@@ -65,76 +64,6 @@ function baseUrl(req: Request) {
 }
 
 export function registerAdminRequestRoutes(app: Express) {
-  // TEMPORAL: limpieza de objetos Storage de un solo folio de prueba. Retirar tras ejecutarlo.
-  app.post('/api/__maintenance/purge-test-folio-storage', async (req, res) => {
-    try {
-      const expectedSecret = process.env.PURGE_TEST_FOLIO_SECRET;
-      if (!expectedSecret || req.get('x-purge-secret') !== expectedSecret) {
-        return res.status(404).json({ success: false });
-      }
-
-      const folio = 'VIAT-2026-000006';
-      const expectedRequestId = 'req_1791553422820_5b2d4713';
-      const { data: request, error: requestError } = await supabase
-        .from('travel_requests')
-        .select('id, folio')
-        .eq('folio', folio)
-        .maybeSingle();
-      if (requestError) throw requestError;
-      if (!request) return res.json({ success: true, alreadyAbsent: true, folio });
-      if (request.id !== expectedRequestId || request.folio !== folio) {
-        return res.status(409).json({ success: false, error: 'El folio no coincide con el objetivo autorizado.' });
-      }
-
-      const { data: documents, error: documentsError } = await supabase
-        .from('expense_documents')
-        .select('id, storage_bucket, storage_path')
-        .eq('request_id', request.id);
-      if (documentsError) throw documentsError;
-      if (!Array.isArray(documents) || documents.length !== 28) {
-        return res.status(409).json({
-          success: false,
-          error: 'La cantidad de documentos cambió; se detuvo la limpieza para evitar borrar un conjunto distinto.',
-          documentsFound: Array.isArray(documents) ? documents.length : 0
-        });
-      }
-
-      const buckets = new Map<string, string[]>();
-      for (const document of documents) {
-        const bucket = String(document.storage_bucket || '');
-        const path = String(document.storage_path || '');
-        if (!bucket || !path) throw new Error('Se encontró un documento sin bucket o ruta de Storage.');
-        if (!buckets.has(bucket)) buckets.set(bucket, []);
-        buckets.get(bucket)!.push(path);
-      }
-
-      let removedReported = 0;
-      for (const [bucket, paths] of buckets) {
-        for (let i = 0; i < paths.length; i += 1000) {
-          const { data, error } = await supabase.storage.from(bucket).remove(paths.slice(i, i + 1000));
-          if (error) throw new Error('Falló la eliminación de objetos en Storage (' + bucket + '): ' + error.message);
-          removedReported += Array.isArray(data) ? data.length : 0;
-        }
-      }
-
-      return res.json({
-        success: true,
-        folio,
-        requestId: request.id,
-        documentRecordsFound: documents.length,
-        bucketsProcessed: [...buckets.keys()],
-        storageObjectsRequestedForRemoval: documents.length,
-        storageObjectsReportedRemoved: removedReported
-      });
-    } catch (error) {
-      console.error('[TEMP-FOLIO-PURGE-STORAGE]', error);
-      return res.status(500).json({
-        success: false,
-        error: error instanceof Error ? error.message : 'No se pudo limpiar Storage.'
-      });
-    }
-  });
-
   app.delete('/api/requests/:id', requireAdmin, async (req, res) => {
     try {
       const admin = (req as any).dimerUser as User;

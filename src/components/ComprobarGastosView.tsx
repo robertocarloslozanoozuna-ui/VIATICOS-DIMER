@@ -731,6 +731,10 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   // Sin Excel importado, usa el total actual de partidas como referencia.
   const totalGeneralGastos = Number(excelAuditSummary?.totalExcel ?? totalExpenses) || 0;
   const documentReconciliationDifference = Number((totalGeneralGastos - documentTotals.totalDetected).toFixed(2));
+  // Diferencia positiva: faltan importes por respaldar; negativa: los comprobantes exceden los gastos.
+  const isDocumentReconciliationExact = Math.abs(documentReconciliationDifference) <= 0.01;
+  const hasMissingDocumentAmount = documentReconciliationDifference > 0.01;
+  const hasExcessDocumentAmount = documentReconciliationDifference < -0.01;
   const hasUnconfirmedDocuments = documentTotals.pendingDocumentCount > 0 || documentTotals.withoutTotalCount > 0 || documentTotals.errorCount > 0;
   const hasReconciliationData = Boolean(excelAuditSummary || items.length > 0 || supportFiles.length > 0 || pendingFiscalXmls.length > 0);
 
@@ -2397,25 +2401,41 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
             {hasReconciliationData && (
               <div className={`rounded-xl border p-4 shadow-2xs ${
-                Math.abs(documentReconciliationDifference) <= 0.01 && !hasUnconfirmedDocuments
+                isDocumentReconciliationExact && !hasUnconfirmedDocuments
                   ? 'bg-emerald-50 border-emerald-200'
+                  : hasMissingDocumentAmount
+                  ? 'bg-rose-50 border-rose-300'
+                  : hasExcessDocumentAmount
+                  ? 'bg-blue-50 border-blue-300'
                   : 'bg-amber-50 border-amber-300'
               }`}>
                 <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
                   <div className="min-w-0">
                     <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                      {Math.abs(documentReconciliationDifference) <= 0.01 && !hasUnconfirmedDocuments ? (
+                      {isDocumentReconciliationExact && !hasUnconfirmedDocuments ? (
                         <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                      ) : hasMissingDocumentAmount ? (
+                        <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
+                      ) : hasExcessDocumentAmount ? (
+                        <Info className="w-5 h-5 text-blue-600 shrink-0" />
                       ) : (
                         <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
                       )}
                       Conciliación de gastos y comprobantes
                     </h4>
-                    <p className="text-xs text-slate-700 mt-1">
-                      {Math.abs(documentReconciliationDifference) <= 0.01 && !hasUnconfirmedDocuments
+                    <p className={`text-xs mt-1 ${
+                      hasMissingDocumentAmount
+                        ? 'text-rose-800'
+                        : hasExcessDocumentAmount
+                        ? 'text-blue-800'
+                        : 'text-slate-700'
+                    }`}>
+                      {isDocumentReconciliationExact && !hasUnconfirmedDocuments
                         ? 'Los totales coinciden. Verifica también que todos los comprobantes estén completos.'
-                        : Math.abs(documentReconciliationDifference) > 0.01
-                        ? `Existe una diferencia de ${formatCurrency(Math.abs(documentReconciliationDifference))} entre el total de gastos y los comprobantes. Verifica si falta documentación o si hay algún importe adicional.`
+                        : hasMissingDocumentAmount
+                        ? `El total detectado en comprobantes está ${formatCurrency(documentReconciliationDifference)} por debajo del Total General de Gastos. Revisa si faltan comprobantes o importes por registrar.`
+                        : hasExcessDocumentAmount
+                        ? `El total detectado en comprobantes supera el Total General de Gastos por ${formatCurrency(Math.abs(documentReconciliationDifference))}. Verifica los importes registrados y posibles duplicados.`
                         : 'Los importes coinciden, pero hay comprobantes pendientes de lectura o sin total confirmado. Revisa antes de concluir.'}
                     </p>
                     {hasUnconfirmedDocuments && (

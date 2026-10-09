@@ -727,15 +727,24 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     [items, supportFiles, pendingFiscalXmls]
   );
 
-  // Compara el total oficial del Excel (si existe) contra los importes de comprobantes.
-  // Sin Excel importado, usa el total actual de partidas como referencia.
-  const totalGeneralGastos = Number(excelAuditSummary?.totalExcel ?? totalExpenses) || 0;
-  const documentReconciliationDifference = Number((totalGeneralGastos - documentTotals.totalDetected).toFixed(2));
-  // Diferencia positiva: faltan importes por respaldar; negativa: los comprobantes exceden los gastos.
+  // Mantiene separados el total declarado en Excel, las partidas actuales y el respaldo documental.
+  const hasExcelReference = Boolean(excelAuditSummary);
+  const totalReportadoExcel = hasExcelReference
+    ? Number(excelAuditSummary?.totalExcel ?? 0) || 0
+    : null;
+  const totalGastosRegistrados = Number(totalExpenses) || 0;
+  const excelVsRegisteredDifference = hasExcelReference
+    ? Number(((Number(excelAuditSummary?.totalExcel ?? 0) || 0) - totalGastosRegistrados).toFixed(2))
+    : 0;
+  const hasExcelExpensesMismatch = hasExcelReference && Math.abs(excelVsRegisteredDifference) > 0.01;
+  // La conciliación documental compara los comprobantes con las partidas vigentes, no con el total original de Excel.
+  const documentReconciliationDifference = Number((totalGastosRegistrados - documentTotals.totalDetected).toFixed(2));
+  // Diferencia positiva: faltan importes por respaldar; negativa: los comprobantes exceden los gastos registrados.
   const isDocumentReconciliationExact = Math.abs(documentReconciliationDifference) <= 0.01;
   const hasMissingDocumentAmount = documentReconciliationDifference > 0.01;
   const hasExcessDocumentAmount = documentReconciliationDifference < -0.01;
   const hasUnconfirmedDocuments = documentTotals.pendingDocumentCount > 0 || documentTotals.withoutTotalCount > 0 || documentTotals.errorCount > 0;
+  const isFullyReconciled = isDocumentReconciliationExact && !hasUnconfirmedDocuments && !hasExcelExpensesMismatch;
   const hasReconciliationData = Boolean(excelAuditSummary || items.length > 0 || supportFiles.length > 0 || pendingFiscalXmls.length > 0);
 
   const documentsRequiringReview = useMemo(() => {
@@ -2401,23 +2410,23 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
             {hasReconciliationData && (
               <div className={`rounded-xl border p-4 shadow-2xs ${
-                isDocumentReconciliationExact && !hasUnconfirmedDocuments
-                  ? 'bg-emerald-50 border-emerald-200'
-                  : hasMissingDocumentAmount
+                hasMissingDocumentAmount
                   ? 'bg-rose-50 border-rose-300'
                   : hasExcessDocumentAmount
                   ? 'bg-blue-50 border-blue-300'
+                  : isFullyReconciled
+                  ? 'bg-emerald-50 border-emerald-200'
                   : 'bg-amber-50 border-amber-300'
               }`}>
-                <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3">
+                <div className="flex flex-col gap-3">
                   <div className="min-w-0">
                     <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2">
-                      {isDocumentReconciliationExact && !hasUnconfirmedDocuments ? (
-                        <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
-                      ) : hasMissingDocumentAmount ? (
+                      {hasMissingDocumentAmount ? (
                         <AlertTriangle className="w-5 h-5 text-rose-600 shrink-0" />
                       ) : hasExcessDocumentAmount ? (
                         <Info className="w-5 h-5 text-blue-600 shrink-0" />
+                      ) : isFullyReconciled ? (
+                        <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
                       ) : (
                         <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
                       )}
@@ -2430,30 +2439,47 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                         ? 'text-blue-800'
                         : 'text-slate-700'
                     }`}>
-                      {isDocumentReconciliationExact && !hasUnconfirmedDocuments
-                        ? 'Los totales coinciden. Verifica también que todos los comprobantes estén completos.'
-                        : hasMissingDocumentAmount
-                        ? `El total detectado en comprobantes está ${formatCurrency(documentReconciliationDifference)} por debajo del Total General de Gastos. Revisa si faltan comprobantes o importes por registrar.`
+                      {hasMissingDocumentAmount
+                        ? `El total respaldado por comprobantes está ${formatCurrency(documentReconciliationDifference)} por debajo del total de gastos registrados. Revisa si faltan comprobantes o importes por capturar.`
                         : hasExcessDocumentAmount
-                        ? `El total detectado en comprobantes supera el Total General de Gastos por ${formatCurrency(Math.abs(documentReconciliationDifference))}. Verifica los importes registrados y posibles duplicados.`
-                        : 'Los importes coinciden, pero hay comprobantes pendientes de lectura o sin total confirmado. Revisa antes de concluir.'}
+                        ? `El total respaldado por comprobantes supera los gastos registrados por ${formatCurrency(Math.abs(documentReconciliationDifference))}. Verifica los importes y posibles duplicados.`
+                        : hasExcelExpensesMismatch
+                        ? `Las partidas registradas difieren en ${formatCurrency(Math.abs(excelVsRegisteredDifference))} del total reportado en Excel. Revisa si se modificaron partidas o si alguna no se importó.`
+                        : hasUnconfirmedDocuments
+                        ? 'Los importes coinciden, pero hay comprobantes pendientes de lectura o sin total confirmado. Revisa antes de concluir.'
+                        : hasExcelReference
+                        ? 'Los gastos registrados coinciden con los comprobantes y con el total reportado en Excel.'
+                        : 'Los gastos registrados coinciden con el total detectado en comprobantes.'}
                     </p>
+                    {hasExcelExpensesMismatch && (hasMissingDocumentAmount || hasExcessDocumentAmount) && (
+                      <p className="text-xs font-semibold text-amber-900 mt-1.5">
+                        También hay una diferencia de {formatCurrency(Math.abs(excelVsRegisteredDifference))} entre el total de Excel y las partidas registradas.
+                      </p>
+                    )}
                     {hasUnconfirmedDocuments && (
                       <p className="text-xs font-semibold text-amber-900 mt-1.5">
                         Revisión pendiente: {documentTotals.pendingDocumentCount + documentTotals.withoutTotalCount + documentTotals.errorCount} comprobante(s) requieren confirmar o revisar su importe.
                       </p>
                     )}
                   </div>
-                  <div className="grid grid-cols-2 gap-3 sm:min-w-[330px]">
-                    <div className="rounded-lg bg-white/80 border border-slate-200 p-2.5">
-                      <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Total General de Gastos</span>
-                      <span className="block mt-1 text-sm font-black font-mono text-slate-900">{formatCurrency(totalGeneralGastos)}</span>
-                      <span className="block mt-0.5 text-[10px] text-slate-500">{excelAuditSummary ? 'Total del reporte Excel' : 'Suma de partidas registradas'}</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div className="rounded-lg bg-white/85 border border-slate-200 p-2.5 min-w-0">
+                      <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Total reportado en Excel</span>
+                      <span className="block mt-1 text-sm font-black font-mono text-slate-900">{hasExcelReference ? formatCurrency(totalReportadoExcel ?? 0) : 'No disponible'}</span>
+                      <span className="block mt-0.5 text-[10px] text-slate-500">{hasExcelReference ? 'Importe declarado en el reporte' : 'No se ha importado un reporte Excel'}</span>
                     </div>
-                    <div className="rounded-lg bg-white/80 border border-slate-200 p-2.5">
-                      <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Total detectado en comprobantes</span>
+                    <div className="rounded-lg bg-white/85 border border-slate-200 p-2.5 min-w-0">
+                      <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Total de gastos registrados</span>
+                      <span className="block mt-1 text-sm font-black font-mono text-slate-900">{formatCurrency(totalGastosRegistrados)}</span>
+                      <span className="block mt-0.5 text-[10px] text-slate-500">Suma de las partidas actuales</span>
+                      {hasExcelExpensesMismatch && (
+                        <span className="block mt-1 text-[10px] font-semibold text-amber-800">Diferencia vs. Excel: {formatCurrency(Math.abs(excelVsRegisteredDifference))}</span>
+                      )}
+                    </div>
+                    <div className="rounded-lg bg-white/85 border border-slate-200 p-2.5 min-w-0">
+                      <span className="block text-[10px] font-bold uppercase tracking-wide text-slate-500">Total respaldado por comprobantes</span>
                       <span className="block mt-1 text-sm font-black font-mono text-slate-900">{formatCurrency(documentTotals.totalDetected)}</span>
-                      <span className="block mt-0.5 text-[10px] text-slate-500">Diferencia: {formatCurrency(Math.abs(documentReconciliationDifference))}</span>
+                      <span className="block mt-0.5 text-[10px] text-slate-500">Diferencia vs. gastos: {formatCurrency(Math.abs(documentReconciliationDifference))}</span>
                     </div>
                   </div>
                 </div>

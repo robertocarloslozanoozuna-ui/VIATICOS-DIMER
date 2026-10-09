@@ -2233,22 +2233,6 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
               </div>
             </div>
 
-            {/* IMPORTADOR DE REPORTE DE GASTOS EXCEL (.XLSX) */}
-            <ExcelExpensesImporter
-              folio={loadedRequest.folio}
-              tripStartDate={loadedRequest.startDate}
-              tripEndDate={loadedRequest.endDate}
-              canEdit={canEdit}
-              existingOriginalFile={originalExcelFile || undefined}
-              existingAuditSummary={excelAuditSummary || undefined}
-              onImportConfirmed={handleExcelImportConfirmed}
-              onDownloadOriginalFile={downloadAttachment}
-              onOriginalFileRemoved={() => {
-                setOriginalExcelFile(null);
-                setExcelAuditSummary(null);
-              }}
-            />
-
             {/* BANDEJA: Comprobantes Fiscales (XML CFDI) Pendientes de Asociar */}
             {pendingFiscalXmls.length > 0 && (
               <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-4 space-y-3 shadow-2xs">
@@ -2502,7 +2486,23 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                 </div>
               </div>
 
-              <div className="p-4">
+              <div className="p-4 space-y-4">
+
+                {/* IMPORTADOR DE REPORTE DE GASTOS EXCEL (.XLSX) */}
+                <ExcelExpensesImporter
+                  folio={loadedRequest.folio}
+                  tripStartDate={loadedRequest.startDate}
+                  tripEndDate={loadedRequest.endDate}
+                  canEdit={canEdit}
+                  existingOriginalFile={originalExcelFile || undefined}
+                  existingAuditSummary={excelAuditSummary || undefined}
+                  onImportConfirmed={handleExcelImportConfirmed}
+                  onDownloadOriginalFile={downloadAttachment}
+                  onOriginalFileRemoved={() => {
+                    setOriginalExcelFile(null);
+                    setExcelAuditSummary(null);
+                  }}
+                />
                 {supportFiles.length === 0 ? (
                   <div className="text-center py-6 px-4 border-2 border-dashed border-slate-200 rounded-xl bg-slate-50/50">
                     <Archive className="w-8 h-8 text-slate-300 mx-auto mb-1.5" />

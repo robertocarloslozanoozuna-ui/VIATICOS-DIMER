@@ -2,7 +2,7 @@ import type { Express, Request, Response } from 'express';
 import crypto from 'crypto';
 import { deflateRawSync, inflateRawSync } from 'zlib';
 import { getRequest, updateRequest, recordAuditLog, getUserById, hasPermission } from './db.js';
-import { getVerificationByFolio, getVerificationByFolioFast, saveVerification, saveVerificationFast, listAllVerifications, findFileById } from './expenseStorage.js';
+import { getVerificationByFolio, getVerificationByFolioFast, saveVerification, saveVerificationFast, listAllVerificationSummaries, findFileById } from './expenseStorage.js';
 import { listDocumentsByRequestId } from './documentRepository.js';
 import { documentAttachmentFromRecord } from './documentService.js';
 import { sendEmail, buildExpenseVerificationSubmittedEmailHtml } from './mailService.js';
@@ -1049,9 +1049,14 @@ export function registerExpenseRoutes(app: Express) {
     try {
       const user = await getRequestUser(req);
       if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
-      const all = await listAllVerifications();
+      const all = await listAllVerificationSummaries();
       if (userIsAdminOrFinanzas(user)) return res.json({ success: true, verifications: all });
-      return res.json({ success: true, verifications: all.filter(v => v.userId === user.id || v.userEmail?.toLowerCase() === user.email.toLowerCase()) });
+      return res.json({
+        success: true,
+        verifications: all.filter(v =>
+          v.userId === user.id || v.userEmail?.toLowerCase() === user.email.toLowerCase(),
+        ),
+      });
     } catch (e: any) {
       console.error('[EXPENSE-LIST-ERROR]', e);
       return res.status(500).json({ success: false, error: e.message || 'Error al listar comprobaciones' });

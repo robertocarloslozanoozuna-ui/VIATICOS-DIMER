@@ -160,19 +160,23 @@ export async function recordAuditLog(p:{requestId?:string|null;userId:string;act
     details.verification = sanitized;
   }
 
-  const {data,error}=await supabase.from('audit_logs').insert({
-    id:`aud_${Date.now()}_${crypto.randomBytes(5).toString('hex')}`,
-    request_id:p.requestId||null,
-    user_id:p.userId,
-    user_name:user?.name||null,
-    user_email:user?.email||null,
-    action:p.action,
-    details:details,
-    created_at:new Date().toISOString()
-  }).select('*').single();
-
-  if(error)throw error;
-  return toAudit(data);
+  // No pedir la fila insertada de vuelta: details puede contener el Base64
+  // del adjunto histórico y su respuesta duplicaría esa transferencia (Egress).
+  // Construimos el mismo resultado en memoria para conservar el contrato del
+  // helper sin descargar details otra vez desde Postgres.
+  const row = {
+    id: `aud_${Date.now()}_${crypto.randomBytes(5).toString('hex')}`,
+    request_id: p.requestId || null,
+    user_id: p.userId,
+    user_name: user?.name || null,
+    user_email: user?.email || null,
+    action: p.action,
+    details,
+    created_at: new Date().toISOString(),
+  };
+  const { error } = await supabase.from('audit_logs').insert(row);
+  if (error) throw error;
+  return toAudit(row);
 }
 export async function listAuditLogs(requestId?:string){let query=supabase.from('audit_logs').select('*').order('created_at',{ascending:false});if(requestId)query=query.eq('request_id',requestId);const {data,error}=await query;if(error)throw error;return (data||[]).map(toAudit);}
 export async function createVerificationCode(p:{email:string;name:string;department:string;roleId:string;passwordHash:string;salt:string}){const code=crypto.randomInt(100000,1000000).toString();const expiresAt=new Date(Date.now()+15*60*1000).toISOString();const {error}=await supabase.from('verification_codes').upsert({email:p.email.toLowerCase(),code,name:p.name,department:p.department,role_id:p.roleId,password_hash:p.passwordHash,salt:p.salt,expires_at:expiresAt,attempts:0,created_at:new Date().toISOString()},{onConflict:'email'});if(error)throw error;return {code,expiresAt};}

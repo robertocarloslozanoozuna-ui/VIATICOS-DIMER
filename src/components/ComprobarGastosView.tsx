@@ -1700,7 +1700,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                                 {isPartial ? (
                                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1">
                                     <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                                    Borrador ({ver.items.length} gastos)
+                                    Borrador iniciado
                                   </span>
                                 ) : (
                                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">

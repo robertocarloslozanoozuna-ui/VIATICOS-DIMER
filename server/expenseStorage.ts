@@ -392,7 +392,7 @@ async function findLegacyAttachmentInAudit(
   for (const search of searches) {
     // Scope to the request and the exact JSON path that references this file.
     // Return only that attachment collection, never the full audit row/details.
-    const { data, error } = await supabase
+    const { data: queryData, error } = await supabase
       .from('audit_logs')
       .select(search.select)
       .eq('request_id', requestId)
@@ -402,7 +402,11 @@ async function findLegacyAttachmentInAudit(
       .limit(3);
     if (error) throw error;
 
-    for (const row of data || []) {
+    // El nombre de columna es dinámico y el cliente Supabase infiere un tipo
+    // genérico de error para select(string); normalizar el resultado de runtime
+    // a filas parciales evita que ese tipo se propague a cada campo JSON.
+    const rows = Array.isArray(queryData) ? queryData as unknown as any[] : [];
+    for (const row of rows) {
       const file = search.candidates(row).find((candidate: any) => candidate?.id === fileId);
       if (!file) continue;
       const folio = String(row.folio || row.requestFolio || file.folio || '').toUpperCase().trim();

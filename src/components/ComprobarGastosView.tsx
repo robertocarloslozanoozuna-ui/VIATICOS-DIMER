@@ -588,6 +588,11 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   }
 
   function handleRemoveItem(itemId: string) {
+    if (items.length <= 1) {
+      setActionError('No puedes eliminar la última partida y guardar un expediente vacío. Agrega otra partida o corrige la existente.');
+      return;
+    }
+    setActionError(null);
     setItems(items.filter((it) => it.id !== itemId));
   }
 
@@ -1046,7 +1051,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   // los datos más recientes y no una closure antigua.
   async function persistDraftSilently(): Promise<void> {
     const snapshot = autosaveSnapshotRef.current;
-    if (!snapshot || submittingFinal || finalizingAccounting) return;
+    if (!snapshot || snapshot.items.length === 0 || submittingFinal || finalizingAccounting) return;
 
     // Si ya existe un guardado en curso, el cambio actual no se pierde.
     // El versionado del effect programará el siguiente guardado al terminar.
@@ -1151,6 +1156,10 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   // Save draft
   async function handleSaveDraft() {
     if (!loadedRequest) return;
+    if (items.length === 0) {
+      setActionError('No se puede guardar un borrador vacío. Recupera o agrega las partidas antes de guardar.');
+      return;
+    }
     setSavingDraft(true);
     setActionSuccess(null);
     setActionError(null);

@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import crypto from 'crypto';
 import { deflateRawSync, inflateRawSync } from 'zlib';
-import { getRequest, updateRequest, recordAuditLog, listAuditLogs, getUserById, hasPermission } from './db.js';
+import { getRequest, updateRequest, recordAuditLog, getUserById, hasPermission } from './db.js';
 import { getVerificationByFolio, getVerificationByFolioFast, saveVerification, saveVerificationFast, listAllVerifications, findFileById } from './expenseStorage.js';
 import { listDocumentsByRequestId } from './documentRepository.js';
 import { documentAttachmentFromRecord } from './documentService.js';
@@ -144,18 +144,19 @@ function zeroOfficialTemplateAmounts(input: Buffer) {
 }
 
 async function getOfficialTemplateFromFolio() {
+  // Consultar exclusivamente el folio fuente y proyectar solo el archivo Excel.
+  // La consulta anterior descargaba hasta 200 snapshots completos, que podían
+  // repetir el Base64 de documentos y disparar el Egress de la base de datos.
   const { data, error } = await supabase.from('audit_logs')
-    .select('details,created_at')
-    .in('action', ['COMPROBACION_GASTOS_BORRADOR','COMPROBACION_GASTOS_FINALIZADA','CORRECCION_COMPROBACION_BORRADOR'])
+    .select('originalExcelFile:details->verification->originalExcelFile')
+    .in('action', ['COMPROBACION_GASTOS_BORRADOR', 'COMPROBACION_GASTOS_FINALIZADA', 'CORRECCION_COMPROBACION_BORRADOR'])
+    .eq('details->verification->>folio', OFFICIAL_TEMPLATE_SOURCE_FOLIO)
+    .not('details->verification->originalExcelFile->>dataUrl', 'is', null)
     .order('created_at', { ascending: false })
-    .limit(200);
+    .limit(1);
   if (error) throw error;
 
-  const row = (data || []).find((item: any) =>
-    item?.details?.verification?.folio === OFFICIAL_TEMPLATE_SOURCE_FOLIO &&
-    item?.details?.verification?.originalExcelFile?.dataUrl
-  );
-  const dataUrl = String(row?.details?.verification?.originalExcelFile?.dataUrl || '');
+  const dataUrl = String((data || [])[0]?.originalExcelFile?.dataUrl || '');
   const match = dataUrl.match(/^data:[^;]+;base64,(.+)$/);
   if (!match) throw new Error('No se encontró el Excel original del folio VIAT-2026-000002.');
   const buffer = Buffer.from(match[1], 'base64');
@@ -301,60 +302,6 @@ function validateRefund(difference: number, refund: any): string | null {
   return null;
 }
 
-async function recoverAttachmentBinary(
-  requestId: string,
-  fileId: string,
-  currentFile: any,
-): Promise<any> {
-  if (
-    currentFile &&
-    typeof currentFile.dataUrl === 'string' &&
-    currentFile.dataUrl.startsWith('data:') &&
-    currentFile.dataUrl.includes(';base64,')
-  ) {
-    return currentFile;
-  }
-
-  try {
-    const logs = await listAuditLogs(requestId);
-    // Recorremos del más reciente al más antiguo para recuperar la última
-    // versión que todavía conserve el binario original.
-    for (let index = logs.length - 1; index >= 0; index -= 1) {
-      const verification = (logs[index].details as any)?.verification;
-      if (!verification) continue;
-
-      const candidates: any[] = [
-        ...(Array.isArray(verification.supportFiles) ? verification.supportFiles : []),
-        ...(Array.isArray(verification.pendingFiscalXmls) ? verification.pendingFiscalXmls : []),
-      ];
-
-      for (const item of Array.isArray(verification.items) ? verification.items : []) {
-        if (item?.xmlFile) candidates.push(item.xmlFile);
-        if (item?.pdfFile) candidates.push(item.pdfFile);
-        if (item?.ticketFile) candidates.push(item.ticketFile);
-      }
-
-      if (verification.originalExcelFile) candidates.push(verification.originalExcelFile);
-      if (verification.refund?.receiptFile) candidates.push(verification.refund.receiptFile);
-      if (verification.refund?.signedReceiptFile) candidates.push(verification.refund.signedReceiptFile);
-
-      const recovered = candidates.find((file: any) =>
-        file?.id === fileId &&
-        typeof file.dataUrl === 'string' &&
-        file.dataUrl.startsWith('data:') &&
-        file.dataUrl.includes(';base64,')
-      );
-
-      if (recovered) {
-        return { ...currentFile, ...recovered };
-      }
-    }
-  } catch (error) {
-    console.warn('[EXPENSE-FILE-RECOVERY] No se pudo recuperar el binario histórico:', error);
-  }
-
-  return currentFile;
-}
 
 export function registerExpenseRoutes(app: Express) {
   app.post('/api/expenses/document-upload-url', async (req: Request, res: Response) => {
@@ -660,33 +607,24 @@ export function registerExpenseRoutes(app: Express) {
       const privileged = userIsAdminOrFinanzas(user);
       if (!privileged && !isOwner(request, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para analizar este documento.' });
 
-      const found = await findFileById(fileId);
+      const found = await findFileById(fileId, request.id);
       if (!found || found.folio !== folio) return res.status(404).json({ success: false, error: 'Archivo no encontrado en este expediente.' });
       const lower = found.file.name.toLowerCase();
       if (!(lower.endsWith('.xml') || found.file.role === 'COMPLEMENTO_FISCAL')) {
         return res.status(400).json({ success: false, error: 'Solo los archivos XML CFDI pueden leerse automáticamente. PDF e imágenes requieren captura manual del total.' });
       }
 
-      // Los XML sí pueden volver a leerse. Se recupera el binario histórico si el navegador
-      // guardó previamente una copia metadata-only.
+      // Los documentos V2 recuperan el binario desde Storage por su ruta canónica.
+      // Solo los adjuntos heredados sin ruta usan la búsqueda de historial acotada
+      // que realiza findFileById; no descargamos el historial completo de auditoría.
       let fileForAnalysis = found.file;
-      if (!fileForAnalysis.dataUrl) {
-        const auditLogs = await listAuditLogs(request.id);
-        for (const log of auditLogs) {
-          const snapshot = (log.details as any)?.verification;
-          const candidate = Array.isArray(snapshot?.supportFiles)
-            ? snapshot.supportFiles.find((file: any) =>
-                file?.id === fileId &&
-                typeof file.dataUrl === 'string' &&
-                file.dataUrl.startsWith('data:') &&
-                file.dataUrl.includes(';base64,')
-              )
-            : undefined;
-          if (candidate) {
-            fileForAnalysis = { ...fileForAnalysis, ...candidate };
-            break;
-          }
-        }
+      if (!fileForAnalysis.dataUrl && fileForAnalysis.storagePath) {
+        const storedBytes = await downloadObject(fileForAnalysis.storagePath);
+        const mimeType = String(fileForAnalysis.type || 'application/xml');
+        fileForAnalysis = {
+          ...fileForAnalysis,
+          dataUrl: `data:${mimeType};base64,${storedBytes.toString('base64')}`,
+        };
       }
 
       if (!fileForAnalysis.dataUrl) {
@@ -1166,7 +1104,7 @@ export function registerExpenseRoutes(app: Express) {
       if (!resolvedRequest) return res.status(404).json({ success: false, error: 'Solicitud relacionada no encontrada' });
       if (!userIsAdminOrFinanzas(user) && !isOwner(resolvedRequest, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para consultar este archivo' });
 
-      const file = await recoverAttachmentBinary(resolvedRequest.id, fileId, found.file);
+      const file = found.file;
       const matches = String(file.dataUrl || '').match(/^data:([^;]+);base64,(.+)$/);
       if (!matches) {
         return res.status(404).json({

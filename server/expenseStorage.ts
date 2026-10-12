@@ -180,7 +180,7 @@ async function readLatestVerificationFromAudit(
     .select(VERIFICATION_AUDIT_SELECT)
     .in('action', [...VERIFICATION_AUDIT_ACTIONS])
     .order('created_at', { ascending: false })
-    .limit(1);
+    .limit(25);
 
   if (requestId) {
     query = query.eq('request_id', requestId);
@@ -190,13 +190,24 @@ async function readLatestVerificationFromAudit(
     throw new Error('Se requiere requestId o folio para consultar la comprobación.');
   }
 
-  const { data, error } = await query.maybeSingle();
+  const { data, error } = await query;
   if (error) throw error;
-  if (!data) return null;
+  if (!Array.isArray(data) || data.length === 0) return null;
 
-  // La proyección devuelve la verificación como "details", sin el
-  // documentAttachment de nivel superior ni el resto de auditorías.
-  return extractVerification(data.details, data);
+  // Las versiones anteriores podían guardar un autosave vacío después de
+  // una lectura incompleta. Nunca usamos ese snapshot para reemplazar una
+  // captura con partidas; recuperamos la más reciente con items dentro de
+  // una ventana limitada del historial del mismo expediente.
+  const candidates = data
+    .map((row: any) => ({ row, verification: extractVerification(row.details, row) }))
+    .filter((entry: any) => entry.verification);
+
+  const latest = candidates[0];
+  if (!latest) return null;
+  if (latest.verification.items.length > 0) return latest.verification;
+
+  const latestWithItems = candidates.find((entry: any) => entry.verification.items.length > 0);
+  return latestWithItems?.verification || latest.verification;
 }
 
 async function getCache() {
@@ -237,8 +248,10 @@ export async function getVerificationByFolioFast(folio: string, requestId: strin
     persistToDisk(verificationsCache);
     return JSON.parse(JSON.stringify(hydrated));
   } catch (error) {
-    console.warn('[EXPENSE-STORAGE] Targeted folio lookup warning:', error);
-    return null;
+    // No convertir un fallo de lectura en "no existe comprobación": las rutas
+    // deben abortar el guardado antes de sobrescribir datos con un estado vacío.
+    console.warn('[EXPENSE-STORAGE] Targeted folio lookup failed:', error);
+    throw error;
   }
 }
 

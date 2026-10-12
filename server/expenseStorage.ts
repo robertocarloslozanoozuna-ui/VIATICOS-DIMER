@@ -158,29 +158,51 @@ function extractVerification(details: any, row: any): ExpenseVerification | null
   };
   return mergeAttachmentBinaryIntoVerification(verification, details?.documentAttachment);
 }
-async function syncWithSupabase(map: Map<string, ExpenseVerification>) {
-  try {
-    const { data, error } = await supabase.from('audit_logs').select('*')
-      .in('action', ['COMPROBACION_GASTOS_FINALIZADA', 'COMPROBACION_GASTOS_BORRADOR', 'CORRECCION_COMPROBACION_BORRADOR', 'COMPROBACION_GASTOS_DOCUMENTO']).order('created_at', { ascending: true });
-    if (error || !Array.isArray(data)) return;
-    for (const row of data) {
-      const verification = extractVerification(row.details, row);
-      if (!verification) continue;
-      const existing = map.get(verification.folio);
-      const incomingTime = new Date(verification.updatedAt || (row as any).created_at || row.createdAt || 0).getTime();
-      const existingTime = new Date(existing?.updatedAt || 0).getTime();
-      if (!existing || incomingTime >= existingTime) {
-        // Los autosaves y cierres guardan metadata-only. Conservamos los
-        // binarios que ya estaban disponibles en la versión anterior.
-        map.set(verification.folio, mergeExistingAttachmentBinaries(verification, existing));
-      }
-    }
-    persistToDisk(map);
-  } catch (e) { console.warn('[EXPENSE-STORAGE] Supabase sync warning:', e); }
+const VERIFICATION_AUDIT_ACTIONS = [
+  'COMPROBACION_GASTOS_FINALIZADA',
+  'COMPROBACION_GASTOS_BORRADOR',
+  'CORRECCION_COMPROBACION_BORRADOR',
+  'COMPROBACION_GASTOS_DOCUMENTO',
+] as const;
+
+// Seleccionar solo el snapshot de comprobación. No usar details completo:
+// los eventos COMPROBACION_GASTOS_DOCUMENTO pueden llevar el binario en
+// details.documentAttachment, que no se necesita para cargar el expediente.
+const VERIFICATION_AUDIT_SELECT =
+  'id,request_id,user_id,user_name,user_email,action,details:details->verification,created_at';
+
+async function readLatestVerificationFromAudit(
+  requestId?: string,
+  folio?: string,
+): Promise<ExpenseVerification | null> {
+  let query: any = supabase
+    .from('audit_logs')
+    .select(VERIFICATION_AUDIT_SELECT)
+    .in('action', [...VERIFICATION_AUDIT_ACTIONS])
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (requestId) {
+    query = query.eq('request_id', requestId);
+  } else if (folio) {
+    query = query.eq('details->verification->>folio', folio);
+  } else {
+    throw new Error('Se requiere requestId o folio para consultar la comprobación.');
+  }
+
+  const { data, error } = await query.maybeSingle();
+  if (error) throw error;
+  if (!data) return null;
+
+  // La proyección devuelve la verificación como "details", sin el
+  // documentAttachment de nivel superior ni el resto de auditorías.
+  return extractVerification(data.details, data);
 }
+
 async function getCache() {
+  // La caché local no debe disparar una sincronización global de audit_logs.
+  // Los datos persistidos se leen por expediente mediante readLatestVerificationFromAudit.
   if (!verificationsCache) verificationsCache = loadFromDisk();
-  await syncWithSupabase(verificationsCache);
   return verificationsCache;
 }
 
@@ -207,39 +229,88 @@ export async function getVerificationByFolioFast(folio: string, requestId: strin
   if (!key || !requestId) return null;
 
   try {
-    const logs = await listAuditLogs(requestId);
-    let latest: ExpenseVerification | null = null;
-    for (const row of logs) {
-      const verification = extractVerification(row.details, row);
-      if (!verification || verification.folio !== key) continue;
-      const incomingTime = new Date(verification.updatedAt || (row as any).created_at || 0).getTime();
-      const latestTime = new Date(latest?.updatedAt || 0).getTime();
-      if (!latest || incomingTime >= latestTime) {
-        latest = mergeExistingAttachmentBinaries(verification, latest);
-      }
-    }
-    return latest ? JSON.parse(JSON.stringify(await hydrateStorageDocuments(latest))) : null;
+    const latest = await readLatestVerificationFromAudit(requestId);
+    if (!latest || latest.folio !== key) return null;
+    const hydrated = await hydrateStorageDocuments(latest);
+    if (!verificationsCache) verificationsCache = loadFromDisk();
+    verificationsCache.set(key, JSON.parse(JSON.stringify(hydrated)));
+    persistToDisk(verificationsCache);
+    return JSON.parse(JSON.stringify(hydrated));
   } catch (error) {
-    console.warn('[EXPENSE-STORAGE] Fast folio lookup warning:', error);
+    console.warn('[EXPENSE-STORAGE] Targeted folio lookup warning:', error);
     return null;
   }
 }
 
 export async function getVerificationByFolio(folio: string): Promise<ExpenseVerification | null> {
-  const key = String(folio || '').toUpperCase().trim(); if (!key) return null;
-  const value = (await getCache()).get(key); return value ? JSON.parse(JSON.stringify(await hydrateStorageDocuments(value))) : null;
+  const key = String(folio || '').toUpperCase().trim();
+  if (!key) return null;
+
+  // Resolver el ID de la solicitud y consultar solo su última versión.
+  // El fallback por folio conserva compatibilidad si no existe ya la solicitud.
+  const { data: request, error: requestError } = await supabase
+    .from('travel_requests')
+    .select('id')
+    .eq('folio', key)
+    .maybeSingle();
+  if (requestError) throw requestError;
+
+  const latest = request?.id
+    ? await readLatestVerificationFromAudit(String(request.id))
+    : await readLatestVerificationFromAudit(undefined, key);
+  if (!latest || latest.folio !== key) return null;
+
+  const hydrated = await hydrateStorageDocuments(latest);
+  if (!verificationsCache) verificationsCache = loadFromDisk();
+  verificationsCache.set(key, JSON.parse(JSON.stringify(hydrated)));
+  persistToDisk(verificationsCache);
+  return JSON.parse(JSON.stringify(hydrated));
 }
+
 export async function getVerificationByRequestId(requestId: string): Promise<ExpenseVerification | null> {
-  if (!requestId) return null; const value = Array.from((await getCache()).values()).find(v => v.requestId === requestId);
-  return value ? JSON.parse(JSON.stringify(await hydrateStorageDocuments(value))) : null;
+  if (!requestId) return null;
+  const latest = await readLatestVerificationFromAudit(requestId);
+  if (!latest) return null;
+  const hydrated = await hydrateStorageDocuments(latest);
+  if (!verificationsCache) verificationsCache = loadFromDisk();
+  verificationsCache.set(hydrated.folio, JSON.parse(JSON.stringify(hydrated)));
+  persistToDisk(verificationsCache);
+  return JSON.parse(JSON.stringify(hydrated));
+}
+
+export async function listAllVerifications(): Promise<ExpenseVerification[]> {
+  // Leer primero los IDs ligeros de solicitudes y después solo el snapshot más
+  // reciente de cada expediente. No recorrer ni transferir todo el historial
+  // de audit_logs (que incluye snapshots históricos y archivos incrustados).
+  const { data: requests, error } = await supabase
+    .from('travel_requests')
+    .select('id,folio')
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+
+  const latest = await Promise.all(
+    (requests || []).map(async (request: { id: string; folio: string }) => {
+      const verification = await readLatestVerificationFromAudit(request.id);
+      if (!verification) return null;
+      return hydrateStorageDocuments(verification);
+    }),
+  );
+
+  const verifications = latest.filter(
+    (verification): verification is ExpenseVerification => verification !== null,
+  );
+
+  if (!verificationsCache) verificationsCache = loadFromDisk();
+  for (const verification of verifications) {
+    verificationsCache.set(verification.folio, JSON.parse(JSON.stringify(verification)));
+  }
+  persistToDisk(verificationsCache);
+  return verifications.map((verification) => JSON.parse(JSON.stringify(verification)));
 }
 export async function saveVerification(v: ExpenseVerification): Promise<ExpenseVerification> {
   const cleanFolio = String(v.folio || '').toUpperCase().trim(); if (!cleanFolio) throw new Error('Folio requerido para guardar la comprobación');
   const cloned = JSON.parse(JSON.stringify(v)) as ExpenseVerification; cloned.folio = cleanFolio; cloned.updatedAt = new Date().toISOString();
   (await getCache()).set(cleanFolio, cloned); persistToDisk(verificationsCache!); return JSON.parse(JSON.stringify(cloned));
-}
-export async function listAllVerifications(): Promise<ExpenseVerification[]> {
-  return Array.from((await getCache()).values()).map(v => JSON.parse(JSON.stringify(v)));
 }
 export async function findFileById(fileId: string, requestId?: string): Promise<{ file: ExpenseFileAttachment; folio: string; concept: string } | null> {
   const key = String(fileId || '').trim();
@@ -286,6 +357,16 @@ export async function findFileById(fileId: string, requestId?: string): Promise<
       }
     } catch (error) {
       console.warn('[EXPENSE-STORAGE] Fast file lookup warning:', error);
+    }
+  }
+
+  // Si no se proporcionó el requestId, poblar la caché desde el último
+  // snapshot de cada solicitud (lecturas dirigidas), nunca desde todo el historial.
+  if (!requestId) {
+    try {
+      await listAllVerifications();
+    } catch (error) {
+      console.warn('[EXPENSE-STORAGE] Targeted legacy file lookup warning:', error);
     }
   }
 

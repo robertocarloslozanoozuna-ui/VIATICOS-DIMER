@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import type { ExpenseVerification, ExpenseFileAttachment } from '../src/types.js';
+import type { ExpenseVerification, ExpenseFileAttachment, ExpenseVerificationSummary } from '../src/types.js';
 import { supabase } from './supabase.js';
 
 import { listDocumentsByRequestId, findDocumentById } from './documentRepository.js';
@@ -171,6 +171,11 @@ const VERIFICATION_AUDIT_ACTIONS = [
 const VERIFICATION_AUDIT_SELECT =
   'id,request_id,user_id,user_name,user_email,action,details:details->verification,created_at';
 
+// El endpoint de lista solo necesita campos escalares. Estos alias JSONPath
+// nunca seleccionan items, adjuntos, el objeto refund completo ni detalles Base64.
+const VERIFICATION_SUMMARY_AUDIT_SELECT =
+  'request_id,user_id,user_email,action,created_at,folio:details->verification->>folio,verification_user_id:details->verification->>userId,verification_user_email:details->verification->>userEmail,verification_status:details->verification->>status,total_expenses:details->verification->>totalExpenses,refund_amount:details->verification->refund->>amount,refund_registered_at:details->verification->refund->>registeredAt';
+
 async function readLatestVerificationFromAudit(
   requestId?: string,
   folio?: string,
@@ -323,6 +328,82 @@ export async function listAllVerifications(): Promise<ExpenseVerification[]> {
   persistToDisk(verificationsCache);
   return verifications.map((verification) => JSON.parse(JSON.stringify(verification)));
 }
+function toVerificationSummary(
+  row: any,
+  fallbackFolio: string,
+  hasItems: boolean,
+): ExpenseVerificationSummary | null {
+  const folio = String(row?.folio || fallbackFolio || '').trim().toUpperCase();
+  if (!folio) return null;
+
+  const status = String(
+    row?.verification_status ||
+    (row?.action === 'COMPROBACION_GASTOS_FINALIZADA' ? 'ENVIADA' : 'BORRADOR'),
+  ).toUpperCase();
+  const hasRefund =
+    (row?.refund_amount !== null && row?.refund_amount !== undefined) ||
+    (row?.refund_registered_at !== null && row?.refund_registered_at !== undefined);
+
+  return {
+    requestId: String(row?.request_id || ''),
+    folio,
+    userId: String(row?.verification_user_id || row?.user_id || ''),
+    userEmail: String(row?.verification_user_email || row?.user_email || '').trim() || undefined,
+    status: status === 'ENVIADA' ? 'ENVIADA' : 'BORRADOR',
+    totalExpenses: Number(row?.total_expenses || 0),
+    hasItems,
+    hasRefund,
+  };
+}
+
+async function readLatestVerificationSummaryFromAudit(
+  requestId: string,
+  fallbackFolio: string,
+): Promise<ExpenseVerificationSummary | null> {
+  const createQuery = (requireItems: boolean) => {
+    let query: any = supabase
+      .from('audit_logs')
+      .select(VERIFICATION_SUMMARY_AUDIT_SELECT)
+      .eq('request_id', requestId)
+      .in('action', [...VERIFICATION_AUDIT_ACTIONS]);
+
+    // Comprueba si existen partidas sin devolver el arreglo items.
+    if (requireItems) query = query.contains('details', { verification: { items: [{}] } });
+    return query.order('created_at', { ascending: false }).limit(1);
+  };
+
+  const { data: validRows, error: validError } = await createQuery(true);
+  if (validError) throw validError;
+  if (validRows?.length) return toVerificationSummary(validRows[0], fallbackFolio, true);
+
+  // Solo si nunca hubo un snapshot con partidas, usar el último estado escalar.
+  const { data: latestRows, error: latestError } = await createQuery(false);
+  if (latestError) throw latestError;
+  if (!latestRows?.length) return null;
+  return toVerificationSummary(latestRows[0], fallbackFolio, false);
+}
+
+/**
+ * Lista liviana para tarjetas y filtros. No hidrata Storage y nunca solicita
+ * items, supportFiles, originalExcelFile, pendingFiscalXmls ni Base64.
+ */
+export async function listAllVerificationSummaries(): Promise<ExpenseVerificationSummary[]> {
+  const { data: requests, error } = await supabase
+    .from('travel_requests')
+    .select('id,folio')
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+
+  const summaries = await Promise.all(
+    (requests || []).map((request: { id: string; folio: string }) =>
+      readLatestVerificationSummaryFromAudit(request.id, request.folio),
+    ),
+  );
+  return summaries.filter(
+    (summary): summary is ExpenseVerificationSummary => summary !== null,
+  );
+}
+
 export async function saveVerification(v: ExpenseVerification): Promise<ExpenseVerification> {
   const cleanFolio = String(v.folio || '').toUpperCase().trim(); if (!cleanFolio) throw new Error('Folio requerido para guardar la comprobación');
   const cloned = JSON.parse(JSON.stringify(v)) as ExpenseVerification; cloned.folio = cleanFolio; cloned.updatedAt = new Date().toISOString();

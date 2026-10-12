@@ -399,33 +399,33 @@ export function registerExpenseRoutes(app: Express) {
       // También actualizamos el snapshot de comprobación para que un expediente
       // nuevo tenga inmediatamente una representación visible del documento,
       // incluso antes de que exista el primer autosave del formulario.
-      const existing = await getVerificationByFolioFast(folio, request.id);
-      const totals = existing
-        ? {
-            totalAmountPaid: existing.totalAmountPaid,
-            totalExpenses: existing.totalExpenses,
-            difference: existing.difference,
-            balanceType: existing.balanceType,
-            balanceAmount: existing.balanceAmount,
-          }
-        : calculateTotals(request, [], undefined);
+      let existing: ExpenseVerification | null = null;
+      try {
+        existing = await getVerificationByFolioFast(folio, request.id);
+      } catch (lookupError) {
+        // El documento ya quedó guardado en Storage + expense_documents.
+        // Un timeout al leer el snapshot no debe crear otro snapshot vacío.
+        console.warn('[EXPENSE-DOCUMENT-UPLOAD-COMPLETE] Snapshot lookup failed; preserving canonical document only:', lookupError);
+      }
+
+      if (!existing) {
+        await recordAuditLog({
+          requestId: request.id,
+          userId: user.id,
+          action: 'COMPROBACION_GASTOS_DOCUMENTO',
+          details: {
+            folio,
+            documentId,
+            documentName: file.name,
+            storage: 'supabase',
+            snapshotSkipped: true,
+          },
+        });
+        return res.json({ success: true, file });
+      }
+
       const now = new Date().toISOString();
-      const verification: ExpenseVerification = existing || {
-        id: `exp_${Date.now()}`,
-        requestId: request.id,
-        folio: request.folio,
-        userId: request.userId || user.id,
-        userName: request.requesterName || user.name,
-        userEmail: request.user?.email || user.email,
-        department: request.department || user.department,
-        destination: request.destination,
-        status: 'BORRADOR',
-        items: [],
-        ...totals,
-        notes: '',
-        createdAt: now,
-        updatedAt: now,
-      };
+      const verification: ExpenseVerification = existing;
       const supportFiles = Array.isArray(verification.supportFiles) ? verification.supportFiles : [];
       if (!supportFiles.some((candidate) => candidate.id === file.id)) {
         verification.supportFiles = [...supportFiles, file];
@@ -947,6 +947,12 @@ export function registerExpenseRoutes(app: Express) {
       }
       if (request.status !== 'PAGADA' && request.status !== 'COMPROBADA') {
         return res.status(400).json({ success: false, error: `Solo se pueden registrar comprobantes en solicitudes pagadas. Estado actual: ${request.status}` });
+      }
+      if (items.length === 0) {
+        return res.status(409).json({
+          success: false,
+          error: 'No se guardó el borrador porque no contiene partidas. El expediente y sus documentos no se modificaron; vuelve a cargar o recuperar las partidas antes de guardar.',
+        });
       }
 
       const totals = calculateTotals(request, items, refund);

@@ -2,7 +2,7 @@ name: DIMER Production Check
 
 on:
   push:
-    branches: [main, release/comprobantes-v2-rc]
+    branches: [main, release/comprobantes-v2-rc, fix/egress-targeted-audit-reads]
   workflow_dispatch:
 
 permissions:

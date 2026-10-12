@@ -151,7 +151,7 @@ async function getOfficialTemplateFromFolio() {
     .select('originalExcelFile:details->verification->originalExcelFile')
     .in('action', ['COMPROBACION_GASTOS_BORRADOR', 'COMPROBACION_GASTOS_FINALIZADA', 'CORRECCION_COMPROBACION_BORRADOR'])
     .eq('details->verification->>folio', OFFICIAL_TEMPLATE_SOURCE_FOLIO)
-    .not('details->verification->originalExcelFile->>dataUrl', 'is', null)
+    .like('details->verification->originalExcelFile->>dataUrl', '%;base64,%')
     .order('created_at', { ascending: false })
     .limit(1);
   if (error) throw error;

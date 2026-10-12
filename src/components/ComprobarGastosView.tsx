@@ -1261,13 +1261,13 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       setExcelAuditSummary(data.verification.excelAuditSummary || null);
       const savedDraftSnapshot: DraftAutosaveSnapshot = {
         folio: loadedRequest.folio,
-        items: data.verification.items || items,
+        items,
         supportFiles: savedSupportFiles,
-        pendingFiscalXmls: data.verification.pendingFiscalXmls || pendingFiscalXmls,
-        originalExcelFile: data.verification.originalExcelFile || originalExcelFile,
-        excelAuditSummary: data.verification.excelAuditSummary || excelAuditSummary,
-        notes: data.verification.notes ?? notes,
-        refund: data.verification.refund || refund || undefined,
+        pendingFiscalXmls: data.verification.pendingFiscalXmls || [],
+        originalExcelFile: data.verification.originalExcelFile || null,
+        excelAuditSummary: data.verification.excelAuditSummary || null,
+        notes,
+        refund: refund || undefined,
       };
       autosaveSnapshotRef.current = savedDraftSnapshot;
       lastSavedDraftSignatureRef.current = {

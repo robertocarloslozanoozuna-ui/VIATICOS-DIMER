@@ -175,39 +175,42 @@ async function readLatestVerificationFromAudit(
   requestId?: string,
   folio?: string,
 ): Promise<ExpenseVerification | null> {
-  let query: any = supabase
-    .from('audit_logs')
-    .select(VERIFICATION_AUDIT_SELECT)
-    .in('action', [...VERIFICATION_AUDIT_ACTIONS])
-    .order('created_at', { ascending: false })
-    .limit(25);
+  const createQuery = (requireItems: boolean) => {
+    let query: any = supabase
+      .from('audit_logs')
+      .select(VERIFICATION_AUDIT_SELECT)
+      .in('action', [...VERIFICATION_AUDIT_ACTIONS]);
 
-  if (requestId) {
-    query = query.eq('request_id', requestId);
-  } else if (folio) {
-    query = query.eq('details->verification->>folio', folio);
-  } else {
-    throw new Error('Se requiere requestId o folio para consultar la comprobación.');
-  }
+    if (requestId) {
+      query = query.eq('request_id', requestId);
+    } else if (folio) {
+      query = query.eq('details->verification->>folio', folio);
+    } else {
+      throw new Error('Se requiere requestId o folio para consultar la comprobación.');
+    }
 
-  const { data, error } = await query;
-  if (error) throw error;
-  if (!Array.isArray(data) || data.length === 0) return null;
+    // Preferir directamente el snapshot válido más reciente. El filtro evita
+    // descargar múltiples snapshots históricos que pueden repetir archivos.
+    if (requireItems) query = query.not('details->verification->items', 'eq', '[]');
+    return query.order('created_at', { ascending: false }).limit(1);
+  };
 
-  // Las versiones anteriores podían guardar un autosave vacío después de
-  // una lectura incompleta. Nunca usamos ese snapshot para reemplazar una
-  // captura con partidas; recuperamos la más reciente con items dentro de
-  // una ventana limitada del historial del mismo expediente.
-  const candidates = data
+  const { data: validData, error: validError } = await createQuery(true);
+  if (validError) throw validError;
+  const validRows = (validData || [])
     .map((row: any) => ({ row, verification: extractVerification(row.details, row) }))
-    .filter((entry: any) => entry.verification);
+    .filter((entry: any) => entry.verification && entry.verification.items.length > 0);
+  if (validRows.length > 0) return validRows[0].verification;
 
-  const latest = candidates[0];
-  if (!latest) return null;
-  if (latest.verification.items.length > 0) return latest.verification;
-
-  const latestWithItems = candidates.find((entry: any) => entry.verification.items.length > 0);
-  return latestWithItems?.verification || latest.verification;
+  // Si no hay ningún snapshot con partidas (o solo existían borradores vacíos),
+  // conservar el último estado como fallback. Este segundo query solo ocurre
+  // cuando la consulta dirigida no encontró una comprobación válida.
+  const { data: latestData, error: latestError } = await createQuery(false);
+  if (latestError) throw latestError;
+  const latest = (latestData || [])
+    .map((row: any) => extractVerification(row.details, row))
+    .find((verification: any) => verification);
+  return latest || null;
 }
 
 async function getCache() {

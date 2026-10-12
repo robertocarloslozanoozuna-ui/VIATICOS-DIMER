@@ -365,6 +365,7 @@ async function readLatestVerificationSummaryFromAudit(
       .from('audit_logs')
       .select(VERIFICATION_SUMMARY_AUDIT_SELECT)
       .eq('request_id', requestId)
+      .not('details->verification->>folio', 'is', null)
       .in('action', [...VERIFICATION_AUDIT_ACTIONS]);
 
     // Comprueba si existen partidas sin devolver el arreglo items.

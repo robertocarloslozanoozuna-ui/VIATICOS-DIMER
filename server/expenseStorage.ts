@@ -360,6 +360,16 @@ export async function findFileById(fileId: string, requestId?: string): Promise<
     }
   }
 
+  // Si no se proporcionó el requestId, poblar la caché desde el último
+  // snapshot de cada solicitud (lecturas dirigidas), nunca desde todo el historial.
+  if (!requestId) {
+    try {
+      await listAllVerifications();
+    } catch (error) {
+      console.warn('[EXPENSE-STORAGE] Targeted legacy file lookup warning:', error);
+    }
+  }
+
   for (const v of (await getCache()).values()) {
     for (const item of v.items || []) {
       if (item.xmlFile?.id === key) return { file: item.xmlFile, folio: v.folio, concept: item.concept };

@@ -191,7 +191,7 @@ async function readLatestVerificationFromAudit(
 
     // Preferir directamente el snapshot válido más reciente. El filtro evita
     // descargar múltiples snapshots históricos que pueden repetir archivos.
-    if (requireItems) query = query.not('details->verification->items', 'eq', '[]');
+    if (requireItems) query = query.contains('details', { verification: { items: [{}] } });
     return query.order('created_at', { ascending: false }).limit(1);
   };
 

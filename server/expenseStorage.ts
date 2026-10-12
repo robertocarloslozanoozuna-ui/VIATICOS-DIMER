@@ -312,9 +312,6 @@ export async function saveVerification(v: ExpenseVerification): Promise<ExpenseV
   const cloned = JSON.parse(JSON.stringify(v)) as ExpenseVerification; cloned.folio = cleanFolio; cloned.updatedAt = new Date().toISOString();
   (await getCache()).set(cleanFolio, cloned); persistToDisk(verificationsCache!); return JSON.parse(JSON.stringify(cloned));
 }
-export async function listAllVerifications(): Promise<ExpenseVerification[]> {
-  return Array.from((await getCache()).values()).map(v => JSON.parse(JSON.stringify(v)));
-}
 export async function findFileById(fileId: string, requestId?: string): Promise<{ file: ExpenseFileAttachment; folio: string; concept: string } | null> {
   const key = String(fileId || '').trim();
   if (!key) return null;

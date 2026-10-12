@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import type { ExpenseVerification, ExpenseFileAttachment } from '../src/types.js';
 import { supabase } from './supabase.js';
-import { listAuditLogs } from './db.js';
+
 import { listDocumentsByRequestId, findDocumentById } from './documentRepository.js';
 import { documentAttachmentFromRecord } from './documentService.js';
 
@@ -325,6 +325,94 @@ export async function saveVerification(v: ExpenseVerification): Promise<ExpenseV
   const cloned = JSON.parse(JSON.stringify(v)) as ExpenseVerification; cloned.folio = cleanFolio; cloned.updatedAt = new Date().toISOString();
   (await getCache()).set(cleanFolio, cloned); persistToDisk(verificationsCache!); return JSON.parse(JSON.stringify(cloned));
 }
+
+type LegacyAttachmentSearch = {
+  select: string;
+  match: Record<string, unknown>;
+  candidates: (row: any) => any[];
+};
+
+async function findLegacyAttachmentInAudit(
+  requestId: string,
+  fileId: string,
+): Promise<{ file: ExpenseFileAttachment; folio: string } | null> {
+  const metadata = 'folio:details->verification->>folio,requestFolio:details->>folio';
+  const searches: LegacyAttachmentSearch[] = [
+    {
+      select: `documentAttachment:details->documentAttachment,${metadata}`,
+      match: { documentAttachment: { id: fileId } },
+      candidates: (row) => [row.documentAttachment],
+    },
+    {
+      select: `supportFiles:details->verification->supportFiles,${metadata}`,
+      match: { verification: { supportFiles: [{ id: fileId }] } },
+      candidates: (row) => Array.isArray(row.supportFiles) ? row.supportFiles : [],
+    },
+    {
+      select: `pendingFiscalXmls:details->verification->pendingFiscalXmls,${metadata}`,
+      match: { verification: { pendingFiscalXmls: [{ id: fileId }] } },
+      candidates: (row) => Array.isArray(row.pendingFiscalXmls) ? row.pendingFiscalXmls : [],
+    },
+    {
+      select: `items:details->verification->items,${metadata}`,
+      match: { verification: { items: [{ xmlFile: { id: fileId } }] } },
+      candidates: (row) => Array.isArray(row.items) ? row.items.flatMap((item: any) => [item?.xmlFile]) : [],
+    },
+    {
+      select: `items:details->verification->items,${metadata}`,
+      match: { verification: { items: [{ pdfFile: { id: fileId } }] } },
+      candidates: (row) => Array.isArray(row.items) ? row.items.flatMap((item: any) => [item?.pdfFile]) : [],
+    },
+    {
+      select: `items:details->verification->items,${metadata}`,
+      match: { verification: { items: [{ ticketFile: { id: fileId } }] } },
+      candidates: (row) => Array.isArray(row.items) ? row.items.flatMap((item: any) => [item?.ticketFile]) : [],
+    },
+    {
+      select: `originalExcelFile:details->verification->originalExcelFile,${metadata}`,
+      match: { verification: { originalExcelFile: { id: fileId } } },
+      candidates: (row) => [row.originalExcelFile],
+    },
+    {
+      select: `refund:details->verification->refund,${metadata}`,
+      match: { verification: { refund: { receiptFile: { id: fileId } } } },
+      candidates: (row) => [row.refund?.receiptFile],
+    },
+    {
+      select: `refund:details->verification->refund,${metadata}`,
+      match: { verification: { refund: { signedReceiptFile: { id: fileId } } } },
+      candidates: (row) => [row.refund?.signedReceiptFile],
+    },
+  ];
+
+  let metadataOnly: { file: ExpenseFileAttachment; folio: string } | null = null;
+  for (const search of searches) {
+    // Scope to the request and the exact JSON path that references this file.
+    // Return only that attachment collection, never the full audit row/details.
+    const { data, error } = await supabase
+      .from('audit_logs')
+      .select(search.select)
+      .eq('request_id', requestId)
+      .in('action', [...VERIFICATION_AUDIT_ACTIONS])
+      .contains('details', search.match)
+      .order('created_at', { ascending: true })
+      .limit(3);
+    if (error) throw error;
+
+    for (const row of data || []) {
+      const file = search.candidates(row).find((candidate: any) => candidate?.id === fileId);
+      if (!file) continue;
+      const folio = String(row.folio || row.requestFolio || file.folio || '').toUpperCase().trim();
+      const result = { file: file as ExpenseFileAttachment, folio };
+      if (typeof file.dataUrl === 'string' && file.dataUrl.startsWith('data:') && file.dataUrl.includes(';base64,')) {
+        return result;
+      }
+      if (!metadataOnly) metadataOnly = result;
+    }
+  }
+  return metadataOnly;
+}
+
 export async function findFileById(fileId: string, requestId?: string): Promise<{ file: ExpenseFileAttachment; folio: string; concept: string } | null> {
   const key = String(fileId || '').trim();
   if (!key) return null;
@@ -342,34 +430,17 @@ export async function findFileById(fileId: string, requestId?: string): Promise<
     console.warn('[EXPENSE-STORAGE] V2 document lookup warning:', (error as any)?.message || error);
   }
 
-  // Preview/download should never need to synchronize every audit record in the
-  // project. When the request is known, inspect only that request's audit trail.
+  // Los documentos V2 se resuelven arriba desde expense_documents/Storage.
+  // Para compatibilidad heredada, buscar únicamente filas del expediente que
+  // referencien el ID y proyectar solo el fragmento JSON necesario.
   if (requestId) {
     try {
-      const logs = await listAuditLogs(requestId);
-      for (const row of logs) {
-        const details: any = row.details || {};
-        const verification: any = details.verification;
-        const candidates: any[] = [
-          details.documentAttachment,
-          ...(Array.isArray(verification?.supportFiles) ? verification.supportFiles : []),
-          ...(Array.isArray(verification?.pendingFiscalXmls) ? verification.pendingFiscalXmls : []),
-          ...(Array.isArray(verification?.items) ? verification.items.flatMap((item: any) => [item?.xmlFile, item?.pdfFile, item?.ticketFile]) : []),
-          verification?.originalExcelFile,
-          verification?.refund?.receiptFile,
-          verification?.refund?.signedReceiptFile,
-        ];
-        const file = candidates.find((candidate: any) => candidate?.id === key);
-        if (file) {
-          return {
-            file,
-            folio: String(verification?.folio || details.documentAttachment?.folio || '').toUpperCase().trim(),
-            concept: 'Soporte documental',
-          };
-        }
+      const legacy = await findLegacyAttachmentInAudit(requestId, key);
+      if (legacy) {
+        return { file: legacy.file, folio: legacy.folio, concept: 'Soporte documental' };
       }
     } catch (error) {
-      console.warn('[EXPENSE-STORAGE] Fast file lookup warning:', error);
+      console.warn('[EXPENSE-STORAGE] Targeted legacy file lookup warning:', error);
     }
   }
 

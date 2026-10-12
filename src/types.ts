@@ -165,6 +165,17 @@ export interface ExpenseRefund {
   registeredAt: string;
 }
 
+export interface ExpenseVerificationSummary {
+  requestId: string;
+  folio: string;
+  userId: string;
+  userEmail?: string;
+  status: 'BORRADOR' | 'ENVIADA';
+  totalExpenses: number;
+  hasItems: boolean;
+  hasRefund: boolean;
+}
+
 export interface ExpenseVerification {
   id: string;
   requestId: string;

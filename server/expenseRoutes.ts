@@ -156,7 +156,8 @@ async function getOfficialTemplateFromFolio() {
     .limit(1);
   if (error) throw error;
 
-  const dataUrl = String((data || [])[0]?.originalExcelFile?.dataUrl || '');
+  const excelRecord = ((data || [])[0]?.originalExcelFile || null) as any;
+  const dataUrl = String(excelRecord?.dataUrl || '');
   const match = dataUrl.match(/^data:[^;]+;base64,(.+)$/);
   if (!match) throw new Error('No se encontró el Excel original del folio VIAT-2026-000002.');
   const buffer = Buffer.from(match[1], 'base64');

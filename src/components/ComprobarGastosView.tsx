@@ -48,6 +48,7 @@ import type {
   TravelRequest,
   ExpenseItem,
   ExpenseVerification,
+  ExpenseVerificationSummary,
   ExpenseType,
   ExpenseFileAttachment,
   ExpenseDocumentAnalysis,
@@ -62,6 +63,44 @@ import { ExcelExpensesImporter } from './ExcelExpensesImporter';
 import RefundReceiptModal from './RefundReceiptModal';
 import { downloadRefundReceiptPdf } from '../utils/refundReceiptPdf';
 import { summarizeDocumentTotals } from '../utils/documentTotals';
+
+type DraftAutosaveSnapshot = {
+  folio: string;
+  items: ExpenseItem[];
+  supportFiles: ExpenseFileAttachment[];
+  pendingFiscalXmls: ExpenseFileAttachment[];
+  originalExcelFile: ExpenseFileAttachment | null;
+  excelAuditSummary: ExcelAuditSummary | null;
+  notes: string;
+  refund?: ExpenseRefund;
+};
+
+function stripBinaryForDraftSignature(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripBinaryForDraftSignature);
+  if (value && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
+      // Los binarios se persisten en Storage; no deben provocar cambios falsos.
+      if (key === 'dataUrl') continue;
+      result[key] = stripBinaryForDraftSignature((value as Record<string, unknown>)[key]);
+    }
+    return result;
+  }
+  return value;
+}
+
+function getDraftSnapshotSignature(snapshot: DraftAutosaveSnapshot): string {
+  return JSON.stringify(stripBinaryForDraftSignature({
+    folio: String(snapshot.folio || '').trim().toUpperCase(),
+    items: snapshot.items || [],
+    supportFiles: snapshot.supportFiles || [],
+    pendingFiscalXmls: snapshot.pendingFiscalXmls || [],
+    originalExcelFile: snapshot.originalExcelFile || null,
+    excelAuditSummary: snapshot.excelAuditSummary || null,
+    notes: snapshot.notes || '',
+    refund: snapshot.refund || null,
+  })) || '';
+}
 
 interface ComprobarGastosViewProps {
   currentUser: UserType;
@@ -197,16 +236,8 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   const autosaveInFlightRef = useRef(false);
   const autosaveInFlightPromiseRef = useRef<Promise<void> | null>(null);
   const autosaveVersionRef = useRef(0);
-  const autosaveSnapshotRef = useRef<{
-    folio: string;
-    items: ExpenseItem[];
-    supportFiles: ExpenseFileAttachment[];
-    pendingFiscalXmls: ExpenseFileAttachment[];
-    originalExcelFile: ExpenseFileAttachment | null;
-    excelAuditSummary: ExcelAuditSummary | null;
-    notes: string;
-    refund?: ExpenseRefund;
-  } | null>(null);
+  const autosaveSnapshotRef = useRef<DraftAutosaveSnapshot | null>(null);
+  const lastSavedDraftSignatureRef = useRef<{ folio: string; signature: string } | null>(null);
   const [submittingFinal, setSubmittingFinal] = useState<boolean>(false);
   const [showConfirmFinalModal, setShowConfirmFinalModal] = useState<boolean>(false);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
@@ -214,7 +245,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
   // Requests & Verifications data
   const [allRequests, setAllRequests] = useState<TravelRequest[]>([]);
-  const [verificationsList, setVerificationsList] = useState<ExpenseVerification[]>([]);
+  const [verificationsList, setVerificationsList] = useState<ExpenseVerificationSummary[]>([]);
   const [loadingData, setLoadingData] = useState<boolean>(false);
 
   // Folio filter category for the overview panel:
@@ -284,7 +315,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   const partialRequests = useMemo(() => {
     return paidUncompletedRequests.filter((r) => {
       const ver = verificationsList.find((v) => v.folio === r.folio);
-      return ver && ver.items && ver.items.length > 0;
+      return Boolean(ver?.hasItems);
     });
   }, [paidUncompletedRequests, verificationsList]);
 
@@ -292,7 +323,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   const unstartedRequests = useMemo(() => {
     return paidUncompletedRequests.filter((r) => {
       const ver = verificationsList.find((v) => v.folio === r.folio);
-      return !ver || !ver.items || ver.items.length === 0;
+      return !ver?.hasItems;
     });
   }, [paidUncompletedRequests, verificationsList]);
 
@@ -341,8 +372,26 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
         return;
       }
 
+      const initialVerification: ExpenseVerification | null = data.verification || null;
+      const initialDraftSnapshot: DraftAutosaveSnapshot = {
+        folio: data.request.folio,
+        items: initialVerification?.items || [],
+        supportFiles: lightweightAttachments(initialVerification?.supportFiles),
+        pendingFiscalXmls: initialVerification?.pendingFiscalXmls || [],
+        originalExcelFile: initialVerification?.originalExcelFile || null,
+        excelAuditSummary: initialVerification?.excelAuditSummary || null,
+        notes: initialVerification?.notes || '',
+        refund: initialVerification?.refund || undefined,
+      };
+      // La hidratación inicial establece el baseline pero nunca se considera una edición.
+      autosaveSnapshotRef.current = initialDraftSnapshot;
+      lastSavedDraftSignatureRef.current = {
+        folio: initialDraftSnapshot.folio,
+        signature: getDraftSnapshotSignature(initialDraftSnapshot),
+      };
+
       setLoadedRequest(data.request);
-      setVerification(data.verification || null);
+      setVerification(initialVerification);
       setCanEdit(Boolean(data.canEdit));
       setStatusNotice(data.statusNotice || null);
 
@@ -588,6 +637,11 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   }
 
   function handleRemoveItem(itemId: string) {
+    if (items.length <= 1) {
+      setActionError('No puedes eliminar la última partida y guardar un expediente vacío. Agrega otra partida o corrige la existente.');
+      return;
+    }
+    setActionError(null);
     setItems(items.filter((it) => it.id !== itemId));
   }
 
@@ -1046,10 +1100,14 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   // los datos más recientes y no una closure antigua.
   async function persistDraftSilently(): Promise<void> {
     const snapshot = autosaveSnapshotRef.current;
-    if (!snapshot || submittingFinal || finalizingAccounting) return;
+    if (!snapshot || snapshot.items.length === 0 || submittingFinal || finalizingAccounting) return;
 
-    // Si ya existe un guardado en curso, el cambio actual no se pierde.
-    // El versionado del effect programará el siguiente guardado al terminar.
+    const signatureAtStart = getDraftSnapshotSignature(snapshot);
+    const lastSaved = lastSavedDraftSignatureRef.current;
+    if (lastSaved?.folio === snapshot.folio && lastSaved.signature === signatureAtStart) return;
+
+    // Si ya existe un guardado en curso, el cambio actual se conserva y se
+    // programa otro guardado al terminar únicamente si la huella aún difiere.
     if (autosaveInFlightRef.current) {
       return autosaveInFlightPromiseRef.current || undefined;
     }
@@ -1073,7 +1131,13 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
 
       if (!res.ok) {
         console.warn('[AUTOSAVE-DRAFT] No se pudo guardar el progreso:', res.status);
+        return;
       }
+
+      lastSavedDraftSignatureRef.current = {
+        folio: snapshot.folio,
+        signature: signatureAtStart,
+      };
     })();
 
     autosaveInFlightRef.current = true;
@@ -1110,7 +1174,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   useEffect(() => {
     if (!loadedRequest || !canEdit || searching || submittingFinal || finalizingAccounting) return;
 
-    autosaveSnapshotRef.current = {
+    const snapshot: DraftAutosaveSnapshot = {
       folio: loadedRequest.folio,
       items,
       supportFiles,
@@ -1120,8 +1184,19 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       notes,
       refund: refund || undefined,
     };
-    autosaveVersionRef.current += 1;
+    autosaveSnapshotRef.current = snapshot;
 
+    const signature = getDraftSnapshotSignature(snapshot);
+    const lastSaved = lastSavedDraftSignatureRef.current;
+    if (lastSaved?.folio === snapshot.folio && lastSaved.signature === signature) {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+      return;
+    }
+
+    autosaveVersionRef.current += 1;
     if (autosaveTimerRef.current) clearTimeout(autosaveTimerRef.current);
     autosaveTimerRef.current = setTimeout(() => {
       void persistDraftSilently();
@@ -1151,6 +1226,10 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   // Save draft
   async function handleSaveDraft() {
     if (!loadedRequest) return;
+    if (items.length === 0) {
+      setActionError('No se puede guardar un borrador vacío. Recupera o agrega las partidas antes de guardar.');
+      return;
+    }
     setSavingDraft(true);
     setActionSuccess(null);
     setActionError(null);
@@ -1176,9 +1255,25 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       }
       setVerification(data.verification);
       setPendingFiscalXmls(data.verification.pendingFiscalXmls || []);
-      setSupportFiles(data.verification.supportFiles || []);
+      const savedSupportFiles = lightweightAttachments(data.verification.supportFiles || supportFiles);
+      setSupportFiles(savedSupportFiles);
       setOriginalExcelFile(data.verification.originalExcelFile || null);
       setExcelAuditSummary(data.verification.excelAuditSummary || null);
+      const savedDraftSnapshot: DraftAutosaveSnapshot = {
+        folio: loadedRequest.folio,
+        items,
+        supportFiles: savedSupportFiles,
+        pendingFiscalXmls: data.verification.pendingFiscalXmls || [],
+        originalExcelFile: data.verification.originalExcelFile || null,
+        excelAuditSummary: data.verification.excelAuditSummary || null,
+        notes,
+        refund: refund || undefined,
+      };
+      autosaveSnapshotRef.current = savedDraftSnapshot;
+      lastSavedDraftSignatureRef.current = {
+        folio: savedDraftSnapshot.folio,
+        signature: getDraftSnapshotSignature(savedDraftSnapshot),
+      };
       setActionSuccess('Borrador guardado exitosamente. Puedes continuar capturando en cualquier momento.');
       // Refresh list so partial progress is updated
       loadData();
@@ -1587,7 +1682,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
                       {paidUncompletedRequests.map((req) => {
                         const ver = verificationsList.find((v) => v.folio === req.folio);
-                        const isPartial = ver && ver.items && ver.items.length > 0;
+                        const isPartial = Boolean(ver?.hasItems);
                         const totalPaid = Number(req.amountAuthorized || req.amountRequested || 0);
                         const totalComp = Number(ver?.totalExpenses || 0);
                         const pct = totalPaid > 0 ? Math.min(100, Math.round((totalComp / totalPaid) * 100)) : 0;
@@ -1605,7 +1700,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                                 {isPartial ? (
                                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-200 flex items-center gap-1">
                                     <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
-                                    Borrador ({ver.items.length} gastos)
+                                    Borrador iniciado
                                   </span>
                                 ) : (
                                   <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
@@ -1698,7 +1793,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                                   {req.folio}
                                 </span>
                                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-900 border border-amber-300">
-                                  {ver?.items?.length || 0} comprobante(s)
+                                  {ver?.hasItems ? 'Partidas capturadas' : 'Sin partidas'}
                                 </span>
                               </div>
 
@@ -1835,7 +1930,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                         <tbody className="divide-y divide-slate-200 font-medium">
                           {completed100Requests.map((req) => {
                             const ver = verificationsList.find((v) => v.folio === req.folio);
-                            const hasRefund = Boolean(ver?.refund);
+                            const hasRefund = Boolean(ver?.hasRefund);
 
                             return (
                               <tr key={req.id} className="hover:bg-slate-50/80 transition-colors">

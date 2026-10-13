@@ -160,21 +160,103 @@ export async function recordAuditLog(p:{requestId?:string|null;userId:string;act
     details.verification = sanitized;
   }
 
-  const {data,error}=await supabase.from('audit_logs').insert({
-    id:`aud_${Date.now()}_${crypto.randomBytes(5).toString('hex')}`,
-    request_id:p.requestId||null,
-    user_id:p.userId,
-    user_name:user?.name||null,
-    user_email:user?.email||null,
-    action:p.action,
-    details:details,
-    created_at:new Date().toISOString()
-  }).select('*').single();
-
-  if(error)throw error;
-  return toAudit(data);
+  // No pedir la fila insertada de vuelta: details puede contener el Base64
+  // del adjunto histórico y su respuesta duplicaría esa transferencia (Egress).
+  // Construimos el mismo resultado en memoria para conservar el contrato del
+  // helper sin descargar details otra vez desde Postgres.
+  const row = {
+    id: `aud_${Date.now()}_${crypto.randomBytes(5).toString('hex')}`,
+    request_id: p.requestId || null,
+    user_id: p.userId,
+    user_name: user?.name || null,
+    user_email: user?.email || null,
+    action: p.action,
+    details,
+    created_at: new Date().toISOString(),
+  };
+  const { error } = await supabase.from('audit_logs').insert(row);
+  if (error) throw error;
+  return toAudit(row);
 }
-export async function listAuditLogs(requestId?:string){let query=supabase.from('audit_logs').select('*').order('created_at',{ascending:false});if(requestId)query=query.eq('request_id',requestId);const {data,error}=await query;if(error)throw error;return (data||[]).map(toAudit);}
+export async function listOutboxAuditLogs() {
+  // La bandeja de salida necesita solo sus dos acciones de correo; no debe
+  // descargar todos los eventos de auditoría ni los snapshots de comprobación.
+  const { data, error } = await supabase
+    .from('audit_logs')
+    .select('id,request_id,user_id,user_name,user_email,action,details,created_at')
+    .in('action', ['ENVIO_CORREO_SMTP', 'PRUEBA_SMTP'])
+    .order('created_at', { ascending: false })
+    .limit(200);
+  if (error) throw error;
+  return (data || []).map(toAudit);
+}
+export async function listAuditLogSummaries(requestId?: string) {
+  // La bitácora no necesita los binarios de los comprobantes ni el HTML completo
+  // de correos. Proyectar solo campos escalares evita descargar Base64 de details.
+  const safeSelect = [
+    'id', 'request_id', 'user_id', 'user_name', 'user_email', 'action', 'created_at',
+    'folio:details->>folio',
+    'verificationFolio:details->verification->>folio',
+    'documentId:details->>documentId',
+    'documentName:details->>documentName',
+    'storage:details->>storage',
+    'snapshotSkipped:details->>snapshotSkipped',
+    'reanalysis:details->>reanalysis',
+    'totalExpenses:details->verification->>totalExpenses',
+    'difference:details->verification->>difference',
+    'balanceType:details->verification->>balanceType',
+    'balanceAmount:details->verification->>balanceAmount',
+    'destination:details->>destination',
+    'amountRequested:details->>amountRequested',
+    'amountAuthorized:details->>amountAuthorized',
+    'amountPaid:details->>amountPaid',
+    'paymentMethod:details->>paymentMethod',
+    'reference:details->>reference',
+    'notes:details->>notes',
+    'comments:details->>comments',
+    'reason:details->>reason',
+    'rejectionReason:details->>rejectionReason',
+    'previousStatus:details->>previousStatus',
+    'targetEmail:details->>targetEmail',
+    'targetName:details->>targetName',
+    'email:details->>email',
+    'role:details->>role',
+    'subject:details->>subject',
+    'recipient:details->>to',
+    'logId:details->>logId',
+    'status:details->>status',
+    'error:details->>error',
+    'timestamp:details->>timestamp',
+  ].join(',');
+
+  let query: any = supabase
+    .from('audit_logs')
+    .select(safeSelect)
+    .order('created_at', { ascending: false })
+    .limit(1000);
+  if (requestId) query = query.eq('request_id', requestId);
+
+  const { data, error } = await query;
+  if (error) throw error;
+
+  return (data || []).map((row: any) => {
+    const details: Record<string, unknown> = {};
+    const put = (name: string, value: unknown) => {
+      if (value !== null && value !== undefined && value !== '') details[name] = value;
+    };
+    put('folio', row.folio || row.verificationFolio);
+    for (const field of [
+      'documentId', 'documentName', 'storage', 'snapshotSkipped', 'reanalysis',
+      'totalExpenses', 'difference', 'balanceType', 'balanceAmount', 'destination',
+      'amountRequested', 'amountAuthorized', 'amountPaid', 'paymentMethod',
+      'reference', 'notes', 'comments', 'reason', 'rejectionReason', 'previousStatus',
+      'targetEmail', 'targetName', 'email', 'role', 'subject', 'recipient',
+      'logId', 'status', 'error', 'timestamp',
+    ]) put(field, row[field]);
+
+    return toAudit({ ...row, details: Object.keys(details).length ? details : null });
+  });
+}
 export async function createVerificationCode(p:{email:string;name:string;department:string;roleId:string;passwordHash:string;salt:string}){const code=crypto.randomInt(100000,1000000).toString();const expiresAt=new Date(Date.now()+15*60*1000).toISOString();const {error}=await supabase.from('verification_codes').upsert({email:p.email.toLowerCase(),code,name:p.name,department:p.department,role_id:p.roleId,password_hash:p.passwordHash,salt:p.salt,expires_at:expiresAt,attempts:0,created_at:new Date().toISOString()},{onConflict:'email'});if(error)throw error;return {code,expiresAt};}
 export async function verifyCodeAndActivateUser(email:string,code:string){const clean=email.trim().toLowerCase();const {data,error}=await supabase.from('verification_codes').select('*').eq('email',clean).maybeSingle();if(error)throw error;if(!data)return {success:false,error:'No hay un código pendiente para este correo.'};if(new Date(data.expires_at).getTime()<Date.now())return {success:false,error:'El código ha expirado.'};if(Number(data.attempts||0)>=5)return {success:false,error:'Demasiados intentos. Solicita un nuevo código.'};if(String(data.code)!==code.trim()){await supabase.from('verification_codes').update({attempts:Number(data.attempts||0)+1}).eq('email',clean);return {success:false,error:'Código de verificación incorrecto.'};}const id=`usr_${Date.now()}_${crypto.randomBytes(5).toString('hex')}`;const {data:user,error:e}=await supabase.from('users').insert({id,name:data.name,email:clean,role:'SOLICITANTE',role_id:data.role_id||'role_solicitante',department:data.department,status:'ACTIVO',is_verified:true,password_hash:data.password_hash,salt:data.salt,created_at:new Date().toISOString()}).select('*').single();if(e)throw e;await supabase.from('user_roles').upsert({user_id:id,role_id:data.role_id||'role_solicitante'},{onConflict:'user_id,role_id'});await supabase.from('verification_codes').delete().eq('email',clean);return {success:true,user:await sanitizeUserFromRecord(toUser(user))};}
 export function hasPermission(u:User|undefined,p:Permission){return !!u&&u.status==='ACTIVO'&&(u.role==='ADMIN'||u.permissions?.includes(p));}

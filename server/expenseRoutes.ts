@@ -12,7 +12,7 @@ import { computeExpenseBalances } from '../src/utils/expenseCalculations.js';
 import { parseDimerExpenseExcel } from './excelImport.js';
 import { analyzeDocumentAmount } from './documentAmountAnalyzer.js';
 import { supabase } from './supabase.js';
-import { getDocumentUploadAuthorization, completeExpenseDocument, getExpenseDocument, setManualDocumentAmount, deleteExpenseDocument, signedDocumentUrl } from './documentService.js';
+import { getDocumentUploadAuthorization, completeExpenseDocument, getExpenseDocument, setManualDocumentAmount, deleteExpenseDocument, signedDocumentUrl, isRefundDocumentId } from './documentService.js';
 import { downloadObject } from './documentStorage.js';
 
 
@@ -314,13 +314,17 @@ export function registerExpenseRoutes(app: Express) {
       const type = String(req.body?.type || '').trim().toLowerCase();
       const size = Number(req.body?.size) || 0;
       const sha256 = String(req.body?.sha256 || '').trim().toLowerCase();
+      const purpose = String(req.body?.purpose || 'expense').trim();
+      if (!['expense', 'refund_receipt', 'signed_refund_receipt'].includes(purpose)) {
+        return res.status(400).json({ success: false, error: 'Propósito de documento no válido.' });
+      }
       if (!folio || !name) return res.status(400).json({ success: false, error: 'Folio y nombre de archivo son requeridos.' });
       const request = await getRequest(folio);
       if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
       const privileged = userIsAdminOrFinanzas(user);
       if (!privileged && !isOwner(request, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para adjuntar archivos en este folio.' });
       if (request.status !== 'PAGADA' && request.status !== 'COMPROBADA') return res.status(400).json({ success: false, error: 'Solo se pueden adjuntar documentos en solicitudes pagadas. Estado actual: ' + request.status });
-      const result = await getDocumentUploadAuthorization({ requestId: request.id, folio, user, name, type, size, sha256 });
+      const result = await getDocumentUploadAuthorization({ requestId: request.id, folio, user, name, type, size, sha256, purpose: purpose as 'expense' | 'refund_receipt' | 'signed_refund_receipt' });
       return res.json({ success: true, ...result });
     } catch (error: any) {
       console.error('[EXPENSE-DOCUMENT-UPLOAD-URL-ERROR]', error);
@@ -342,6 +346,7 @@ export function registerExpenseRoutes(app: Express) {
       const document = await getExpenseDocument(documentId);
       if (!document || document.folio !== folio || document.request_id !== request.id) return res.status(404).json({ success: false, error: 'Documento no encontrado en este expediente.' });
       const file = await completeExpenseDocument(documentId);
+      const isRefundReceipt = isRefundDocumentId(file.id);
 
       // El documento V2 ya es durable en Supabase Storage + expense_documents.
       // También actualizamos el snapshot de comprobación para que un expediente
@@ -375,7 +380,9 @@ export function registerExpenseRoutes(app: Express) {
       const now = new Date().toISOString();
       const verification: ExpenseVerification = existing;
       const supportFiles = Array.isArray(verification.supportFiles) ? verification.supportFiles : [];
-      if (!supportFiles.some((candidate) => candidate.id === file.id)) {
+      // Los recibos de reembolso tienen su propia referencia dentro de refund;
+      // no deben mezclarse con los comprobantes que participan en conciliación.
+      if (!isRefundReceipt && !supportFiles.some((candidate) => candidate.id === file.id)) {
         verification.supportFiles = [...supportFiles, file];
       }
       verification.updatedAt = now;
@@ -385,7 +392,7 @@ export function registerExpenseRoutes(app: Express) {
         requestId: request.id,
         userId: user.id,
         action: 'COMPROBACION_GASTOS_DOCUMENTO',
-        details: { verification: saved, documentId, storage: 'supabase' },
+        details: { verification: saved, documentId, storage: 'supabase', documentPurpose: isRefundReceipt ? 'refund_receipt' : 'expense' },
       });
       return res.json({ success: true, file });
     } catch (error: any) {
@@ -799,7 +806,7 @@ export function registerExpenseRoutes(app: Express) {
       // los documentos vigentes del expediente se vuelven a incorporar aquí.
       const canonicalStorageFiles = (await listDocumentsByRequestId(request.id))
         .map(documentAttachmentFromRecord)
-        .filter((file) => file.id && file.documentStatus !== 'DELETED');
+        .filter((file) => file.id && file.documentStatus !== 'DELETED' && !isRefundDocumentId(file.id));
 
       if (canonicalStorageFiles.length > 0) {
         if (!verification) {
@@ -906,7 +913,7 @@ export function registerExpenseRoutes(app: Express) {
       // confirmado en Storage desaparezca del borrador.
       const canonicalStorageFiles = (await listDocumentsByRequestId(request.id))
         .map(documentAttachmentFromRecord)
-        .filter((file) => file.id && file.documentStatus !== 'DELETED');
+        .filter((file) => file.id && file.documentStatus !== 'DELETED' && !isRefundDocumentId(file.id));
 
       const incomingSupportFiles = Array.isArray(req.body.supportFiles)
         ? req.body.supportFiles as ExpenseFileAttachment[]

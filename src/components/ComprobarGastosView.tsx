@@ -3098,7 +3098,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                           {refundFile.name} ({(refundFile.size / 1024).toFixed(1)} KB){uploadingRefundFile ? ' — Subiendo...' : ''}
                         </div>
                       ) : (
-                        <div className="text-[11px] text-slate-500">Adjuntar voucher bancario o acuse de caja</div>
+                        <div className="text-[11px] text-slate-500">{uploadingRefundFile ? 'Subiendo comprobante...' : 'Adjuntar voucher bancario o acuse de caja'}</div>
                       )}
                     </div>
                   </div>
@@ -3154,7 +3154,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                         </div>
                       ) : (
                         <div className="text-[11px] text-blue-800">
-                          Imprime el recibo, recaba la firma, escanéalo y súbelo aquí.
+                          {uploadingSignedRefundFile ? 'Subiendo PDF firmado...' : 'Imprime el recibo, recaba la firma, escanéalo y súbelo aquí.'}
                         </div>
                       )}
                     </div>

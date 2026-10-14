@@ -318,6 +318,13 @@ export function registerExpenseRoutes(app: Express) {
       if (!['expense', 'refund_receipt', 'signed_refund_receipt'].includes(purpose)) {
         return res.status(400).json({ success: false, error: 'Propósito de documento no válido.' });
       }
+      const extension = name.toLowerCase().split('.').pop() || '';
+      if (purpose === 'signed_refund_receipt' && extension !== 'pdf') {
+        return res.status(400).json({ success: false, error: 'El recibo firmado debe ser PDF.' });
+      }
+      if (purpose === 'refund_receipt' && !['pdf', 'jpg', 'jpeg', 'png', 'webp'].includes(extension)) {
+        return res.status(400).json({ success: false, error: 'El comprobante de reembolso debe ser PDF o imagen.' });
+      }
       if (!folio || !name) return res.status(400).json({ success: false, error: 'Folio y nombre de archivo son requeridos.' });
       const request = await getRequest(folio);
       if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });

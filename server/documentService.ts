@@ -71,6 +71,12 @@ export function documentAttachmentFromRecord(doc: ExpenseDocumentRecord) {
   return attachmentFromDocument(doc);
 }
 
+export type ExpenseDocumentPurpose = 'expense' | 'refund_receipt' | 'signed_refund_receipt';
+
+export function isRefundDocumentId(id: string): boolean {
+  return id.startsWith('refund_att_') || id.startsWith('signed_refund_att_');
+}
+
 export async function getDocumentUploadAuthorization(input: {
   requestId: string;
   folio: string;
@@ -79,7 +85,9 @@ export async function getDocumentUploadAuthorization(input: {
   type: string;
   size: number;
   sha256: string;
+  purpose?: ExpenseDocumentPurpose;
 }) {
+  const purpose = input.purpose || 'expense';
   const ext = extensionOf(input.name);
   const mime = mimeForExtension(ext);
   if (!ALLOWED_DOCUMENT_EXTENSIONS.has(ext)) throw new Error('Formato no admitido. Usa PDF, XML, JPG, JPEG, PNG o WEBP.');
@@ -91,7 +99,11 @@ export async function getDocumentUploadAuthorization(input: {
     throw new Error(`El tipo MIME del archivo no coincide con .${ext}.`);
   }
 
-  const duplicate = await findDocumentByHash(input.requestId, input.sha256);
+  // No mezclar deduplicación de gastos con recibos de reembolso: el mismo PDF
+  // podría adjuntarse legítimamente a ambos propósitos.
+  const duplicate = purpose === 'expense'
+    ? await findDocumentByHash(input.requestId, input.sha256)
+    : null;
   if (duplicate && duplicate.status !== 'UPLOADING') {
     return { duplicate: true, documentId: duplicate.id, attachment: attachmentFromDocument(duplicate) };
   }
@@ -110,7 +122,12 @@ export async function getDocumentUploadAuthorization(input: {
     };
   }
 
-  const documentId = `doc_${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
+  const randomId = `${Date.now()}_${crypto.randomBytes(6).toString('hex')}`;
+  const documentId = purpose === 'refund_receipt'
+    ? `refund_att_${randomId}`
+    : purpose === 'signed_refund_receipt'
+      ? `signed_refund_att_${randomId}`
+      : `doc_${randomId}`;
   const storagePath = buildDocumentStoragePath(input.folio, documentId, input.name);
   const upload = await createSignedUpload(storagePath);
 
@@ -127,7 +144,9 @@ export async function getDocumentUploadAuthorization(input: {
     sha256: input.sha256,
     storage_bucket: DOCUMENTS_BUCKET,
     storage_path: storagePath,
-    document_type: ext === 'xml' ? 'CFDI_XML' : ext === 'pdf' ? 'FACTURA_PDF' : ['jpg', 'jpeg', 'png', 'webp'].includes(ext) ? 'IMAGEN' : 'OTRO',
+    document_type: purpose !== 'expense'
+      ? 'OTRO'
+      : ext === 'xml' ? 'CFDI_XML' : ext === 'pdf' ? 'FACTURA_PDF' : ['jpg', 'jpeg', 'png', 'webp'].includes(ext) ? 'IMAGEN' : 'OTRO',
     status: 'UPLOADING',
     reading_status: ext === 'xml' ? 'PENDING' : 'NOT_REQUIRED',
     uploaded_at: now,

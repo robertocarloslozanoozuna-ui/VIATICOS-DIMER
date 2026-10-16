@@ -251,7 +251,8 @@ function validateItems(items: ExpenseItem[]): string | null {
     if (!it.concept?.trim()) return `La partida #${i + 1} requiere un concepto o descripción.`;
     if (typeof it.amount !== 'number' || !Number.isFinite(it.amount) || it.amount <= 0) return `El monto de "${it.concept}" debe ser mayor a 0.`;
     if (!it.expenseDate) return `La partida "${it.concept}" requiere fecha del gasto.`;
-    if (it.type === 'PENDIENTE') return `La partida "${it.concept}" debe clasificarse como Factura o Ticket antes de finalizar.`;
+    // La partida puede quedar sin asociación individual a Factura/Ticket:
+    // la validación documental se realiza globalmente contra el total del expediente.
   }
   return null;
 }

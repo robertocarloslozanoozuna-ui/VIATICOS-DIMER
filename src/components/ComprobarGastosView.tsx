@@ -594,18 +594,9 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       return;
     }
 
-    if (itemType === 'FACTURA') {
-      if (!itemXmlFile || !itemPdfFile) {
-        setItemFormError('Para Factura Fiscal se requiere adjuntar obligatoriamente el archivo XML y el PDF.');
-        return;
-      }
-    } else {
-      if (!itemTicketFile) {
-        setItemFormError('Para Ticket de Compra se requiere adjuntar el comprobante (PDF o imagen).');
-        return;
-      }
-    }
-
+    // Los archivos pueden cargarse una sola vez en el expediente global y respaldar
+    // varias partidas. Si el usuario adjunta un archivo desde esta ventana, se conserva
+    // como asociación opcional, pero no se exige repetirlo por cada línea.
     const newItem: ExpenseItem = {
       id: `item_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
       concept,
@@ -3254,8 +3245,11 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
               {/* Type Selection */}
               <div>
                 <label className="block font-bold text-slate-700 mb-1.5">
-                  Tipo de Comprobante <span className="text-rose-500">*</span>
+                  Tipo de Gasto <span className="text-rose-500">*</span>
                 </label>
+                <p className="text-[10px] text-slate-500 mb-2">
+                  Los comprobantes se cargan en el expediente y pueden respaldar varias partidas. No necesitas adjuntar el mismo archivo en cada línea.
+                </p>
                 <div className="grid grid-cols-2 gap-2">
                   <button
                     type="button"
@@ -3274,7 +3268,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                       <span>Factura Fiscal (CFDI)</span>
                     </div>
                     <p className="text-[10px] font-normal text-slate-500 mt-0.5">
-                      Requiere archivo XML y PDF
+                      XML y PDF en el expediente; asociación opcional
                     </p>
                   </button>
 
@@ -3295,7 +3289,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                       <span>Ticket de Compra</span>
                     </div>
                     <p className="text-[10px] font-normal text-slate-500 mt-0.5">
-                      Comprobante simple (PDF o foto)
+                      PDF o foto en el expediente; asociación opcional
                     </p>
                   </button>
                 </div>

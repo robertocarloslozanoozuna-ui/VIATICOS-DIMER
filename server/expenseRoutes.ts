@@ -9,6 +9,7 @@ import { sendEmail, buildExpenseVerificationSubmittedEmailHtml } from './mailSer
 import { resolveBaseUrl } from './baseUrl.js';
 import type { User, ExpenseItem, ExpenseVerification, ExpenseFileAttachment } from '../src/types.js';
 import { computeExpenseBalances } from '../src/utils/expenseCalculations.js';
+import { summarizeDocumentTotals } from '../src/utils/documentTotals.js';
 import { parseDimerExpenseExcel } from './excelImport.js';
 import { analyzeDocumentAmount } from './documentAmountAnalyzer.js';
 import { supabase } from './supabase.js';
@@ -247,13 +248,32 @@ function calculateTotals(request: any, items: ExpenseItem[], refund?: any) {
 function validateItems(items: ExpenseItem[]): string | null {
   for (let i = 0; i < items.length; i++) {
     const it = items[i];
-    if (!it.concept?.trim()) return `El comprobante #${i + 1} requiere un concepto o descripción.`;
-    if (typeof it.amount !== 'number' || !Number.isFinite(it.amount) || it.amount <= 0) return `El monto del comprobante "${it.concept}" debe ser mayor a 0.`;
-    if (!it.expenseDate) return `El comprobante "${it.concept}" requiere fecha del gasto.`;
-    if (it.type === 'PENDIENTE') return `El comprobante "${it.concept}" debe clasificarse como Factura o Ticket antes de finalizar.`;
-    if (it.type === 'FACTURA' && (!it.xmlFile || !it.pdfFile)) return `La factura "${it.concept}" está incompleta: requiere XML (CFDI) y PDF.`;
-    if (it.type === 'TICKET' && !it.ticketFile) return `El ticket "${it.concept}" requiere adjuntar el comprobante (PDF o imagen).`;
+    if (!it.concept?.trim()) return `La partida #${i + 1} requiere un concepto o descripción.`;
+    if (typeof it.amount !== 'number' || !Number.isFinite(it.amount) || it.amount <= 0) return `El monto de "${it.concept}" debe ser mayor a 0.`;
+    if (!it.expenseDate) return `La partida "${it.concept}" requiere fecha del gasto.`;
+    if (it.type === 'PENDIENTE') return `La partida "${it.concept}" debe clasificarse como Factura o Ticket antes de finalizar.`;
   }
+  return null;
+}
+
+function validateDocumentReconciliation(
+  items: ExpenseItem[],
+  supportFiles: ExpenseFileAttachment[],
+  pendingFiscalXmls: ExpenseFileAttachment[],
+): string | null {
+  const totalExpenses = Number(items.reduce((sum, item) => sum + Number(item.amount || 0), 0).toFixed(2));
+  const documentTotals = summarizeDocumentTotals(items, supportFiles, pendingFiscalXmls);
+  const difference = Number((totalExpenses - documentTotals.totalDetected).toFixed(2));
+
+  if (Math.abs(difference) > 0.01) {
+    return `El Total General de Gastos (${totalExpenses.toFixed(2)}) no coincide con el Total detectado en comprobantes (${documentTotals.totalDetected.toFixed(2)}). Diferencia: ${Math.abs(difference).toFixed(2)}. Puedes usar un mismo comprobante para respaldar varias partidas; no es necesario asignarlo a cada línea.`;
+  }
+
+  const unconfirmedCount = documentTotals.pendingDocumentCount + documentTotals.withoutTotalCount + documentTotals.errorCount;
+  if (unconfirmedCount > 0) {
+    return `Los totales coinciden, pero hay ${unconfirmedCount} documento(s) sin importe confirmado o con error de lectura. Revisa los documentos antes de finalizar.`;
+  }
+
   return null;
 }
 
@@ -998,11 +1018,29 @@ export function registerExpenseRoutes(app: Express) {
           documentCount: documentsRequiringReview.length,
         });
       }
+
+      // Los documentos V2 se validan desde su fuente canónica (Storage + expense_documents).
+      // Una captura desfasada del navegador no debe ocultar ni duplicar documentos del expediente.
+      const existing = await getVerificationByFolioFast(folio, request.id) || await getVerificationByFolio(folio);
+      const canonicalStorageFiles = (await listDocumentsByRequestId(request.id))
+        .map(documentAttachmentFromRecord)
+        .filter((file) => file.id && file.documentStatus !== 'DELETED');
+      const incomingSupportFiles = Array.isArray(req.body.supportFiles)
+        ? req.body.supportFiles as ExpenseFileAttachment[]
+        : undefined;
+      const mergedSupportFiles = mergeSupportFiles(existing?.supportFiles, incomingSupportFiles);
+      const supportFiles = mergeSupportFiles(mergedSupportFiles, canonicalStorageFiles);
+      const pendingFiscalXmls = Array.isArray(req.body.pendingFiscalXmls)
+        ? req.body.pendingFiscalXmls as ExpenseFileAttachment[]
+        : (existing?.pendingFiscalXmls || []);
+
+      const reconciliationError = validateDocumentReconciliation(items, supportFiles, pendingFiscalXmls);
+      if (reconciliationError) return res.status(400).json({ success: false, error: reconciliationError });
+
       const totalsBeforeRefund = calculateTotals(request, items);
       const refundError = validateRefund(totalsBeforeRefund.difference, refund);
       if (refundError) return res.status(400).json({ success: false, error: refundError });
       const totals = calculateTotals(request, items, refund);
-      const existing = await getVerificationByFolio(folio);
       const now = new Date().toISOString();
       const verification: ExpenseVerification = {
         id: existing?.id || `exp_${Date.now()}`,
@@ -1012,8 +1050,8 @@ export function registerExpenseRoutes(app: Express) {
         userEmail: existing?.userEmail || request.user?.email || user.email,
         department: request.department || user.department, destination: request.destination,
         status: 'ENVIADA', items, ...totals, notes,
-        supportFiles: mergeSupportFiles(existing?.supportFiles, Array.isArray(req.body.supportFiles) ? req.body.supportFiles : undefined),
-        pendingFiscalXmls: Array.isArray(req.body.pendingFiscalXmls) ? req.body.pendingFiscalXmls : (existing?.pendingFiscalXmls || []),
+        supportFiles,
+        pendingFiscalXmls,
         originalExcelFile: req.body.originalExcelFile || existing?.originalExcelFile,
         excelAuditSummary: req.body.excelAuditSummary || existing?.excelAuditSummary,
         refund: refund !== undefined ? refund : existing?.refund,

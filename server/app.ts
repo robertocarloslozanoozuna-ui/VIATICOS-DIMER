@@ -8,6 +8,7 @@ import type { User, Role, TravelRequest, StoredUserRecord } from '../src/types.j
 import { requestNotificationHandler } from './requestNotificationRoute.js';
 import { resolveBaseUrl } from './baseUrl.js';
 import { registerExpenseRoutes } from './expenseRoutes.js';
+import { getFinanceNotificationRecipients } from './financeRecipients.js';
 
 async function resolveRequesterUser(r: TravelRequest): Promise<User> {
   let userRecord = r.userId ? await getUserById(r.userId) : null;
@@ -25,13 +26,18 @@ async function resolveRequesterUser(r: TravelRequest): Promise<User> {
 async function notifyRequestApproval(params: { request: TravelRequest; approverName: string; approverEmail: string; approvedAt?: string }) {
   const { request: r, approverName, approverEmail, approvedAt = new Date().toISOString() } = params;
   const user = await resolveRequesterUser(r);
-  const finanzasEmail = (process.env.FINANZAS_EMAIL || 'finanzas@dimer.com.mx').trim().toLowerCase();
+  const configuredFinanzasEmails = getFinanceNotificationRecipients();
+  const finanzasEmails = configuredFinanzasEmails.length ? configuredFinanzasEmails : ['finanzas@dimer.com.mx'];
   const requesterEmail = (user.email || '').trim().toLowerCase();
   const html = buildSystemsApprovedEmailHtml({ request: r, user, approverName, approverEmail, approvedAt });
   const targets: Array<{ to: string; subject: string; role: string }> = [];
   if (requesterEmail) targets.push({ to: requesterEmail, subject: `SOLICITUD DE VIÁTICOS APROBADA - Folio ${r.folio}`, role: 'Solicitante' });
   else console.warn(`[NOTIFY-APPROVAL-WARN] No se encontró correo para el solicitante de la solicitud ${r.folio} (userId: ${r.userId})`);
-  if (finanzasEmail && finanzasEmail !== requesterEmail) targets.push({ to: finanzasEmail, subject: `SOLICITUD DE VIÁTICOS APROBADA - Folio ${r.folio} [FINANZAS]`, role: 'Finanzas' });
+  for (const finanzasEmail of finanzasEmails) {
+    if (finanzasEmail && finanzasEmail !== requesterEmail) {
+      targets.push({ to: finanzasEmail, subject: `SOLICITUD DE VIÁTICOS APROBADA - Folio ${r.folio} [FINANZAS]`, role: 'Finanzas' });
+    }
+  }
   for (const t of targets) { try { const res = await sendEmail({ to: t.to, subject: t.subject, html, requestId: r.id, folio: r.folio }); console.log(`[APPROVAL-NOTIFICATION] Notificación enviada a ${t.role} (${t.to}) para folio ${r.folio}: ${res.status}`); } catch (mErr) { console.error(`[APPROVAL-NOTIFICATION-ERROR] Error enviando a ${t.role} (${t.to}):`, mErr); } }
 }
 
@@ -99,7 +105,7 @@ function err(res:express.Response,e:unknown){const msg=e instanceof Error?e.mess
 export function createApp(){const app=express();app.set('trust proxy',1);app.use(cors({origin:true,credentials:true}));app.use(express.json({limit:'25mb'}));app.use(express.urlencoded({extended:true,limit:'25mb'}));
 registerExpenseRoutes(app);
 app.get(['/api/health','/health'],async(_req,res)=>{try{const {error}=await supabase.from('users').select('id',{head:true,count:'exact'});if(error)throw error;res.json({ok:true,service:'viaticos-dimer-api',database:'supabase',runtime:process.env.VERCEL?'vercel-serverless':'node',timestamp:new Date().toISOString()});}catch(e){res.status(503).json({ok:false,database:'supabase',error:'Database unavailable'});}});
-app.get(['/api/diagnostic','/diagnostic'],async(_req,res)=>{try{const c=credentials();const [u,r]=await Promise.all([supabase.from('users').select('id',{head:true,count:'exact'}),supabase.from('travel_requests').select('id',{head:true,count:'exact'})]);if(u.error)throw u.error;if(r.error)throw r.error;res.json({status:'operational',runtime:process.env.VERCEL?'vercel-serverless':'node',database:{type:'supabase',usersCount:u.count||0,requestsCount:r.count||0,persistenceType:'supabase-postgresql'},environmentChecks:{isVercel:Boolean(process.env.VERCEL),hasAppUrl:Boolean(process.env.APP_URL),hasJwtSecret:Boolean(process.env.JWT_SECRET),hasSmtpHost:Boolean(c.host),hasSmtpUser:Boolean(c.user),hasSmtpPass:Boolean(c.pass),finanzasEmailConfigured:Boolean(process.env.FINANZAS_EMAIL)}});}catch(e){res.status(503).json({status:'unavailable',database:{type:'supabase'},error:e instanceof Error?e.message:'Database unavailable'});}});
+app.get(['/api/diagnostic','/diagnostic'],async(_req,res)=>{try{const c=credentials();const [u,r]=await Promise.all([supabase.from('users').select('id',{head:true,count:'exact'}),supabase.from('travel_requests').select('id',{head:true,count:'exact'})]);if(u.error)throw u.error;if(r.error)throw r.error;res.json({status:'operational',runtime:process.env.VERCEL?'vercel-serverless':'node',database:{type:'supabase',usersCount:u.count||0,requestsCount:r.count||0,persistenceType:'supabase-postgresql'},environmentChecks:{isVercel:Boolean(process.env.VERCEL),hasAppUrl:Boolean(process.env.APP_URL),hasJwtSecret:Boolean(process.env.JWT_SECRET),hasSmtpHost:Boolean(c.host),hasSmtpUser:Boolean(c.user),hasSmtpPass:Boolean(c.pass),finanzasEmailConfigured:Boolean(getFinanceNotificationRecipients().length)}});}catch(e){res.status(503).json({status:'unavailable',database:{type:'supabase'},error:e instanceof Error?e.message:'Database unavailable'});}});
 app.get(['/api/me','/me'],async(req,res)=>{try{const u=await auth(req);const allUsers=await listUsers();res.json({user:u,allUsers,appUrl:baseUrl(req),finanzasEmail:process.env.FINANZAS_EMAIL||'finanzas@dimer.com.mx',systemsEmail:'sistemas@dimer.com.mx'});}catch(e){err(res,e);}});
 app.post(['/api/auth/login','/auth/login','/api/login','/login'],async(req,res)=>{try{const email=String(req.body?.email||'').trim().toLowerCase(),password=String(req.body?.password||'');if(!email||!password)return res.status(400).json({success:false,error:'Correo electrónico y contraseña requeridos'});const u=await getUserByEmail(email);if(!u)return res.status(401).json({success:false,error:'No existe una cuenta registrada con este correo.'});if(u.status!=='ACTIVO')return res.status(403).json({success:false,error:'Esta cuenta está inactiva.'});if(!verifyPassword(password,u.passwordHash,u.salt))return res.status(401).json({success:false,error:'Contraseña incorrecta.'});const token=jwtSign({sub:u.id,email:u.email,role:u.role});setSessionCookie(res,req,token);await recordAuditLog({userId:u.id,action:'INICIO_SESION',details:{email:u.email,role:u.role}});res.json({success:true,user:u,token});}catch(e){err(res,e);}});
 app.post('/api/auth/logout',async(req,res)=>{try{const u=await auth(req);if(u)await recordAuditLog({userId:u.id,action:'CIERRE_SESION',details:{email:u.email}});res.setHeader('Set-Cookie','dimer_session=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax');res.json({success:true});}catch(e){err(res,e);}});

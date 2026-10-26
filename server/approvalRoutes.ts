@@ -2,6 +2,7 @@ import type { Express, Request, Response } from 'express';
 import { getUserById, getRequest, validateApprovalToken, processApprovalTokenAction, recordAuditLog, sanitizeUser } from './db.js';
 import { buildTokenApprovalDecisionPageHtml, buildTokenApprovalResultPageHtml, buildSystemsApprovedEmailHtml, buildRejectionEmailHtml, sendEmail } from './mailService.js';
 import type { TravelRequest, User } from '../src/types.js';
+import { getFinanceNotificationRecipients } from './financeRecipients.js';
 
 async function resolveUser(request: TravelRequest): Promise<User> {
   const raw = request.userId ? await getUserById(request.userId) : null;
@@ -44,20 +45,23 @@ export function registerApprovalRoutes(app: Express) {
         const baseHtml = buildSystemsApprovedEmailHtml({ request, user, approverName, approverEmail, approvedAt: request.approvedAt || new Date().toISOString() });
         const requesterEmail = user.email.trim().toLowerCase();
 
-        // FINANZAS_EMAIL es la variable oficial configurada para el destinatario de Finanzas.
-        // FINANZAS_URL se acepta únicamente como compatibilidad con configuraciones que la usen.
-        // No existe fallback a finanzas@dimer.com.mx.
-        const configuredFinanzas = String(process.env.FINANZAS_EMAIL || process.env.FINANZAS_URL || '').trim().toLowerCase();
-        const finanzasEmail = configuredFinanzas && configuredFinanzas !== 'sistemas@dimer.com.mx' ? configuredFinanzas : '';
+        // FINANZAS_EMAILS admite varios destinatarios y conserva compatibilidad con las variables anteriores.
+        // SISTEMAS no se agrega como destinatario de Finanzas.
+        const finanzasEmails = getFinanceNotificationRecipients()
+          .filter((email) => email !== 'sistemas@dimer.com.mx');
 
         // SOLICITANTE y FINANZAS son notificaciones independientes.
         // SISTEMAS no recibe copia de una aprobación, salvo que sea el propio solicitante.
         const recipientCopies: Array<{ to: string; label: string; subjectSuffix: string }> = [];
         if (requesterEmail) recipientCopies.push({ to: requesterEmail, label: 'SOLICITANTE', subjectSuffix: 'SOLICITANTE' });
-        if (finanzasEmail && finanzasEmail !== requesterEmail) recipientCopies.push({ to: finanzasEmail, label: 'FINANZAS', subjectSuffix: 'FINANZAS' });
+        for (const finanzasEmail of finanzasEmails) {
+          if (finanzasEmail && finanzasEmail !== requesterEmail) {
+            recipientCopies.push({ to: finanzasEmail, label: 'FINANZAS', subjectSuffix: 'FINANZAS' });
+          }
+        }
 
-        if (!finanzasEmail) {
-          console.error('[FINANZAS] No se enviará la notificación porque FINANZAS_EMAIL/FINANZAS_URL no está configurada o apunta a sistemas@dimer.com.mx.');
+        if (!finanzasEmails.length) {
+          console.error('[FINANZAS] No se enviará la notificación porque FINANZAS_EMAILS/FINANZAS_EMAIL/FINANZAS_URL no está configurada con una dirección válida de Finanzas.');
         }
 
         for (const recipient of recipientCopies) {

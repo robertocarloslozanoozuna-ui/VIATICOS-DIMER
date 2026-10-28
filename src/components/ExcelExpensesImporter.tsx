@@ -32,8 +32,10 @@ interface ExcelExpensesImporterProps {
   tripStartDate?: string;
   tripEndDate?: string;
   canEdit: boolean;
+  canRecoverHistorical?: boolean;
   existingOriginalFile?: ExpenseFileAttachment;
   existingAuditSummary?: ExcelAuditSummary;
+  onHistoricalFileRecovered?: (file: ExpenseFileAttachment, summary?: ExcelAuditSummary) => void;
   onImportConfirmed: (
     items: ExpenseItem[],
     originalFile: ExpenseFileAttachment,
@@ -48,16 +50,19 @@ export const ExcelExpensesImporter: React.FC<ExcelExpensesImporterProps> = ({
   tripStartDate,
   tripEndDate,
   canEdit,
+  canRecoverHistorical = false,
   existingOriginalFile,
   existingAuditSummary,
   onImportConfirmed,
   onDownloadOriginalFile,
   onOriginalFileRemoved,
+  onHistoricalFileRecovered,
 }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
   const [duplicateWarning, setDuplicateWarning] = useState<string | null>(null);
+  const [recoveringHistorical, setRecoveringHistorical] = useState(false);
 
   // Preview state
   const [showPreviewModal, setShowPreviewModal] = useState(false);
@@ -229,6 +234,42 @@ export const ExcelExpensesImporter: React.FC<ExcelExpensesImporterProps> = ({
                 <Download className="w-3.5 h-3.5" />
                 <span>Descargar Reporte Subido</span>
               </button>
+              {canRecoverHistorical && !existingOriginalFile.storagePath && !existingOriginalFile.dataUrl && (
+                <button
+                  type="button"
+                  disabled={recoveringHistorical}
+                  onClick={async () => {
+                    if (!window.confirm('Se recuperará una copia histórica del 6 de octubre. No se ha verificado que sea idéntica al archivo cargado posteriormente. ¿Continuar?')) return;
+                    setRecoveringHistorical(true);
+                    setImportError(null);
+                    setDuplicateWarning(null);
+                    try {
+                      const res = await authFetch('/api/expenses/excel/recoverable/' + encodeURIComponent(folio), {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({}),
+                      });
+                      const data = await res.json();
+                      if (!res.ok || !data.success || !data.originalExcelFile) {
+                        throw new Error(data.error || 'No fue posible recuperar la copia histórica.');
+                      }
+                      setOriginalExcelFile(data.originalExcelFile);
+                      setAuditSummary(data.excelAuditSummary || null);
+                      onHistoricalFileRecovered?.(data.originalExcelFile, data.excelAuditSummary || undefined);
+                      setDuplicateWarning('Copia histórica recuperada y guardada en Storage. No se ha verificado que sea idéntica al Excel subido posteriormente.');
+                    } catch (err: any) {
+                      setImportError(err.message || 'No fue posible recuperar la copia histórica.');
+                    } finally {
+                      setRecoveringHistorical(false);
+                    }
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-700 hover:bg-amber-800 disabled:opacity-60 text-white rounded-lg text-xs font-bold shadow-xs transition cursor-pointer shrink-0"
+                  title="Recuperar y guardar en Storage una copia Excel histórica disponible en la auditoría"
+                >
+                  <RefreshCw className={'w-3.5 h-3.5 ' + (recoveringHistorical ? 'animate-spin' : '')} />
+                  <span>{recoveringHistorical ? 'Recuperando copia...' : 'Recuperar copia histórica'}</span>
+                </button>
+              )}
               {canEdit && (
                 <button type="button" onClick={async () => {
                   if (!window.confirm('¿Deseas eliminar el reporte Excel original de este expediente? Las partidas ya importadas NO se eliminarán.')) return;

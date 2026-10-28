@@ -118,3 +118,65 @@ export async function uploadExpenseDocument(input: {
 
   return { ...completeData.file, dataUrl: '' };
 }
+
+
+/**
+ * Sube el Excel directamente a Storage para no enviar archivos de hasta 15 MB
+ * dentro de un JSON a Vercel. El backend valida la huella y procesa el mismo
+ * objeto privado que se conservará como archivo original del expediente.
+ */
+export async function uploadAndImportExpenseExcel(input: {
+  folio: string;
+  file: File;
+  onProgress?: (percent: number) => void;
+}): Promise<any> {
+  const { folio, file } = input;
+  if (!/\\.xlsx$/i.test(file.name)) {
+    throw new Error('Solo se permite el formato oficial Excel (.xlsx).');
+  }
+  if (file.size <= 0 || file.size > 15 * 1024 * 1024) {
+    throw new Error('El archivo Excel debe tener entre 1 byte y 15 MB.');
+  }
+
+  const sha256 = await computeSha256(file);
+  const initResponse = await authFetch('/api/expenses/excel-upload-url', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      folio,
+      name: file.name,
+      size: file.size,
+      sha256,
+    }),
+  });
+  const initData = await initResponse.json().catch(() => ({}));
+  if (!initResponse.ok || !initData.success) {
+    throw new Error(typeof initData.error === 'string' ? initData.error : 'No fue posible iniciar la carga del Excel.');
+  }
+  if (!initData.signedUrl || !initData.storagePath || !initData.fileId) {
+    throw new Error('Storage no devolvió una ruta y URL firmada válidas para el Excel.');
+  }
+
+  await uploadWithSignedUrl(String(initData.signedUrl), file, input.onProgress);
+
+  const parseResponse = await authFetch('/api/expenses/import-excel', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      folio,
+      file: {
+        id: String(initData.fileId),
+        name: file.name,
+        size: file.size,
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        sha256,
+        storagePath: String(initData.storagePath),
+      },
+    }),
+  });
+  const data = await parseResponse.json().catch(() => ({}));
+  if (!parseResponse.ok || !data.success) {
+    throw new Error(typeof data.error === 'string' ? data.error : 'No fue posible validar el archivo Excel.');
+  }
+  return data;
+}

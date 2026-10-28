@@ -828,7 +828,7 @@ export function registerExpenseRoutes(app: Express) {
         if (storageError) throw new Error(storageError.message || 'No fue posible guardar el Excel original en Storage.');
       }
 
-      parsed.originalExcelFile = {
+      const savedOriginalExcelFile: ExpenseFileAttachment = {
         ...parsed.originalExcelFile,
         id: fileId,
         dataUrl: '',
@@ -839,8 +839,8 @@ export function registerExpenseRoutes(app: Express) {
       };
       const existing = await getVerificationByFolio(folio);
       const existingOriginal = existing?.originalExcelFile;
-      const isDuplicate = Boolean(existingOriginal && existingOriginal.name === parsed.originalExcelFile.name && existingOriginal.size === parsed.originalExcelFile.size);
-      return res.json({ success: true, folio, ...parsed, isDuplicate });
+      const isDuplicate = Boolean(existingOriginal && existingOriginal.name === savedOriginalExcelFile.name && existingOriginal.size === savedOriginalExcelFile.size);
+      return res.json({ success: true, folio, ...parsed, originalExcelFile: savedOriginalExcelFile, isDuplicate });
     } catch (e: any) {
       console.error('[EXPENSE-EXCEL-IMPORT-ERROR]', e);
       return res.status(400).json({ success: false, error: e.message || 'Error al procesar el archivo Excel.' });

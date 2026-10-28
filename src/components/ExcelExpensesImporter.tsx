@@ -25,6 +25,7 @@ import type {
 } from '../types.js';
 import { CATEGORY_OPTIONS, PAYMENT_METHOD_OPTIONS } from './ExcelExpensesTable.js';
 import { authFetch } from '../utils/apiHelper.js';
+import { uploadAndImportExpenseExcel } from '../utils/documentUpload.js';
 
 interface ExcelExpensesImporterProps {
   folio: string;
@@ -95,33 +96,8 @@ export const ExcelExpensesImporter: React.FC<ExcelExpensesImporterProps> = ({
     setProcessing(true);
 
     try {
-      // Leer a Base64 dataUrl
-      const dataUrl = await new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => resolve(reader.result as string);
-        reader.onerror = () => reject(new Error('Error al leer el archivo desde el dispositivo'));
-        reader.readAsDataURL(file);
-      });
-
-      // Llamada al backend para procesar, validar y almacenar el archivo
-      const res = await authFetch('/api/expenses/import-excel', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          folio,
-          file: {
-            name: file.name,
-            size: file.size,
-            type: file.type || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            dataUrl,
-          },
-        }),
-      });
-
-      const data = await res.json();
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Error al procesar el archivo Excel.');
-      }
+      // El binario se sube directamente al bucket privado; el JSON solo lleva metadata.
+      const data = await uploadAndImportExpenseExcel({ folio, file });
 
       setParsedItems((data.items || []).map((item: ExcelParsedExpense) => ({
         ...item,

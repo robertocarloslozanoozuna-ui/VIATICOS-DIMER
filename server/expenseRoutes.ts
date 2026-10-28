@@ -14,7 +14,7 @@ import { parseDimerExpenseExcel } from './excelImport.js';
 import { analyzeDocumentAmount } from './documentAmountAnalyzer.js';
 import { supabase } from './supabase.js';
 import { getDocumentUploadAuthorization, completeExpenseDocument, getExpenseDocument, setManualDocumentAmount, deleteExpenseDocument, signedDocumentUrl } from './documentService.js';
-import { downloadObject } from './documentStorage.js';
+import { buildDocumentStoragePath, createSignedUpload, DOCUMENTS_BUCKET, downloadObject } from './documentStorage.js';
 
 
 const OFFICIAL_TEMPLATE_SOURCE_FOLIO = 'VIAT-2026-000002';
@@ -737,20 +737,106 @@ export function registerExpenseRoutes(app: Express) {
     }
   });
 
+  app.post('/api/expenses/excel-upload-url', async (req: Request, res: Response) => {
+    try {
+      const user = await getRequestUser(req);
+      if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
+      const folio = String(req.body?.folio || '').trim().toUpperCase();
+      const name = String(req.body?.name || '').trim();
+      const size = Number(req.body?.size) || 0;
+      const sha256 = String(req.body?.sha256 || '').trim().toLowerCase();
+      if (!folio || !name) return res.status(400).json({ success: false, error: 'Folio y nombre de archivo son requeridos.' });
+      if (!name.toLowerCase().endsWith('.xlsx')) return res.status(400).json({ success: false, error: 'Solo se permite el formato oficial Excel (.xlsx).' });
+      if (size <= 0 || size > 15 * 1024 * 1024) return res.status(400).json({ success: false, error: 'El archivo Excel debe tener entre 1 byte y 15 MB.' });
+      if (!/^[a-f0-9]{64}$/.test(sha256)) return res.status(400).json({ success: false, error: 'La huella SHA-256 del Excel no es válida.' });
+
+      const request = await getRequest(folio);
+      if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
+      const privileged = userIsAdminOrFinanzas(user);
+      if (!privileged && !isOwner(request, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para importar el Excel en este folio' });
+      if (request.status !== 'PAGADA' && request.status !== 'COMPROBADA') return res.status(400).json({ success: false, error: `Solo se puede importar el reporte en solicitudes pagadas. Estado actual: ${request.status}` });
+
+      const fileId = `excel_${sha256.slice(0, 24)}`;
+      const storagePath = buildDocumentStoragePath(folio, fileId, name);
+      const upload = await createSignedUpload(storagePath);
+      return res.json({ success: true, fileId, storagePath, signedUrl: upload.signedUrl, token: upload.token, mimeType: OFFICIAL_TEMPLATE_MIME });
+    } catch (e: any) {
+      console.error('[EXPENSE-EXCEL-UPLOAD-URL-ERROR]', e);
+      return res.status(400).json({ success: false, error: e.message || 'No fue posible preparar la carga del Excel.' });
+    }
+  });
+
   app.post('/api/expenses/import-excel', async (req: Request, res: Response) => {
     try {
       const user = await getRequestUser(req);
       if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
       const folio = String(req.body.folio || '').trim().toUpperCase();
       const file = req.body.file || {};
+      const fileName = String(file.name || '').trim();
+      const storagePath = String(file.storagePath || '').trim();
+      const suppliedSha256 = String(file.sha256 || '').trim().toLowerCase();
       if (!folio) return res.status(400).json({ success: false, error: 'Folio requerido' });
-      if (!file.name || !String(file.name).toLowerCase().endsWith('.xlsx')) return res.status(400).json({ success: false, error: 'Solo se permite el formato oficial Excel (.xlsx).' });
+      if (!fileName || !fileName.toLowerCase().endsWith('.xlsx')) return res.status(400).json({ success: false, error: 'Solo se permite el formato oficial Excel (.xlsx).' });
+
       const request = await getRequest(folio);
       if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
       const privileged = userIsAdminOrFinanzas(user);
       if (!privileged && !isOwner(request, user)) return res.status(403).json({ success: false, error: 'No tienes permiso para importar el Excel en este folio' });
       if (request.status !== 'PAGADA' && request.status !== 'COMPROBADA') return res.status(400).json({ success: false, error: `Solo se puede importar el reporte en solicitudes pagadas. Estado actual: ${request.status}` });
-      const parsed = parseDimerExpenseExcel({ fileName: String(file.name), fileSize: Number(file.size) || 0, fileType: String(file.type || ''), dataUrl: String(file.dataUrl || ''), uploadedBy: user.email });
+
+      let dataUrl = String(file.dataUrl || '');
+      let sourceBuffer: Buffer;
+      if (storagePath) {
+        if (!/^[a-f0-9]{64}$/.test(suppliedSha256)) return res.status(400).json({ success: false, error: 'La huella SHA-256 del Excel no es válida.' });
+        const expectedFileId = `excel_${suppliedSha256.slice(0, 24)}`;
+        const expectedPath = buildDocumentStoragePath(folio, expectedFileId, fileName);
+        if (String(file.id || '') !== expectedFileId || storagePath !== expectedPath) {
+          return res.status(400).json({ success: false, error: 'La ruta del Excel no corresponde al folio o al contenido declarado.' });
+        }
+        sourceBuffer = await downloadObject(storagePath);
+        const actualSha256 = crypto.createHash('sha256').update(sourceBuffer).digest('hex');
+        if (actualSha256 !== suppliedSha256) return res.status(400).json({ success: false, error: 'El archivo almacenado no coincide con la huella enviada.' });
+        dataUrl = `data:${OFFICIAL_TEMPLATE_MIME};base64,${sourceBuffer.toString('base64')}`;
+      } else {
+        const match = dataUrl.match(/^data:[^;]+;base64,(.+)$/);
+        if (!match) return res.status(400).json({ success: false, error: 'Contenido de archivo inválido.' });
+        sourceBuffer = Buffer.from(match[1], 'base64');
+      }
+
+      if (!sourceBuffer.length || sourceBuffer.length > 15 * 1024 * 1024) return res.status(400).json({ success: false, error: 'El archivo Excel debe tener entre 1 byte y 15 MB.' });
+      const fileType = OFFICIAL_TEMPLATE_MIME;
+      const parsed = parseDimerExpenseExcel({
+        fileName,
+        fileSize: sourceBuffer.length,
+        fileType,
+        dataUrl,
+        uploadedBy: user.email,
+      });
+      const sha256 = crypto.createHash('sha256').update(sourceBuffer).digest('hex');
+      const fileId = `excel_${sha256.slice(0, 24)}`;
+      const finalStoragePath = buildDocumentStoragePath(folio, fileId, fileName);
+      if (storagePath && (storagePath !== finalStoragePath || String(file.id || '') !== fileId)) {
+        return res.status(400).json({ success: false, error: 'La identidad del Excel almacenado no coincide con el archivo procesado.' });
+      }
+
+      if (!storagePath) {
+        const { error: storageError } = await supabase.storage.from(DOCUMENTS_BUCKET).upload(
+          finalStoragePath,
+          sourceBuffer,
+          { contentType: fileType, upsert: true },
+        );
+        if (storageError) throw new Error(storageError.message || 'No fue posible guardar el Excel original en Storage.');
+      }
+
+      parsed.originalExcelFile = {
+        ...parsed.originalExcelFile,
+        id: fileId,
+        dataUrl: '',
+        type: fileType,
+        storageBucket: DOCUMENTS_BUCKET,
+        storagePath: finalStoragePath,
+        sha256,
+      };
       const existing = await getVerificationByFolio(folio);
       const existingOriginal = existing?.originalExcelFile;
       const isDuplicate = Boolean(existingOriginal && existingOriginal.name === parsed.originalExcelFile.name && existingOriginal.size === parsed.originalExcelFile.size);
@@ -1151,15 +1237,21 @@ export function registerExpenseRoutes(app: Express) {
 
       const file = found.file;
       const matches = String(file.dataUrl || '').match(/^data:([^;]+);base64,(.+)$/);
-      if (!matches) {
+      let buffer: Buffer;
+      let contentType: string;
+      if (matches) {
+        buffer = Buffer.from(matches[2], 'base64');
+        contentType = matches[1] || file.type || 'application/octet-stream';
+      } else if (file.storagePath) {
+        // Los reportes Excel originales se conservan como objetos privados en Storage.
+        buffer = await downloadObject(file.storagePath);
+        contentType = file.type || OFFICIAL_TEMPLATE_MIME;
+      } else {
         return res.status(404).json({
           success: false,
           error: 'El contenido binario de este documento ya no está disponible en el expediente.',
         });
       }
-
-      const buffer = Buffer.from(matches[2], 'base64');
-      const contentType = matches[1] || file.type || 'application/octet-stream';
       const inline = String(req.query.inline || '') === '1';
       const safeName = String(file.name || 'documento').replace(/[\r\n"]/g, '_');
 

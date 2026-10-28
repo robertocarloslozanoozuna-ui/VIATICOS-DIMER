@@ -131,7 +131,7 @@ export async function uploadAndImportExpenseExcel(input: {
   onProgress?: (percent: number) => void;
 }): Promise<any> {
   const { folio, file } = input;
-  if (!/\\.xlsx$/i.test(file.name)) {
+  if (!/\.xlsx$/i.test(file.name)) {
     throw new Error('Solo se permite el formato oficial Excel (.xlsx).');
   }
   if (file.size <= 0 || file.size > 15 * 1024 * 1024) {
@@ -157,7 +157,11 @@ export async function uploadAndImportExpenseExcel(input: {
     throw new Error('Storage no devolvió una ruta y URL firmada válidas para el Excel.');
   }
 
-  await uploadWithSignedUrl(String(initData.signedUrl), file, input.onProgress);
+  const preparedFile = new File([file], file.name, {
+    type: String(initData.mimeType || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'),
+    lastModified: file.lastModified,
+  });
+  await uploadWithSignedUrl(String(initData.signedUrl), preparedFile, input.onProgress);
 
   const parseResponse = await authFetch('/api/expenses/import-excel', {
     method: 'POST',

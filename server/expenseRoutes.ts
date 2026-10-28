@@ -737,6 +737,135 @@ export function registerExpenseRoutes(app: Express) {
     }
   });
 
+  app.post('/api/expenses/excel/recoverable/:folio', async (req: Request, res: Response) => {
+    try {
+      const user = await getRequestUser(req);
+      if (!user) return res.status(401).json({ success: false, error: 'Autenticación requerida' });
+      if (!userIsAdminOrFinanzas(user)) {
+        return res.status(403).json({ success: false, error: 'Solo Finanzas o Administrador puede recuperar una copia histórica.' });
+      }
+
+      const folio = String(req.params.folio || '').trim().toUpperCase();
+      if (!folio) return res.status(400).json({ success: false, error: 'Folio requerido.' });
+      const request = await getRequest(folio);
+      if (!request) return res.status(404).json({ success: false, error: 'Solicitud no encontrada.' });
+
+      const existing = await getVerificationByFolioFast(folio, request.id) || await getVerificationByFolio(folio);
+      if (!existing) return res.status(404).json({ success: false, error: 'No se encontró una comprobación guardada para este folio.' });
+
+      const currentOriginal = existing.originalExcelFile;
+      if (currentOriginal?.storagePath && currentOriginal?.sha256 && currentOriginal.name?.startsWith('COPIA RECUPERADA - ')) {
+        return res.json({
+          success: true,
+          folio,
+          originalExcelFile: currentOriginal,
+          excelAuditSummary: existing.excelAuditSummary || null,
+          alreadyRecovered: true,
+          message: 'La copia histórica ya estaba recuperada y disponible en Storage.',
+        });
+      }
+
+      const sourceFilename = 'Reporte de Gastos DIMER - Plantilla Oficial DIMER_CONFIG v4.xlsx';
+      const { data: sourceRow, error: sourceError } = await supabase
+        .from('audit_logs')
+        .select('id,created_at,originalExcelFile:details->verification->originalExcelFile,excelAuditSummary:details->verification->excelAuditSummary,folio:details->verification->>folio')
+        .eq('request_id', request.id)
+        .eq('details->verification->>folio', folio)
+        .eq('details->verification->originalExcelFile->>name', sourceFilename)
+        .in('action', ['COMPROBACION_GASTOS_BORRADOR', 'COMPROBACION_GASTOS_FINALIZADA', 'CORRECCION_COMPROBACION_BORRADOR'])
+        .like('details->verification->originalExcelFile->>dataUrl', '%;base64,%')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (sourceError) throw sourceError;
+      const sourceFile = (sourceRow as any)?.originalExcelFile;
+      const sourceSummary = (sourceRow as any)?.excelAuditSummary || null;
+      const sourceDataUrl = String(sourceFile?.dataUrl || '');
+      const dataMatch = sourceDataUrl.match(/^data:([^;]+);base64,(.+)$/);
+      if (!sourceRow || (sourceRow as any).folio !== folio || !dataMatch || !/\.xlsx$/i.test(String(sourceFile?.name || ''))) {
+        return res.status(404).json({
+          success: false,
+          error: 'No se encontró una copia histórica recuperable del Excel oficial en este folio.',
+        });
+      }
+
+      const buffer = Buffer.from(dataMatch[2], 'base64');
+      if (!buffer.length || buffer.length > 15 * 1024 * 1024) {
+        return res.status(422).json({ success: false, error: 'La copia histórica está vacía o supera el límite de 15 MB.' });
+      }
+
+      const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
+      const recoveredName = 'COPIA RECUPERADA - ' + sourceFilename;
+      const fileId = 'excel_' + sha256.slice(0, 24);
+      const storagePath = buildDocumentStoragePath(folio, fileId, recoveredName);
+      const { error: uploadError } = await supabase.storage.from(DOCUMENTS_BUCKET).upload(
+        storagePath,
+        buffer,
+        { contentType: OFFICIAL_TEMPLATE_MIME, upsert: true },
+      );
+      if (uploadError) throw new Error(uploadError.message || 'No fue posible guardar la copia histórica en Storage.');
+
+      const recoveredAt = new Date().toISOString();
+      const originalExcelFile: ExpenseFileAttachment = {
+        id: fileId,
+        name: recoveredName,
+        size: buffer.length,
+        type: OFFICIAL_TEMPLATE_MIME,
+        dataUrl: '',
+        uploadedAt: String(sourceFile.uploadedAt || (sourceRow as any).created_at || recoveredAt),
+        role: 'DOCUMENTO_ORIGINAL_EXCEL',
+        storageBucket: DOCUMENTS_BUCKET,
+        storagePath,
+        sha256,
+      };
+      const excelAuditSummary = sourceSummary
+        ? {
+            ...sourceSummary,
+            filename: recoveredName,
+            sizeBytes: buffer.length,
+            uploadedAt: originalExcelFile.uploadedAt,
+          }
+        : undefined;
+
+      const saved = await saveVerification({
+        ...existing,
+        originalExcelFile,
+        excelAuditSummary,
+        updatedAt: recoveredAt,
+      });
+      await recordAuditLog({
+        requestId: request.id,
+        userId: user.id,
+        action: 'COMPROBACION_EXCEL_COPIA_HISTORICA_RECUPERADA',
+        details: {
+          folio,
+          verification: saved,
+          recoveredFileName: recoveredName,
+          originalFileName: sourceFilename,
+          sourceAuditLogId: (sourceRow as any).id,
+          sourceCreatedAt: (sourceRow as any).created_at,
+          sha256,
+          storage: 'supabase',
+          recoveredAt,
+          note: 'Copia histórica de fecha anterior; no se ha verificado que sea idéntica al archivo subido posteriormente.',
+        },
+      });
+
+      return res.json({
+        success: true,
+        folio,
+        originalExcelFile,
+        excelAuditSummary: excelAuditSummary || null,
+        sourceCreatedAt: (sourceRow as any).created_at,
+        message: 'Se recuperó una copia histórica. No se ha verificado que sea idéntica al archivo cargado posteriormente.',
+      });
+    } catch (e: any) {
+      console.error('[EXPENSE-EXCEL-RECOVERY-ERROR]', e);
+      return res.status(500).json({ success: false, error: e.message || 'No fue posible recuperar la copia histórica del Excel.' });
+    }
+  });
+
   app.post('/api/expenses/excel-upload-url', async (req: Request, res: Response) => {
     try {
       const user = await getRequestUser(req);

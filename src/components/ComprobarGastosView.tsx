@@ -2774,10 +2774,17 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
               tripStartDate={loadedRequest.startDate}
               tripEndDate={loadedRequest.endDate}
               canEdit={canEdit}
+              canRecoverHistorical={isPrivileged}
               existingOriginalFile={originalExcelFile || undefined}
               existingAuditSummary={excelAuditSummary || undefined}
               onImportConfirmed={handleExcelImportConfirmed}
               onDownloadOriginalFile={downloadAttachment}
+              onHistoricalFileRecovered={(file, summary) => {
+                setOriginalExcelFile(file);
+                setExcelAuditSummary(summary || null);
+                setUploadedAttachmentsPool((prev) => [...prev.filter((entry) => entry.id !== file.id), file]);
+                setActionSuccess('Copia histórica de Excel recuperada. No se ha verificado que sea idéntica al archivo subido posteriormente.');
+              }}
               onOriginalFileRemoved={() => {
                 setOriginalExcelFile(null);
                 setExcelAuditSummary(null);

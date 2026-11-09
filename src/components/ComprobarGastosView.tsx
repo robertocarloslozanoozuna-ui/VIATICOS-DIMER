@@ -662,6 +662,10 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   function handleSaveRefund(e: React.FormEvent) {
     e.preventDefault();
     setRefundFormError(null);
+    if (uploadingRefundFile || uploadingSignedRefundFile) {
+      setRefundFormError('Espera a que termine la carga de los recibos antes de guardar el reembolso.');
+      return;
+    }
     const amount = Number(refundAmount);
 
     if (isNaN(amount) || amount <= 0) {
@@ -3189,7 +3193,8 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs cursor-pointer"
+                  disabled={uploadingRefundFile || uploadingSignedRefundFile}
+                  className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Guardar Reembolso
                 </button>

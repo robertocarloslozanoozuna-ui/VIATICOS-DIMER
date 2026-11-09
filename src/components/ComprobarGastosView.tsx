@@ -152,6 +152,8 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   const [refundDate, setRefundDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [refundFile, setRefundFile] = useState<ExpenseFileAttachment | null>(null);
   const [signedRefundFile, setSignedRefundFile] = useState<ExpenseFileAttachment | null>(null);
+  const [uploadingRefundFile, setUploadingRefundFile] = useState<boolean>(false);
+  const [uploadingSignedRefundFile, setUploadingSignedRefundFile] = useState<boolean>(false);
   const [refundNotes, setRefundNotes] = useState<string>('');
   const [refundFormError, setRefundFormError] = useState<string | null>(null);
 
@@ -545,33 +547,31 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     void uploadItemAttachment(file, field);
   }
 
-  // File upload for refund voucher
-  function handleRefundFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+  // Los recibos de reembolso se guardan en Storage con el mismo flujo seguro de documentos V2.
+  async function handleRefundFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.size > 10 * 1024 * 1024) {
-      setRefundFormError(`El comprobante "${file.name}" supera el límite de 10 MB.`);
+    e.target.value = '';
+    if (!file || !loadedRequest) return;
+    if (file.size <= 0 || file.size > 10 * 1024 * 1024) {
+      setRefundFormError(`El comprobante "${file.name}" debe pesar menos de 10 MB.`);
       return;
     }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      const attachment: ExpenseFileAttachment = {
-        id: `refund_att_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-        name: file.name,
-        size: file.size,
-        type: file.type || 'application/pdf',
-        dataUrl: reader.result as string,
-        uploadedAt: new Date().toISOString(),
-      };
-      setRefundFile(attachment);
-      setRefundFormError(null);
-    };
-    reader.onerror = () => {
-      setRefundFormError('Error al leer el archivo del comprobante.');
-    };
-    reader.readAsDataURL(file);
+    const isPdf = /\.pdf$/i.test(file.name) || /pdf/i.test(file.type);
+    const isImage = /\.(png|jpe?g|webp)$/i.test(file.name) || /^image\/(png|jpeg|webp)$/i.test(file.type);
+    if (!isPdf && !isImage) {
+      setRefundFormError('El comprobante debe ser PDF o imagen PNG/JPG/WEBP.');
+      return;
+    }
+    setUploadingRefundFile(true);
+    setRefundFormError(null);
+    try {
+      const attachment = await uploadExpenseDocument({ folio: loadedRequest.folio, file, purpose: 'refund_receipt' });
+      setRefundFile({ ...attachment, dataUrl: '' });
+    } catch (error: any) {
+      setRefundFormError(error?.message || 'No fue posible guardar el comprobante de reembolso.');
+    } finally {
+      setUploadingRefundFile(false);
+    }
   }
 
   function handleAddItem() {
@@ -662,6 +662,10 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
   function handleSaveRefund(e: React.FormEvent) {
     e.preventDefault();
     setRefundFormError(null);
+    if (uploadingRefundFile || uploadingSignedRefundFile) {
+      setRefundFormError('Espera a que termine la carga de los recibos antes de guardar el reembolso.');
+      return;
+    }
     const amount = Number(refundAmount);
 
     if (isNaN(amount) || amount <= 0) {
@@ -695,34 +699,28 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
     setActionSuccess('Comprobante de reembolso de sobrante registrado. Recuerda guardar el borrador o finalizar.');
   }
 
-  function handleSignedRefundFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleSignedRefundFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0];
-    if (!file) return;
-
-    if (file.size > 10 * 1024 * 1024) {
-      setRefundFormError(`El recibo firmado "${file.name}" supera el límite de 10 MB.`);
+    e.target.value = '';
+    if (!file || !loadedRequest) return;
+    if (file.size <= 0 || file.size > 10 * 1024 * 1024) {
+      setRefundFormError(`El recibo firmado "${file.name}" debe pesar menos de 10 MB.`);
       return;
     }
-
-    if (!file.name.toLowerCase().endsWith('.pdf') && !file.type.includes('pdf')) {
+    if (!/\.pdf$/i.test(file.name) && !/pdf/i.test(file.type)) {
       setRefundFormError('El recibo firmado debe ser un archivo PDF.');
       return;
     }
-
-    const reader = new FileReader();
-    reader.onload = () => {
-      setSignedRefundFile({
-        id: `signed_refund_att_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`,
-        name: file.name,
-        size: file.size,
-        type: file.type || 'application/pdf',
-        dataUrl: reader.result as string,
-        uploadedAt: new Date().toISOString(),
-      });
-      setRefundFormError(null);
-    };
-    reader.onerror = () => setRefundFormError('Error al leer el recibo firmado.');
-    reader.readAsDataURL(file);
+    setUploadingSignedRefundFile(true);
+    setRefundFormError(null);
+    try {
+      const attachment = await uploadExpenseDocument({ folio: loadedRequest.folio, file, purpose: 'signed_refund_receipt' });
+      setSignedRefundFile({ ...attachment, dataUrl: '' });
+    } catch (error: any) {
+      setRefundFormError(error?.message || 'No fue posible guardar el recibo firmado.');
+    } finally {
+      setUploadingSignedRefundFile(false);
+    }
   }
 
   function handleRemoveRefund() {
@@ -3095,7 +3093,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                     <div>
                       {refundFile ? (
                         <div className="text-[11px] font-bold text-emerald-800">
-                          {refundFile.name} ({(refundFile.size / 1024).toFixed(1)} KB)
+                          {refundFile.name} ({(refundFile.size / 1024).toFixed(1)} KB){uploadingRefundFile ? ' — Subiendo...' : ''}
                         </div>
                       ) : (
                         <div className="text-[11px] text-slate-500">Adjuntar voucher bancario o acuse de caja</div>
@@ -3120,7 +3118,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                       <input
                         id={fileRefundId}
                         type="file"
-                        accept=".pdf,image/png,image/jpeg"
+                        accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/png,image/jpeg,image/webp"
                         onChange={handleRefundFileUpload}
                         className="hidden"
                       />
@@ -3140,7 +3138,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                     <div className="min-w-0">
                       {signedRefundFile ? (
                         <div className="text-[11px] font-bold text-blue-900 truncate">
-                          {signedRefundFile.name} ({(signedRefundFile.size / 1024).toFixed(1)} KB)
+                          {signedRefundFile.name} ({(signedRefundFile.size / 1024).toFixed(1)} KB){uploadingSignedRefundFile ? ' — Subiendo...' : ''}
                         </div>
                       ) : (
                         <div className="text-[11px] text-blue-800">
@@ -3195,7 +3193,8 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs cursor-pointer"
+                  disabled={uploadingRefundFile || uploadingSignedRefundFile}
+                  className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-xs cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Guardar Reembolso
                 </button>

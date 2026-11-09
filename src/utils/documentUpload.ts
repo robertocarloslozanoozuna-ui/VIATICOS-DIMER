@@ -50,9 +50,12 @@ function uploadWithSignedUrl(
   });
 }
 
+export type ExpenseDocumentPurpose = 'expense' | 'refund_receipt' | 'signed_refund_receipt';
+
 export async function uploadExpenseDocument(input: {
   folio: string;
   file: File;
+  purpose?: ExpenseDocumentPurpose;
   onProgress?: (percent: number) => void;
 }): Promise<ExpenseFileAttachment> {
   const sha256 = await computeSha256(input.file);
@@ -62,6 +65,7 @@ export async function uploadExpenseDocument(input: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       folio: input.folio,
+      purpose: input.purpose || 'expense',
       name: input.file.name,
       size: input.file.size,
       type: input.file.type || 'application/octet-stream',

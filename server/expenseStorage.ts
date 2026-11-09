@@ -129,8 +129,19 @@ async function hydrateStorageDocuments(verification: ExpenseVerification): Promi
       };
     });
 
+    // Hidratar los recibos desde Storage sin modificar importes ni datos bancarios.
+    const refundReceipt = mergedCanonical.find((file) => file.id.startsWith('refund_att_'));
+    const signedRefundReceipt = mergedCanonical.find((file) => file.id.startsWith('signed_refund_att_'));
+    if (verification.refund) {
+      if (refundReceipt) verification.refund.receiptFile = refundReceipt;
+      if (signedRefundReceipt) verification.refund.signedReceiptFile = signedRefundReceipt;
+    }
+
     const legacyOnly = legacy.filter((file) => !canonicalIds.has(file.id) || !file.storagePath);
-    verification.supportFiles = [...legacyOnly, ...mergedCanonical];
+    verification.supportFiles = [
+      ...legacyOnly,
+      ...mergedCanonical.filter((file) => !file.id.startsWith('refund_att_') && !file.id.startsWith('signed_refund_att_')),
+    ];
   } catch (error) {
     // Mantener compatibilidad mientras el esquema V2 no exista o durante una transición.
     console.warn('[EXPENSE-STORAGE] V2 document hydration unavailable:', (error as any)?.message || error);

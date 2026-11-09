@@ -556,8 +556,8 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       setRefundFormError(`El comprobante "${file.name}" debe pesar menos de 10 MB.`);
       return;
     }
-    const isPdf = /\\.pdf$/i.test(file.name) || /pdf/i.test(file.type);
-    const isImage = /\\.(png|jpe?g|webp)$/i.test(file.name) || /^image\\/(png|jpeg|webp)$/i.test(file.type);
+    const isPdf = /\.pdf$/i.test(file.name) || /pdf/i.test(file.type);
+    const isImage = /\.(png|jpe?g|webp)$/i.test(file.name) || /^image\/(png|jpeg|webp)$/i.test(file.type);
     if (!isPdf && !isImage) {
       setRefundFormError('El comprobante debe ser PDF o imagen PNG/JPG/WEBP.');
       return;
@@ -703,7 +703,7 @@ export const ComprobarGastosView: React.FC<ComprobarGastosViewProps> = ({
       setRefundFormError(`El recibo firmado "${file.name}" debe pesar menos de 10 MB.`);
       return;
     }
-    if (!/\\.pdf$/i.test(file.name) && !/pdf/i.test(file.type)) {
+    if (!/\.pdf$/i.test(file.name) && !/pdf/i.test(file.type)) {
       setRefundFormError('El recibo firmado debe ser un archivo PDF.');
       return;
     }

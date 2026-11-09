@@ -1269,7 +1269,7 @@ export function registerExpenseRoutes(app: Express) {
       const existing = await getVerificationByFolioFast(folio, request.id) || await getVerificationByFolio(folio);
       const canonicalStorageFiles = (await listDocumentsByRequestId(request.id))
         .map(documentAttachmentFromRecord)
-        .filter((file) => file.id && file.documentStatus !== 'DELETED');
+        .filter((file) => file.id && file.documentStatus !== 'DELETED' && !isRefundDocumentId(file.id));
       const incomingSupportFiles = Array.isArray(req.body.supportFiles)
         ? req.body.supportFiles as ExpenseFileAttachment[]
         : undefined;
